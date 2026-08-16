@@ -16,6 +16,7 @@ CANONICAL = [
 HEAD = "a" * 40
 BASE = "b" * 40
 MERGE = "c" * 40
+EVIDENCE_SHA = hashlib.sha256(b"negative evidence").hexdigest()
 
 
 def sha(path: Path) -> str:
@@ -59,6 +60,7 @@ def build_valid_delivery(base: Path) -> dict[str, Path]:
     }
     closure.write_text(json.dumps(data), encoding="utf-8")
 
+    surface = "canonical-doc-surface"
     attack = base / "requirement-attack-matrix.json"
     attack.write_text(json.dumps({
         "schema_version": 1,
@@ -67,9 +69,32 @@ def build_valid_delivery(base: Path) -> dict[str, Path]:
             "requirement_id": "REQ-001",
             "obligation_ids": ids,
             "risk_families": ["documentation"],
+            "risk_surfaces": [{
+                "risk_family": "documentation",
+                "surface": surface,
+                "reason": "The public contract is represented by a canonical documentation surface.",
+            }],
             "plausible_wrong_implementation": "The implementation updates one visible path while leaving an equivalent path stale.",
             "positive_control": {"id": "POS-001", "status": "passed", "head_sha": HEAD, "evidence": "positive.log"},
-            "negative_controls": [{"id": "NEG-001", "status": "passed", "head_sha": HEAD, "evidence": "negative.log", "sibling_cases": [{"id": "S1", "status": "passed"}]}],
+            "negative_controls": [{
+                "id": "NEG-001",
+                "status": "passed",
+                "head_sha": HEAD,
+                "evidence_path": "negative.log",
+                "evidence_sha256": EVIDENCE_SHA,
+                "risk_family": "documentation",
+                "surface": surface,
+                "dimension": "stale-equivalent-claim",
+                "failure_mode": "An equivalent canonical claim remains stale after the implementation changes.",
+                "plausible_wrong_implementation": "Update only one documentation path and leave a competing current-state claim unchanged.",
+                "control_type": "procedure",
+                "procedure": "Search the canonical documentation surface for competing current-state claims.",
+                "expected": "No contradictory current-state claim remains.",
+                "observed": "The synthetic fixture contains no contradictory claim.",
+                "sibling_cases": [{
+                    "id": "S1", "surface": surface, "dimension": "alternate-current-claim", "status": "passed"
+                }],
+            }],
             "regression_controls": [{"id": "REG-001", "status": "passed", "head_sha": HEAD, "evidence": "regression.log"}],
         }],
         "uncovered_requirements": [],
@@ -83,6 +108,12 @@ def build_valid_delivery(base: Path) -> dict[str, Path]:
             "applicable": family == "documentation",
             "reason": "Behavioral fixture uses documentation family." if family == "documentation" else "Not applicable to this synthetic fixture.",
             "control_ids": ["NEG-001"] if family == "documentation" else [],
+            "dimensions": [{
+                "surface": surface,
+                "reason": "The public contract is represented by a canonical documentation surface.",
+                "control_ids": ["NEG-001"],
+                "status": "passed",
+            }] if family == "documentation" else [],
             "status": "passed" if family == "documentation" else "not-applicable",
         } for family in CANONICAL],
         "material_families_missing_controls": [],
@@ -140,7 +171,6 @@ def test_build_and_validate_handoff_certificate() -> None:
         assert payload["certificate_commit_policy"]["mode"] == "result-only-child"
         assert ".audit/entregar-issue/handoff-ready.json" in payload["certificate_commit_policy"]["allowed_paths"]
 
-        # The certificate may be validated out-of-band against the material head.
         proc = run(
             "validate_handoff_certificate.py",
             "--certificate", str(cert), "--artifacts-dir", str(base),
@@ -149,7 +179,6 @@ def test_build_and_validate_handoff_certificate() -> None:
         )
         assert proc.returncode == 0, proc.stdout
 
-        # Once committed, the published head is a direct child that changes only allow-listed result paths.
         child = "d" * 40
         proc = run(
             "validate_handoff_certificate.py",
