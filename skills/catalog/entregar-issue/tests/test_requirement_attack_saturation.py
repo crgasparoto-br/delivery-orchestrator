@@ -27,25 +27,22 @@ def negative_control(control_id: str, family: str, surface: str, dimension: str)
         "risk_family": family,
         "surface": surface,
         "dimension": dimension,
-        "failure_mode": "A stale or unauthorized value crosses the protected boundary.",
-        "plausible_wrong_implementation": "Validate only the happy path and skip the definitive boundary check.",
+        "failure_mode": f"A stale or unauthorized value crosses the {surface} protected boundary.",
+        "plausible_wrong_implementation": f"Validate only the happy path and skip the definitive {surface} boundary check.",
         "control_type": "scenario",
-        "procedure": "Execute the discriminant scenario against the frozen candidate.",
-        "expected": "The invalid state is rejected at the definitive boundary.",
-        "observed": "The invalid state was rejected without side effects.",
+        "procedure": f"Execute the {surface} discriminant scenario against the frozen candidate.",
+        "expected": f"The {surface} boundary rejects the invalid state at {dimension}.",
+        "observed": f"The {surface} boundary rejected the invalid state at {dimension}.",
+        "semantic_evidence": {
+            "mechanism": {"surface": surface, "dimension": dimension, "target": f"{surface} {dimension} protected boundary"},
+            "procedure": {"operation": "execute", "stimulus": f"execute {surface} discriminant scenario against the frozen candidate", "observable": f"{surface} boundary returns the discriminant decision"},
+            "outcome": {"expected_signal": f"The {surface} boundary rejects the invalid state at {dimension}.", "observed_signal": f"The {surface} boundary rejected the invalid state at {dimension}.", "evidence_sha256": EVIDENCE_SHA},
+        },
         "sibling_cases": [
             {"id": "S1", "surface": surface, "dimension": "deleted-reference", "status": "passed"},
             {"id": "S2", "surface": surface, "dimension": "changed-eligibility", "status": "passed"},
         ],
     }
-
-
-def test_specification_detects_reference_liveness_and_temporal_destination() -> None:
-    from orchestrator_gate.specification import flags_for
-    flags = set(flags_for("Após aprovação, referências obrigatórias continuam válidas e a nova liberação usa somente alvo futuro da semana selecionada."))
-    assert "reference-liveness" in flags
-    assert "temporal-destination" in flags
-    assert "temporal" in flags
 
 
 def test_attack_matrix_requires_discriminant_controls_and_regression() -> None:

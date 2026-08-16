@@ -1,93 +1,34 @@
 from __future__ import annotations
-
-import json
-import subprocess
-import sys
-import tempfile
+import hashlib, json, subprocess, sys, tempfile
 from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1]; HEAD="b"*40; EVIDENCE_SHA=hashlib.sha256(b"audit-evidence").hexdigest()
+CANONICAL=["authorization","tenant-isolation","public-boundary","reference-liveness","temporal-consistency","temporal-destination","concurrency-atomicity","idempotency","rollback","historical-immutability","structural-contract","documentation"]
 
-ROOT = Path(__file__).resolve().parents[1]
-HEAD = "b" * 40
-CANONICAL = [
-    "authorization", "tenant-isolation", "public-boundary", "reference-liveness",
-    "temporal-consistency", "temporal-destination", "concurrency-atomicity",
-    "idempotency", "rollback", "historical-immutability", "structural-contract", "documentation",
-]
+def run(matrix,risk,inherited): return subprocess.run([sys.executable,str(ROOT/"scripts"/"check_delivery_saturation.py"),"--attack-matrix",str(matrix),"--risk-saturation",str(risk),"--inherited-controls",str(inherited),"--head-sha",HEAD],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
 
+def semantic(): return {"mechanism":{"surface":"handoff-control-evidence","dimension":"reproducible-procedure","target":"handoff evidence boundary for reproducible procedure metadata"},"procedure":{"operation":"validate","stimulus":"validate handoff evidence containing adversarial procedure metadata","observable":"handoff evidence validator returns the procedure boundary decision"},"outcome":{"expected_signal":"handoff evidence validator rejects semantically unbound procedure metadata","observed_signal":"handoff evidence validator rejected the unbound procedure metadata","evidence_sha256":EVIDENCE_SHA}}
 
-def run(matrix: Path, risk: Path, inherited: Path):
-    return subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "check_delivery_saturation.py"),
-         "--attack-matrix", str(matrix), "--risk-saturation", str(risk),
-         "--inherited-controls", str(inherited), "--head-sha", HEAD],
-        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-    )
+def base_packet():
+    matrix={"head_sha":HEAD,"requirements":[{"requirement_id":"REQ-1","risk_families":["structural-contract"],"risk_surfaces":[{"risk_family":"structural-contract","surface":"handoff-control-evidence","reason":"Handoff evidence binds procedures and outcomes to the declared mechanism."}],"plausible_wrong_implementation":"Record generic handoff evidence while omitting the concrete boundary and discriminant behavior.","positive_control":{"status":"passed","head_sha":HEAD},"negative_controls":[{"id":"SPECIFICITY-001","status":"passed","head_sha":HEAD,"evidence_sha256":EVIDENCE_SHA,"risk_family":"structural-contract","surface":"handoff-control-evidence","dimension":"reproducible-procedure","failure_mode":"Generic handoff evidence can claim success without identifying the procedure boundary that was exercised.","plausible_wrong_implementation":"Accept handoff evidence describing a passing procedure while omitting the concrete failing boundary.","procedure":"Validate handoff evidence with concrete boundary details and inspect the procedure decision.","expected":"The handoff evidence validator rejects semantically unbound procedure metadata.","observed":"The handoff evidence validator rejected the unbound procedure metadata.","semantic_evidence":semantic()}],"regression_controls":[{"status":"passed","head_sha":HEAD}]}],"uncovered_requirements":[]}
+    risk={"head_sha":HEAD,"families":[{"family":f,"applicable":f=="structural-contract","status":"passed" if f=="structural-contract" else "not-applicable","control_ids":["SPECIFICITY-001"] if f=="structural-contract" else []} for f in CANONICAL],"material_families_missing_controls":[]}; inherited={"head_sha":HEAD,"controls":[],"unresolved_controls":[]}; return matrix,risk,inherited
 
+def paths(tmp):
+    b=Path(tmp); return b/"matrix.json",b/"risk.json",b/"inherited.json"
+def write(paths_,packet):
+    for path,data in zip(paths_,packet): path.write_text(json.dumps(data))
 
-def base_packet() -> tuple[dict, dict, dict]:
-    matrix = {
-        "head_sha": HEAD,
-        "requirements": [{
-            "requirement_id": "REQ-1",
-            "plausible_wrong_implementation": "Record generic control labels while omitting the concrete boundary and discriminant behavior.",
-            "positive_control": {"status": "passed", "head_sha": HEAD},
-            "negative_controls": [{
-                "status": "passed",
-                "head_sha": HEAD,
-                "failure_mode": "A generic handoff can claim success without identifying the boundary that was exercised.",
-                "plausible_wrong_implementation": "Accept metadata that describes a passing test but omits the concrete failing mechanism.",
-                "procedure": "Validate a handoff with concrete boundary details and inspect the specificity gate result.",
-                "expected": "The preflight accepts only controls with a concrete discriminant mechanism and outcome.",
-                "observed": "The preflight accepted the concrete control metadata and preserved the candidate identity.",
-            }],
-            "regression_controls": [{"status": "passed", "head_sha": HEAD}],
-        }],
-        "uncovered_requirements": [],
-    }
-    risk = {
-        "head_sha": HEAD,
-        "families": [
-            {"family": family, "applicable": family == "structural-contract",
-             "status": "passed" if family == "structural-contract" else "not-applicable",
-             "control_ids": ["SPECIFICITY-001"] if family == "structural-contract" else []}
-            for family in CANONICAL
-        ],
-        "material_families_missing_controls": [],
-    }
-    inherited = {"head_sha": HEAD, "controls": [], "unresolved_controls": []}
-    return matrix, risk, inherited
-
-
-def test_preflight_accepts_specific_attack_metadata() -> None:
+def test_preflight_accepts_semantically_bound_attack_metadata():
     with tempfile.TemporaryDirectory() as tmp:
-        base = Path(tmp)
-        matrix_path, risk_path, inherited_path = base / "matrix.json", base / "risk.json", base / "inherited.json"
-        matrix, risk, inherited = base_packet()
-        matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
-        risk_path.write_text(json.dumps(risk), encoding="utf-8")
-        inherited_path.write_text(json.dumps(inherited), encoding="utf-8")
-        proc = run(matrix_path, risk_path, inherited_path)
-        assert proc.returncode == 0, proc.stdout
+        ps=paths(tmp); packet=base_packet(); write(ps,packet); p=run(*ps); assert p.returncode==0,p.stdout
 
-
-def test_preflight_rejects_generic_attack_placeholders() -> None:
+def test_preflight_rejects_lexically_rich_word_salad():
     with tempfile.TemporaryDirectory() as tmp:
-        base = Path(tmp)
-        matrix_path, risk_path, inherited_path = base / "matrix.json", base / "risk.json", base / "inherited.json"
-        matrix, risk, inherited = base_packet()
-        item = matrix["requirements"][0]
-        item["plausible_wrong_implementation"] = "wrong implementation passes tests"
-        item["negative_controls"][0].update({
-            "failure_mode": "unsafe remains",
-            "plausible_wrong_implementation": "wrong behavior still passes",
-            "procedure": "run negative test",
-            "expected": "rejected.",
-            "observed": "it passed.",
-        })
-        matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
-        risk_path.write_text(json.dumps(risk), encoding="utf-8")
-        inherited_path.write_text(json.dumps(inherited), encoding="utf-8")
-        proc = run(matrix_path, risk_path, inherited_path)
-        assert proc.returncode == 2
-        assert "specific plausible wrong implementation" in proc.stdout
-        assert "specific procedure" in proc.stdout
+        ps=paths(tmp); packet=base_packet(); item=packet[0]["requirements"][0]; item["plausible_wrong_implementation"]="alpha beta gamma delta epsilon zeta"; c=item["negative_controls"][0]; c.update({"failure_mode":"alpha beta gamma delta epsilon zeta","plausible_wrong_implementation":"alpha beta gamma delta epsilon zeta","procedure":"validate alpha beta gamma delta epsilon zeta","expected":"alpha beta gamma delta epsilon","observed":"alpha beta gamma delta epsilon"}); write(ps,packet); p=run(*ps); assert p.returncode==2; assert "not bound" in p.stdout or "not bound to declared" in p.stdout,p.stdout
+
+def test_preflight_rejects_missing_semantic_evidence_even_when_prose_is_long():
+    with tempfile.TemporaryDirectory() as tmp:
+        ps=paths(tmp); packet=base_packet(); del packet[0]["requirements"][0]["negative_controls"][0]["semantic_evidence"]; write(ps,packet); p=run(*ps); assert p.returncode==2; assert "lacks semantic_evidence" in p.stdout,p.stdout
+
+def test_preflight_rejects_unrelated_semantic_evidence_hash():
+    with tempfile.TemporaryDirectory() as tmp:
+        ps=paths(tmp); packet=base_packet(); packet[0]["requirements"][0]["negative_controls"][0]["semantic_evidence"]["outcome"]["evidence_sha256"]="0"*64; write(ps,packet); p=run(*ps); assert p.returncode==2; assert "semantic evidence hash mismatch" in p.stdout,p.stdout
