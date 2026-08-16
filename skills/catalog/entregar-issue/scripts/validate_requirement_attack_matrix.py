@@ -15,6 +15,14 @@ CONTROL_TYPES = {"test", "gate", "scenario", "procedure"}
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$", re.I)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.I)
 SURFACE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
+WORD_RE = re.compile(r"[a-z0-9_./-]+", re.I)
+GENERIC_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "behavior", "candidate", "check",
+    "control", "correct", "expected", "generic", "implementation", "invalid", "is", "it",
+    "negative", "observed", "pass", "passed", "passes", "placeholder", "positive", "reject",
+    "rejected", "remains", "run", "scenario", "should", "still", "test", "tests", "the",
+    "this", "unsafe", "validation", "wrong",
+}
 
 # Deterministic safety net for authorization surfaces that are obvious from the attack description.
 # This intentionally stays small and generic; explicit risk_surfaces remains authoritative.
@@ -61,6 +69,28 @@ def compact_text(value: object) -> str:
     if isinstance(value, list):
         return " ".join(compact_text(v) for v in value)
     return str(value)
+
+
+def validate_specific_text(
+    value: object,
+    label: str,
+    errors: list[str],
+    *,
+    minimum_chars: int,
+    minimum_words: int,
+    minimum_specific_words: int = 2,
+) -> None:
+    text = str(value or "").strip()
+    if len(text) < minimum_chars:
+        errors.append(f"{label} is too short")
+        return
+    words = [word.lower() for word in WORD_RE.findall(text)]
+    if len(words) < minimum_words:
+        errors.append(f"{label} is not specific enough")
+        return
+    specific = {word for word in words if len(word) >= 3 and word not in GENERIC_WORDS}
+    if len(specific) < minimum_specific_words:
+        errors.append(f"{label} is a generic placeholder")
 
 
 def declared_surfaces(item: dict, families: set[str], errors: list[str], rid: str) -> set[tuple[str, str]]:
@@ -151,15 +181,13 @@ def validate_negative_control(
         errors.append(f"{label} surface {surface or '?'} is not declared in requirement risk_surfaces")
     if len(dimension) < 3:
         errors.append(f"{label} lacks discriminant dimension")
-    for key, minimum in (
-        ("failure_mode", 12),
-        ("plausible_wrong_implementation", 20),
-        ("procedure", 12),
-        ("expected", 8),
-        ("observed", 8),
-    ):
-        if len(str(control.get(key) or "").strip()) < minimum:
-            errors.append(f"{label} lacks {key}")
+
+    validate_specific_text(control.get("failure_mode"), f"{label} failure_mode", errors, minimum_chars=12, minimum_words=6)
+    validate_specific_text(control.get("plausible_wrong_implementation"), f"{label} plausible_wrong_implementation", errors, minimum_chars=20, minimum_words=6)
+    validate_specific_text(control.get("procedure"), f"{label} procedure", errors, minimum_chars=12, minimum_words=6)
+    validate_specific_text(control.get("expected"), f"{label} expected", errors, minimum_chars=8, minimum_words=5)
+    validate_specific_text(control.get("observed"), f"{label} observed", errors, minimum_chars=8, minimum_words=5)
+
     if str(control.get("control_type") or "") not in CONTROL_TYPES:
         errors.append(f"{label} has invalid control_type")
     evidence_sha = str(control.get("evidence_sha256") or "").strip()
@@ -228,9 +256,13 @@ def main() -> int:
 
     for rid in sorted(required & set(by_id)):
         item = by_id[rid]
-        wrong = str(item.get("plausible_wrong_implementation") or "").strip()
-        if len(wrong) < 20:
-            errors.append(f"requirement {rid} lacks plausible wrong implementation")
+        validate_specific_text(
+            item.get("plausible_wrong_implementation"),
+            f"requirement {rid} plausible_wrong_implementation",
+            errors,
+            minimum_chars=20,
+            minimum_words=6,
+        )
         families = {str(value) for value in item.get("risk_families") or []}
         if not families:
             errors.append(f"requirement {rid} has no risk families")
