@@ -1,34 +1,56 @@
 === MATERIAL IDENTITY ===
-material_head_sha: 0230111d229798ff3a34f95e48fe028d5d348e02
+material_head_sha: 26e0827b40c2cef349999c6da38ed3a2679ddde3
 base_sha: 1e9cca98bdbfdbceedd46c8f235377a0c6dff8c5
-material_merge_preview_sha: a2f1b575dcca0f18c29bf5a845d6e8ffe5324e79
-publication delta from prior handoff head: exactly four versioned Skill paths (two validators, two regression tests).
+material_merge_preview_sha: 2571b357a13fe099a6170e1f50450d76ba208d6f
+material delta after stale handoff: seven Skill validator/test paths in commit 26e0827b40c2cef349999c6da38ed3a2679ddde3.
 
 === DEPENDENCY-SCOPED REUSE ===
-Product runtime, workflow, README/SECURITY and product test blobs are unchanged by the A-005 remediation commit.
-The previously executed 23/23 product suite and real Linux-user isolation probe are therefore reused only for those unchanged bytes; no new product execution is claimed.
+Product runtime, workflow, README/SECURITY and product-test bytes are outside the 26e0827 material delta.
+Previously executed 23/23 product-suite evidence and the real Linux-user isolation probe are reused only for those unchanged bytes; no new product-runtime execution is claimed.
+
+=== A005 SEMANTIC VALIDATOR BYTES ===
+producer validator Git blob expected: 00f84042d7d969d1ffcf03c64371244016acff85
+producer validator Git blob materialized: 00f84042d7d969d1ffcf03c64371244016acff85
+producer validator exact-byte match: PASS
+auditor saturation validator Git blob expected: acabc6e83c06b4cb91d3965a3fe4f29b8eb3c491
+auditor saturation validator Git blob materialized: acabc6e83c06b4cb91d3965a3fe4f29b8eb3c491
+auditor saturation validator exact-byte match: PASS
 
 === A005 AFFECTED PYTHON COMPILE ===
-PASS: py_compile
-
-=== A005 PREVENTION REGRESSION ===
-..                                                                       [100%]
-2 passed in 1.30s
-
-=== A005 DETECTION REGRESSION ===
-..                                                                       [100%]
-2 passed in 1.30s
+PASS: py_compile for both changed validator executables.
 
 === A005 SKILL GENERICITY ===
-READY: modified skill assets are free of concrete issue-number coupling
+READY: skill permanent assets are free of obvious issue-number coupling
 
-=== A005 LITERAL AND SIBLING CLOSURE ===
-PASS literal: requirement-level generic plausible_wrong_implementation is rejected.
-PASS sibling procedure: generic negative-control procedure is rejected.
-PASS sibling outcome: generic expected/observed prose is rejected.
-PASS prevention: entregar-issue validator enforces lexical specificity beyond minimum length.
-PASS detection: auditar-issue saturation preflight independently enforces the same semantic specificity before expensive audit work.
+=== A005 SEMANTIC MUTATION CONTROLS ===
+=== VALID BASELINE ===
+=== baseline ===
+producer_rc=0
+READY: every covered requirement has semantically bound adversarial and regression evidence
+auditor_rc=0
+READY: delivery packet has semantically bound adversarial evidence
+=== generic requirement-level wrong implementation ===
+producer_rc=2
+BLOCK: requirement REQ-011 plausible_wrong_implementation is a generic placeholder
+BLOCK: requirement REQ-011 plausible_wrong_implementation is not semantically bound to its declared mechanism
+auditor_rc=2
+BLOCK: requirement REQ-011 lacks specific plausible wrong implementation
+BLOCK: requirement REQ-011 plausible wrong implementation is not bound to declared risk surfaces
+=== semantic mechanism detached from surface ===
+producer_rc=2
+BLOCK: requirement REQ-011 negative control 0 semantic mechanism target is not semantically bound to its declared mechanism
+auditor_rc=2
+BLOCK: requirement REQ-011 negative control 0 semantic mechanism target is not bound to surface/dimension
+=== semantic evidence hash mismatch ===
+producer_rc=2
+BLOCK: requirement REQ-011 negative control 0 semantic outcome evidence_sha256 does not match control evidence_sha256
+auditor_rc=2
+BLOCK: requirement REQ-011 negative control 0 semantic evidence hash mismatch
 
 === REMOTE CI OBSERVATION ===
-GitHub Actions exact-head query for 0230111d229798ff3a34f95e48fe028d5d348e02: total_count=0.
-Classification: no-runs; not treated as green CI.
+GitHub Actions exact-head query for 26e0827b40c2cef349999c6da38ed3a2679ddde3: no associated pull-request workflow runs.
+Classification: pending-no-run; not treated as green CI.
+
+=== HANDOFF RECOVERY ===
+Previous certificate was stale because a material commit followed the prior result-only child.
+Recovery scope: handoff/freeze only; no functional implementation reopening was required.

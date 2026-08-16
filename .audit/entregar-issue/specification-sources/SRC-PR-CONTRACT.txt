@@ -1,11 +1,11 @@
-- Deve usar autenticação ChatGPT por padrão e preservar fallback explícito por API key.
-- Deve remover credenciais de API/access token dos ambientes filhos em modo ChatGPT para evitar troca silenciosa de identidade ou billing.
-- Deve manter os CODEX_HOME de implementador e auditor persistentes quando houver autenticação de conta, separados por papel e inacessíveis ao papel oposto.
-- Deve executar automação autenticada por conta somente em runner self-hosted confiável, privado e serializado, falhando fechado quando pré-condições de runtime faltarem.
-- Deve manter a chave de assinatura do auditor fora dos CODEX_HOME persistentes, materializá-la somente na fase do auditor, negar leitura pelo implementador e excluir segredos de runtime dos artifacts.
-- Deve preservar observação de CI no exact head com grace sem runs, detecção de run tardio, settle e timeout limitado.
-- Deve isolar credenciais por papel em ambiente, filesystem, credential store persistente, identidade de processo e inputs exclusivos de auditoria; nenhum papel pode ler ou receber segredos do papel oposto.
-- Deve manter README e documentação de segurança consistentes com repositório privado, usuários Linux distintos, persistência de credenciais e limites reais do sandbox.
-- Deve manter validação do bundle e regressões para autenticação, isolamento de papéis, pré-condições do workflow, exact-head e role worker.
-- Deve preparar o handoff independente a partir do contrato completo da PR e de todas as remediações de auditorias independentes anteriores, não apenas do finding literal mais recente.
-- Deve tratar mudanças em workflow/runtime e documentação como famílias aplicáveis structural-contract e documentation, com evidência cross-surface antes do handoff.
+Deve usar autenticação ChatGPT por padrão e preservar fallback explícito por API key.
+Deve remover credenciais de API/access token dos ambientes filhos em modo ChatGPT para evitar troca silenciosa de identidade ou billing.
+Deve manter os CODEX_HOME de implementador e auditor persistentes quando houver autenticação de conta, separados por papel e inacessíveis ao papel oposto.
+Deve executar automação autenticada por conta somente em runner self-hosted confiável, privado e serializado, falhando fechado quando pré-condições de runtime faltarem.
+Deve manter a chave de assinatura do auditor fora dos CODEX_HOME persistentes, materializá-la somente na fase do auditor, negar leitura pelo implementador e excluir segredos de runtime dos artifacts.
+Deve preservar observação de CI no exact head com grace sem runs, detecção de run tardio, settle e timeout limitado.
+Deve isolar credenciais por papel em ambiente, filesystem, credential store persistente, identidade de processo e inputs exclusivos de auditoria; nenhum papel pode ler ou receber segredos do papel oposto.
+Deve manter README e documentação de segurança consistentes com repositório privado, usuários Linux distintos, persistência de credenciais e limites reais do sandbox.
+Deve manter validação do bundle e regressões para autenticação, isolamento de papéis, pré-condições do workflow, exact-head e role worker.
+Deve preparar o handoff independente a partir do contrato completo da PR e de todas as remediações de auditorias independentes anteriores, não apenas do finding literal mais recente.
+Deve tratar mudanças em workflow/runtime e documentação como famílias aplicáveis structural-contract e documentation, com evidência cross-surface antes do handoff.

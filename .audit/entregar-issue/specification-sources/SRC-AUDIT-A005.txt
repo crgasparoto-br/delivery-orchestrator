@@ -1,1 +1,1 @@
-- Deve remediar A-005 exigindo que cada implementação errada, procedimento, resultado esperado e resultado observado da matriz adversarial descreva mecanismo discriminante concreto e reproduzível, rejeitando placeholders genéricos tanto no produtor quanto no preflight do auditor.
+Deve remediar A-005 exigindo que cada implementação errada, procedimento, resultado esperado e resultado observado da matriz adversarial descreva mecanismo discriminante concreto e reproduzível, rejeitando placeholders genéricos tanto no produtor quanto no preflight do auditor.
