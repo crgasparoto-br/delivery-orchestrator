@@ -16,7 +16,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40,64}$", re.I)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.I)
 SURFACE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 
-# Deterministic safety net for surfaces that are obvious from the attack description.
+# Deterministic safety net for authorization surfaces that are obvious from the attack description.
 # This intentionally stays small and generic; explicit risk_surfaces remains authoritative.
 SURFACE_HINTS = {
     "environment": (
@@ -25,14 +25,14 @@ SURFACE_HINTS = {
     ),
     "filesystem": (
         "filesystem", "file system", "private key", "signing key", "read file",
-        "readable file", "directory", "path sibling", "sibling path",
+        "readable file", "path sibling", "sibling path",
     ),
     "persistent-credential-store": (
         "codex_home", "codex home", "auth.json", "credential cache", "persistent home",
         "persistent credential", "refresh token",
     ),
     "artifact-export": (
-        "artifact", "upload", "archive", "forensic state", "exported run",
+        "artifact upload", "upload artifact", "run artifact", "forensic state", "exported run",
     ),
     "process-identity": (
         "same user", "same uid", "process isolation", "container", "virtual machine",
@@ -91,7 +91,9 @@ def declared_surfaces(item: dict, families: set[str], errors: list[str], rid: st
     return result
 
 
-def inferred_surfaces(item: dict) -> set[str]:
+def inferred_surfaces(item: dict, families: set[str]) -> set[str]:
+    if "authorization" not in families:
+        return set()
     text = compact_text({
         "plausible_wrong_implementation": item.get("plausible_wrong_implementation"),
         "negative_controls": [
@@ -237,7 +239,7 @@ def main() -> int:
         if not surfaces:
             errors.append(f"requirement {rid} has no risk_surfaces")
         declared_surface_names = {surface for _, surface in surfaces}
-        detected = inferred_surfaces(item)
+        detected = inferred_surfaces(item, families)
         omitted_detected = sorted(detected - declared_surface_names)
         if omitted_detected:
             errors.append(f"requirement {rid} omits inferred risk surfaces: {omitted_detected}")
@@ -256,8 +258,7 @@ def main() -> int:
             if isinstance(control, dict):
                 primary_surface_pairs.add((str(control.get("risk_family") or ""), str(control.get("surface") or "")))
 
-        covered_surface_pairs = primary_surface_pairs
-        missing_surfaces = sorted(f"{family}:{surface}" for family, surface in surfaces - covered_surface_pairs)
+        missing_surfaces = sorted(f"{family}:{surface}" for family, surface in surfaces - primary_surface_pairs)
         if missing_surfaces:
             errors.append(f"requirement {rid} has risk surfaces without adversarial coverage: {missing_surfaces}")
 
