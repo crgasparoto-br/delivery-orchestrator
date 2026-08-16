@@ -1,6 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
-import { access, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -122,9 +122,15 @@ export async function executeRoleTask(task, payload) {
   throw new Error(`Unsupported role task: ${task}`);
 }
 
+async function readStdin() {
+  let input = '';
+  for await (const chunk of process.stdin) input += chunk;
+  return input;
+}
+
 async function main() {
   const task = process.argv[2];
-  const input = await readFile(0, 'utf8');
+  const input = await readStdin();
   const payload = input.trim() ? JSON.parse(input) : {};
   const result = await executeRoleTask(task, payload);
   process.stdout.write(`${JSON.stringify(result)}\n`);

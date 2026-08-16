@@ -52,6 +52,7 @@ jobs:
           set -euo pipefail
           implementer_user="$DELIVERY_IMPLEMENTER_USER"
           auditor_user="$DELIVERY_AUDITOR_USER"
+          node_bin="$(command -v node)"
           if [ "$implementer_user" = "$auditor_user" ]; then
             echo "::error::Implementer and auditor Linux users must be different."
             exit 1
@@ -61,7 +62,7 @@ jobs:
               echo "::error::Missing dedicated Linux role user: $role_user"
               exit 1
             fi
-            if ! printf '%s\n' '{"path":"/dev/null"}' | sudo -n -u "$role_user" -H -- node src/role-runtime-worker.mjs probe-readable >/dev/null; then
+            if ! printf '%s\n' '{"path":"/dev/null"}' | sudo -n -u "$role_user" -H -- "$node_bin" src/role-runtime-worker.mjs probe-readable >/dev/null; then
               echo "::error::Runner cannot execute the role worker as $role_user without interaction."
               exit 1
             fi
@@ -98,8 +99,8 @@ jobs:
             fi
             sudo -n -u "$implementer_user" -H -- chmod 600 "$implementer_home/auth.json"
             sudo -n -u "$auditor_user" -H -- chmod 600 "$auditor_home/auth.json"
-            sudo -n -u "$implementer_user" -H -- node -e 'const fs=require("node:fs"); const f=process.argv[1]; const a=JSON.parse(fs.readFileSync(f,"utf8")); if(a.auth_mode!=="chatgpt" || !a.tokens?.refresh_token){ process.exit(1); }' "$implementer_home/auth.json"
-            sudo -n -u "$auditor_user" -H -- node -e 'const fs=require("node:fs"); const f=process.argv[1]; const a=JSON.parse(fs.readFileSync(f,"utf8")); if(a.auth_mode!=="chatgpt" || !a.tokens?.refresh_token){ process.exit(1); }' "$auditor_home/auth.json"
+            sudo -n -u "$implementer_user" -H -- "$node_bin" -e 'const fs=require("node:fs"); const f=process.argv[1]; const a=JSON.parse(fs.readFileSync(f,"utf8")); if(a.auth_mode!=="chatgpt" || !a.tokens?.refresh_token){ process.exit(1); }' "$implementer_home/auth.json"
+            sudo -n -u "$auditor_user" -H -- "$node_bin" -e 'const fs=require("node:fs"); const f=process.argv[1]; const a=JSON.parse(fs.readFileSync(f,"utf8")); if(a.auth_mode!=="chatgpt" || !a.tokens?.refresh_token){ process.exit(1); }' "$auditor_home/auth.json"
           elif [ "$CODEX_AUTH_MODE" != "api-key" ]; then
             echo "::error::CODEX_AUTH_MODE must be chatgpt or api-key."
             exit 1
