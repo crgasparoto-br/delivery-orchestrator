@@ -1,0 +1,7 @@
+A remediacao deve preservar o modo ChatGPT e o fallback api-key existentes enquanto fecha a fronteira de credenciais entre os papeis.
+O ambiente do filho Codex implementador deve aplicar isolamento de autorizacao: receber apenas a credencial GitHub de escrita selecionada em GH_TOKEN/GITHUB_TOKEN e nao pode receber DELIVERY_GITHUB_READ_TOKEN, AUDITOR_PRIVATE_KEY_B64, AUDITOR_KEY_PASSWORD, AUDITOR_KEY_ID, AUDIT_OUTPUT_DIR ou TRUSTED_AUDITORS_PATH.
+O ambiente do filho Codex auditor deve aplicar isolamento de autorizacao: receber apenas a credencial GitHub de leitura selecionada em GH_TOKEN/GITHUB_TOKEN e nao pode receber DELIVERY_GITHUB_WRITE_TOKEN nem AUDITOR_PRIVATE_KEY_B64; os segredos de auditoria explicitamente necessarios podem ser fornecidos somente ao auditor.
+A sanitizacao do ambiente deve cobrir valores vindos de baseEnv e extraEnv, impedindo que segredos proibidos sejam reintroduzidos pela camada de extras.
+Papeis diferentes de implementer e auditor devem ser rejeitados em modo fail-closed e nenhuma execucao Codex deve ser iniciada para papel desconhecido.
+A sanitizacao existente de OPENAI_API_KEY, CODEX_API_KEY e CODEX_ACCESS_TOKEN deve permanecer valida nos modos ChatGPT e api-key.
+A regressao deve executar controles discriminantes com marcadores distintos para implementador, auditor, reintroducao via extraEnv e papel desconhecido.

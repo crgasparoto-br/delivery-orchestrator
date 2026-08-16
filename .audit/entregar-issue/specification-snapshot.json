@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "repository": "crgasparoto-br/delivery-orchestrator",
+  "issue": 1,
+  "created_at": "2026-08-16T17:36:22.832296+00:00",
+  "primary_source_id": "SRC-PR-BODY",
+  "sources": [
+    {
+      "id": "SRC-PR-BODY",
+      "kind": "issue-body",
+      "path": "specification-sources/SRC-PR-BODY.txt",
+      "locator": "pull-request:1:body",
+      "sha256": "45174c286aef2903a9c906e1ac45018d9fbe2002a51c5ab2dcc22b6a8d1c2567",
+      "textual": true,
+      "extract_source_id": null,
+      "required": true,
+      "line_count": 35
+    },
+    {
+      "id": "SRC-AUDIT-REMEDIATION",
+      "kind": "other-text",
+      "path": "specification-sources/SRC-AUDIT-REMEDIATION.txt",
+      "locator": "prior-independent-audit:A-001",
+      "sha256": "0fcd22bbd35f21b462fec161a1be4e5eeca154021a1ed0719b8083d63b0e11ec",
+      "textual": true,
+      "extract_source_id": null,
+      "required": true,
+      "line_count": 7
+    },
+    {
+      "id": "SRC-AUDIT-A002",
+      "kind": "other-text",
+      "path": "specification-sources/SRC-AUDIT-A002.txt",
+      "locator": "independent-audit:A-002",
+      "sha256": "54ff8948921d118f1931fe76fa277524fa6961953a29ab16f7dea3232e22d46d",
+      "textual": true,
+      "extract_source_id": null,
+      "required": true,
+      "line_count": 10
+    }
+  ]
+}
