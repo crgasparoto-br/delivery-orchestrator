@@ -27,7 +27,14 @@ export async function runDelivery(config, executor) {
   const persist = async () => writeJson(path.join(runDir, 'state.json'), state);
   await persist();
 
-  const homes = await prepareSkillHomes({ runtimeRoot, catalog: config.skillCatalog, auditorPrivateKeyB64: config.auditorPrivateKeyB64 });
+  const homes = await prepareSkillHomes({
+    runtimeRoot,
+    catalog: config.skillCatalog,
+    auditorPrivateKeyB64: config.auditorPrivateKeyB64,
+    authMode: config.authMode,
+    implementerCodexHome: config.implementerCodexHome,
+    auditorCodexHome: config.auditorCodexHome
+  });
   const implementerWorkspace = path.join(runtimeRoot, 'implementation', 'repo');
   await cloneForImplementation({ repository: config.repository, dest: implementerWorkspace, token: config.writeToken });
 

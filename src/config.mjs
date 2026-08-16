@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -5,11 +6,20 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 
 const SANDBOX_MODES = new Set(['read-only', 'workspace-write', 'danger-full-access']);
+const AUTH_MODES = new Set(['chatgpt', 'api-key']);
 
 export function resolveSandboxMode(value) {
   const resolved = value || 'workspace-write';
   if (!SANDBOX_MODES.has(resolved)) {
     throw new Error(`CODEX_SANDBOX_MODE must be one of: ${[...SANDBOX_MODES].join(', ')}`);
+  }
+  return resolved;
+}
+
+export function resolveAuthMode(value) {
+  const resolved = value || 'chatgpt';
+  if (!AUTH_MODES.has(resolved)) {
+    throw new Error(`CODEX_AUTH_MODE must be one of: ${[...AUTH_MODES].join(', ')}`);
   }
   return resolved;
 }
@@ -22,11 +32,25 @@ function int(name, fallback) {
   return parsed;
 }
 
+function roleCodexHome(envName, role) {
+  const configured = process.env[envName]?.trim();
+  return configured
+    ? path.resolve(configured)
+    : path.join(os.homedir(), '.codex-delivery', role);
+}
+
 export function loadConfig(args = {}) {
   const repository = args.repository ?? process.env.TARGET_REPOSITORY;
   const issueNumber = Number.parseInt(args.issueNumber ?? process.env.TARGET_ISSUE ?? '', 10);
   if (!repository || !repository.includes('/')) throw new Error('TARGET_REPOSITORY must be owner/repo');
   if (!Number.isInteger(issueNumber) || issueNumber < 1) throw new Error('TARGET_ISSUE must be a positive integer');
+
+  const authMode = resolveAuthMode(process.env.CODEX_AUTH_MODE);
+  const openaiApiKey = process.env.OPENAI_API_KEY?.trim() || undefined;
+  if (authMode === 'api-key' && !openaiApiKey) {
+    throw new Error('OPENAI_API_KEY is required when CODEX_AUTH_MODE=api-key');
+  }
+
   return {
     repository,
     issueNumber,
@@ -38,7 +62,10 @@ export function loadConfig(args = {}) {
     ciSettleSeconds: int('CI_SETTLE_SECONDS', 15),
     model: process.env.OPENAI_MODEL ?? 'gpt-5.6-sol',
     sandboxMode: resolveSandboxMode(process.env.CODEX_SANDBOX_MODE),
-    openaiApiKey: process.env.OPENAI_API_KEY,
+    authMode,
+    openaiApiKey,
+    implementerCodexHome: roleCodexHome('CODEX_IMPLEMENTER_HOME', 'implementer'),
+    auditorCodexHome: roleCodexHome('CODEX_AUDITOR_HOME', 'auditor'),
     writeToken: process.env.DELIVERY_GITHUB_WRITE_TOKEN,
     readToken: process.env.DELIVERY_GITHUB_READ_TOKEN,
     auditorPrivateKeyB64: process.env.AUDITOR_PRIVATE_KEY_B64 ?? '',

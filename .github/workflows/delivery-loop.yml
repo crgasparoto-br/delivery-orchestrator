@@ -19,9 +19,15 @@ on:
 permissions:
   contents: read
 
+# ChatGPT-managed Codex auth refreshes auth.json in place. Keep one serialized
+# workflow stream for the two dedicated role homes on this runner.
+concurrency:
+  group: delivery-orchestrator
+  cancel-in-progress: false
+
 jobs:
   delivery:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, delivery-orchestrator]
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +40,38 @@ jobs:
         run: python3 -m pip install -r skills/catalog/entregar-issue/requirements.txt -r skills/catalog/auditar-issue/requirements.txt
       - name: Validate bundle
         run: npm run validate
+      - name: Validate Codex authentication runtime
+        shell: bash
+        env:
+          CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'chatgpt' }}
+          CODEX_IMPLEMENTER_HOME: ${{ vars.CODEX_IMPLEMENTER_HOME }}
+          CODEX_AUDITOR_HOME: ${{ vars.CODEX_AUDITOR_HOME }}
+        run: |
+          set -euo pipefail
+          if [ "$CODEX_AUTH_MODE" = "chatgpt" ]; then
+            if [ "${{ github.event.repository.private }}" != "true" ]; then
+              echo "::error::ChatGPT-managed Codex auth is restricted to trusted private automation. Make this control repository private or set CODEX_AUTH_MODE=api-key."
+              exit 1
+            fi
+
+            implementer_home="${CODEX_IMPLEMENTER_HOME:-$HOME/.codex-delivery/implementer}"
+            auditor_home="${CODEX_AUDITOR_HOME:-$HOME/.codex-delivery/auditor}"
+            if [ "$implementer_home" = "$auditor_home" ]; then
+              echo "::error::Implementer and auditor CODEX_HOME paths must be different."
+              exit 1
+            fi
+            for auth_file in "$implementer_home/auth.json" "$auditor_home/auth.json"; do
+              if [ ! -r "$auth_file" ]; then
+                echo "::error::Missing readable ChatGPT Codex auth cache: $auth_file"
+                exit 1
+              fi
+              chmod 600 "$auth_file"
+              node -e 'const fs=require("node:fs"); const f=process.argv[1]; const a=JSON.parse(fs.readFileSync(f,"utf8")); if(a.auth_mode!=="chatgpt" || !a.tokens?.refresh_token){ console.error("::error::"+f+" is not a refreshable ChatGPT-managed Codex auth cache."); process.exit(1); }' "$auth_file"
+            done
+          elif [ "$CODEX_AUTH_MODE" != "api-key" ]; then
+            echo "::error::CODEX_AUTH_MODE must be chatgpt or api-key."
+            exit 1
+          fi
       - name: Run independent delivery loop
         env:
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
@@ -44,10 +82,11 @@ jobs:
           CI_DISCOVERY_GRACE_SECONDS: '30'
           CI_POLL_INTERVAL_SECONDS: '15'
           CI_SETTLE_SECONDS: '15'
-          # GitHub-hosted runners block the Linux bwrap/userns sandbox used by workspace-write.
-          # The job is ephemeral; auditor isolation is still enforced by a fresh thread/CODEX_HOME,
-          # a read-only GitHub token, a fresh detached clone, and the post-audit clean-head guard.
-          CODEX_SANDBOX_MODE: 'danger-full-access'
+          CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'chatgpt' }}
+          CODEX_IMPLEMENTER_HOME: ${{ vars.CODEX_IMPLEMENTER_HOME }}
+          CODEX_AUDITOR_HOME: ${{ vars.CODEX_AUDITOR_HOME }}
+          CODEX_SANDBOX_MODE: ${{ vars.CODEX_SANDBOX_MODE || 'workspace-write' }}
+          # Optional fallback only. The chatgpt executor strips API credentials before launching Codex.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.6-sol' }}
           DELIVERY_GITHUB_WRITE_TOKEN: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
@@ -57,10 +96,19 @@ jobs:
           AUDITOR_KEY_ID: ${{ vars.AUDITOR_KEY_ID }}
           TRUSTED_AUDITORS_PATH: ${{ vars.TRUSTED_AUDITORS_PATH }}
         run: node src/cli.mjs run
+      - name: Remove runtime workspaces and secrets
+        if: always()
+        shell: bash
+        run: |
+          if [ -d runs ]; then
+            find runs -type d -name runtime -prune -exec rm -rf -- {} +
+          fi
       - name: Upload forensic run state
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: delivery-orchestrator-run-${{ github.run_id }}
-          path: runs/
+          path: |
+            runs/
+            !runs/**/runtime/**
           if-no-files-found: warn

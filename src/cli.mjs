@@ -31,7 +31,11 @@ if (command === 'validate') {
   await validate();
 } else if (command === 'run') {
   const config = loadConfig(parseArgs(rest));
-  const executor = new CodexExecutor({ apiKey: config.openaiApiKey, model: config.model });
+  const executor = new CodexExecutor({
+    apiKey: config.openaiApiKey,
+    authMode: config.authMode,
+    model: config.model
+  });
   const state = await runDelivery(config, executor);
   console.log(JSON.stringify(state, null, 2));
   if (state.status !== 'COMPLETE') process.exitCode = 2;
