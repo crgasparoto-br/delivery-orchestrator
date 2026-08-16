@@ -4,6 +4,16 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 
+const SANDBOX_MODES = new Set(['read-only', 'workspace-write', 'danger-full-access']);
+
+export function resolveSandboxMode(value) {
+  const resolved = value || 'workspace-write';
+  if (!SANDBOX_MODES.has(resolved)) {
+    throw new Error(`CODEX_SANDBOX_MODE must be one of: ${[...SANDBOX_MODES].join(', ')}`);
+  }
+  return resolved;
+}
+
 function int(name, fallback) {
   const value = process.env[name];
   if (!value) return fallback;
@@ -23,6 +33,7 @@ export function loadConfig(args = {}) {
     maxCycles: int('MAX_CYCLES', 6),
     maxStagnantCycles: int('MAX_STAGNANT_CYCLES', 1),
     model: process.env.OPENAI_MODEL ?? 'gpt-5.6-sol',
+    sandboxMode: resolveSandboxMode(process.env.CODEX_SANDBOX_MODE),
     openaiApiKey: process.env.OPENAI_API_KEY,
     writeToken: process.env.DELIVERY_GITHUB_WRITE_TOKEN,
     readToken: process.env.DELIVERY_GITHUB_READ_TOKEN,

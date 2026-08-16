@@ -26,3 +26,11 @@ test('auditor workspace guard rejects local candidate mutation', async () => {
   await writeFile(path.join(dir, 'candidate.txt'), 'mutated\n');
   await assert.rejects(() => verifyAuditWorkspaceClean({ cwd: dir, expectedHead }), /Auditor modified the candidate workspace/);
 });
+
+test('sandbox mode is explicit and rejects invalid values', async () => {
+  const { resolveSandboxMode } = await import('../src/config.mjs');
+  assert.equal(resolveSandboxMode(undefined), 'workspace-write');
+  assert.equal(resolveSandboxMode('danger-full-access'), 'danger-full-access');
+  assert.equal(resolveSandboxMode('read-only'), 'read-only');
+  assert.throws(() => resolveSandboxMode('unsafe-magic'), /CODEX_SANDBOX_MODE must be one of/);
+});

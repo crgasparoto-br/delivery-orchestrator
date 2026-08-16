@@ -54,7 +54,7 @@ export async function runDelivery(config, executor) {
       outputSchema: IMPLEMENTER_RESULT_SCHEMA,
       role: 'implementer',
       githubToken: config.writeToken,
-      sandboxMode: 'workspace-write'
+      sandboxMode: config.sandboxMode
     });
     state.implementation_context_ids.push(implRun.contextId);
     await writeJson(path.join(runDir, `cycle-${cycle}-implementation.json`), implRun);
@@ -103,7 +103,7 @@ export async function runDelivery(config, executor) {
       outputSchema: AUDIT_RESULT_SCHEMA,
       role: 'auditor',
       githubToken: config.readToken,
-      sandboxMode: 'workspace-write',
+      sandboxMode: config.sandboxMode,
       extraEnv: {
         AUDITOR_KEY_PASSWORD: config.auditorKeyPassword ?? '',
         AUDITOR_KEY_ID: config.auditorKeyId ?? '',

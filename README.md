@@ -42,6 +42,8 @@ Repository variables:
 - `TRUSTED_AUDITORS_PATH` when the trusted registry is external; otherwise the auditor looks for `trusted-auditors.json` in the target repository.
 - `OPENAI_MODEL` (defaults to `gpt-5.6-sol`).
 
+The GitHub-hosted workflow sets `CODEX_SANDBOX_MODE=danger-full-access` because the hosted Ubuntu runner used by the workflow can block the `bwrap`/user-namespace setup required by Codex `workspace-write`. This does not merge the worker identities: implementer and auditor still use separate Codex threads and `CODEX_HOME` directories; the auditor receives a read-only GitHub credential, works from a fresh clone, and the orchestrator rejects the audit if the candidate SHA or working tree changes. Local execution keeps `workspace-write` by default.
+
 ## One-time auditor trust bootstrap
 
 Run:

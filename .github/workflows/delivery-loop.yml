@@ -40,6 +40,10 @@ jobs:
           TARGET_ISSUE: ${{ inputs.issue_number }}
           MAX_CYCLES: ${{ inputs.max_cycles }}
           MAX_STAGNANT_CYCLES: '1'
+          # GitHub-hosted runners block the Linux bwrap/userns sandbox used by workspace-write.
+          # The job is ephemeral; auditor isolation is still enforced by a fresh thread/CODEX_HOME,
+          # a read-only GitHub token, a fresh detached clone, and the post-audit clean-head guard.
+          CODEX_SANDBOX_MODE: 'danger-full-access'
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.6-sol' }}
           DELIVERY_GITHUB_WRITE_TOKEN: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
