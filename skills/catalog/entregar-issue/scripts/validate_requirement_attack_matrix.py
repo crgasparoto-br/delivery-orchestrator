@@ -11,7 +11,34 @@ HIGH_RISK = {
     "temporal-destination", "concurrency-atomicity", "idempotency", "rollback",
     "historical-immutability",
 }
+CONTROL_TYPES = {"test", "gate", "scenario", "procedure"}
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$", re.I)
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.I)
+SURFACE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
+
+# Deterministic safety net for surfaces that are obvious from the attack description.
+# This intentionally stays small and generic; explicit risk_surfaces remains authoritative.
+SURFACE_HINTS = {
+    "environment": (
+        "process.env", "extraenv", "environment variable", "environment variables",
+        "env var", "env vars", "child environment",
+    ),
+    "filesystem": (
+        "filesystem", "file system", "private key", "signing key", "read file",
+        "readable file", "directory", "path sibling", "sibling path",
+    ),
+    "persistent-credential-store": (
+        "codex_home", "codex home", "auth.json", "credential cache", "persistent home",
+        "persistent credential", "refresh token",
+    ),
+    "artifact-export": (
+        "artifact", "upload", "archive", "forensic state", "exported run",
+    ),
+    "process-identity": (
+        "same user", "same uid", "process isolation", "container", "virtual machine",
+        "mount namespace", "runner user",
+    ),
+}
 
 
 def load(path: Path) -> dict:
@@ -24,10 +51,69 @@ def load(path: Path) -> dict:
     return value
 
 
-def passed_control(control: object, head_sha: str, label: str, errors: list[str], require_siblings: int = 0) -> None:
+def compact_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return " ".join(compact_text(v) for v in value.values())
+    if isinstance(value, list):
+        return " ".join(compact_text(v) for v in value)
+    return str(value)
+
+
+def declared_surfaces(item: dict, families: set[str], errors: list[str], rid: str) -> set[tuple[str, str]]:
+    raw = item.get("risk_surfaces") or []
+    result: set[tuple[str, str]] = set()
+    for index, entry in enumerate(raw):
+        if isinstance(entry, str):
+            if len(families) != 1:
+                errors.append(f"requirement {rid} risk surface {index} must name risk_family when multiple families apply")
+                continue
+            family = next(iter(families))
+            surface = entry.strip()
+        elif isinstance(entry, dict):
+            family = str(entry.get("risk_family") or entry.get("family") or "").strip()
+            surface = str(entry.get("surface") or "").strip()
+            reason = str(entry.get("reason") or "").strip()
+            if len(reason) < 8:
+                errors.append(f"requirement {rid} risk surface {index} lacks reason")
+        else:
+            errors.append(f"requirement {rid} risk surface {index} is invalid")
+            continue
+        if family not in families:
+            errors.append(f"requirement {rid} risk surface {index} references non-applicable family {family or '?'}")
+        if not SURFACE_RE.match(surface):
+            errors.append(f"requirement {rid} risk surface {index} has invalid surface {surface or '?'}")
+        if family and surface:
+            result.add((family, surface))
+    return result
+
+
+def inferred_surfaces(item: dict) -> set[str]:
+    text = compact_text({
+        "plausible_wrong_implementation": item.get("plausible_wrong_implementation"),
+        "negative_controls": [
+            {
+                "failure_mode": c.get("failure_mode"),
+                "plausible_wrong_implementation": c.get("plausible_wrong_implementation"),
+                "procedure": c.get("procedure"),
+            }
+            for c in item.get("negative_controls") or [] if isinstance(c, dict)
+        ],
+    }).lower()
+    return {
+        surface
+        for surface, hints in SURFACE_HINTS.items()
+        if any(hint in text for hint in hints)
+    }
+
+
+def validate_basic_control(control: object, head_sha: str, label: str, errors: list[str]) -> bool:
     if not isinstance(control, dict):
         errors.append(f"{label} is missing")
-        return
+        return False
     if control.get("status") != "passed":
         errors.append(f"{label} is not passed")
     if str(control.get("head_sha") or "") != head_sha:
@@ -35,12 +121,78 @@ def passed_control(control: object, head_sha: str, label: str, errors: list[str]
     evidence = str(control.get("evidence") or control.get("evidence_path") or "").strip()
     if not evidence:
         errors.append(f"{label} lacks evidence")
-    if require_siblings:
-        siblings = control.get("sibling_cases") or []
-        if len(siblings) < require_siblings:
-            errors.append(f"{label} has fewer than {require_siblings} sibling cases")
-        elif any(not isinstance(case, dict) or case.get("status") != "passed" for case in siblings):
-            errors.append(f"{label} has sibling cases not passed")
+    return True
+
+
+def validate_negative_control(
+    control: object,
+    head_sha: str,
+    label: str,
+    families: set[str],
+    surfaces: set[tuple[str, str]],
+    errors: list[str],
+    require_siblings: int,
+) -> set[tuple[str, str, str]]:
+    covered: set[tuple[str, str, str]] = set()
+    if not validate_basic_control(control, head_sha, label, errors) or not isinstance(control, dict):
+        return covered
+
+    cid = str(control.get("id") or "").strip()
+    family = str(control.get("risk_family") or "").strip()
+    surface = str(control.get("surface") or "").strip()
+    dimension = str(control.get("dimension") or "").strip()
+    if not cid:
+        errors.append(f"{label} lacks id")
+    if family not in families:
+        errors.append(f"{label} risk_family is not declared by the requirement")
+    if (family, surface) not in surfaces:
+        errors.append(f"{label} surface {surface or '?'} is not declared in requirement risk_surfaces")
+    if len(dimension) < 3:
+        errors.append(f"{label} lacks discriminant dimension")
+    for key, minimum in (
+        ("failure_mode", 12),
+        ("plausible_wrong_implementation", 20),
+        ("procedure", 12),
+        ("expected", 8),
+        ("observed", 8),
+    ):
+        if len(str(control.get(key) or "").strip()) < minimum:
+            errors.append(f"{label} lacks {key}")
+    if str(control.get("control_type") or "") not in CONTROL_TYPES:
+        errors.append(f"{label} has invalid control_type")
+    evidence_sha = str(control.get("evidence_sha256") or "").strip()
+    if not SHA256_RE.match(evidence_sha):
+        errors.append(f"{label} lacks valid evidence_sha256")
+
+    if family and surface and dimension:
+        covered.add((family, surface, dimension))
+
+    siblings = control.get("sibling_cases") or []
+    if len(siblings) < require_siblings:
+        errors.append(f"{label} has fewer than {require_siblings} sibling cases")
+    sibling_pairs: set[tuple[str, str]] = set()
+    for index, case in enumerate(siblings):
+        slabel = f"{label} sibling {index}"
+        if not isinstance(case, dict):
+            errors.append(f"{slabel} is invalid")
+            continue
+        if case.get("status") != "passed":
+            errors.append(f"{slabel} is not passed")
+        sid = str(case.get("id") or "").strip()
+        ssurface = str(case.get("surface") or "").strip()
+        sdimension = str(case.get("dimension") or "").strip()
+        if not sid:
+            errors.append(f"{slabel} lacks id")
+        if (family, ssurface) not in surfaces:
+            errors.append(f"{slabel} surface {ssurface or '?'} is not declared in requirement risk_surfaces")
+        if len(sdimension) < 3:
+            errors.append(f"{slabel} lacks dimension")
+        if ssurface and sdimension:
+            sibling_pairs.add((ssurface, sdimension))
+            covered.add((family, ssurface, sdimension))
+    if require_siblings and len(sibling_pairs) < require_siblings:
+        errors.append(f"{label} sibling cases do not vary {require_siblings} distinct surface/dimension pairs")
+    return covered
 
 
 def main() -> int:
@@ -80,24 +232,51 @@ def main() -> int:
         families = {str(value) for value in item.get("risk_families") or []}
         if not families:
             errors.append(f"requirement {rid} has no risk families")
-        passed_control(item.get("positive_control"), head_sha, f"requirement {rid} positive control", errors)
+
+        surfaces = declared_surfaces(item, families, errors, rid)
+        if not surfaces:
+            errors.append(f"requirement {rid} has no risk_surfaces")
+        declared_surface_names = {surface for _, surface in surfaces}
+        detected = inferred_surfaces(item)
+        omitted_detected = sorted(detected - declared_surface_names)
+        if omitted_detected:
+            errors.append(f"requirement {rid} omits inferred risk surfaces: {omitted_detected}")
+
+        validate_basic_control(item.get("positive_control"), head_sha, f"requirement {rid} positive control", errors)
         negative = item.get("negative_controls") or []
         if not negative:
             errors.append(f"requirement {rid} has no negative controls")
         sibling_min = 2 if HIGH_RISK.intersection(families) else 1
+        covered: set[tuple[str, str, str]] = set()
+        primary_surface_pairs: set[tuple[str, str]] = set()
         for index, control in enumerate(negative):
-            passed_control(control, head_sha, f"requirement {rid} negative control {index}", errors, sibling_min)
+            covered.update(validate_negative_control(
+                control, head_sha, f"requirement {rid} negative control {index}", families, surfaces, errors, sibling_min
+            ))
+            if isinstance(control, dict):
+                primary_surface_pairs.add((str(control.get("risk_family") or ""), str(control.get("surface") or "")))
+
+        covered_surface_pairs = primary_surface_pairs
+        missing_surfaces = sorted(f"{family}:{surface}" for family, surface in surfaces - covered_surface_pairs)
+        if missing_surfaces:
+            errors.append(f"requirement {rid} has risk surfaces without adversarial coverage: {missing_surfaces}")
+
+        if HIGH_RISK.intersection(families) and len(surfaces) > 1:
+            distinct_surfaces = {surface for _, surface, _ in covered}
+            if len(distinct_surfaces) < 2:
+                errors.append(f"requirement {rid} high-risk controls do not cross surfaces")
+
         regression = item.get("regression_controls") or []
         if not regression:
             errors.append(f"requirement {rid} has no regression controls")
         for index, control in enumerate(regression):
-            passed_control(control, head_sha, f"requirement {rid} regression control {index}", errors)
+            validate_basic_control(control, head_sha, f"requirement {rid} regression control {index}", errors)
 
     if errors:
         for error in errors:
             print(f"BLOCK: {error}")
         return 2
-    print("READY: every covered requirement has positive, adversarial and regression evidence")
+    print("READY: every covered requirement has cross-surface adversarial and regression evidence")
     return 0
 
 
