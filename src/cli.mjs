@@ -18,7 +18,8 @@ async function validate() {
   const root = path.resolve(new URL('..', import.meta.url).pathname);
   const required = [
     'prompts/implementer.md', 'prompts/auditor.md',
-    'skills/catalog/entregar-issue/SKILL.md', 'skills/catalog/auditar-issue/SKILL.md'
+    'skills/catalog/entregar-issue/SKILL.md', 'skills/catalog/auditar-issue/SKILL.md',
+    'src/role-runtime-worker.mjs'
   ];
   for (const rel of required) await access(path.join(root, rel));
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -27,18 +28,17 @@ async function validate() {
 }
 
 const [command = 'run', ...rest] = process.argv.slice(2);
-if (command === 'validate') {
-  await validate();
-} else if (command === 'run') {
+if (command === 'validate') await validate();
+else if (command === 'run') {
   const config = loadConfig(parseArgs(rest));
   const executor = new CodexExecutor({
     apiKey: config.openaiApiKey,
     authMode: config.authMode,
-    model: config.model
+    model: config.model,
+    implementerUser: config.implementerUser,
+    auditorUser: config.auditorUser
   });
   const state = await runDelivery(config, executor);
   console.log(JSON.stringify(state, null, 2));
   if (state.status !== 'COMPLETE') process.exitCode = 2;
-} else {
-  throw new Error(`Unknown command: ${command}`);
-}
+} else throw new Error(`Unknown command: ${command}`);

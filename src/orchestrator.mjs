@@ -1,15 +1,16 @@
 import path from 'node:path';
 import os from 'node:os';
-import { mkdir } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { STATES } from './constants.mjs';
 import { auditFingerprint } from './fingerprint.mjs';
-import { copyDir, resetDir, writeJson } from './files.mjs';
+import { copyDir, writeJson } from './files.mjs';
 import { cloneForAudit, cloneForImplementation, verifyAuditWorkspaceClean } from './git-workspace.mjs';
 import { waitForExactHeadWorkflowRuns } from './github-ci.mjs';
 import { loadPrompt } from './prompts.mjs';
 import { AUDIT_RESULT_SCHEMA, IMPLEMENTER_RESULT_SCHEMA } from './schemas.mjs';
-import { prepareSkillHomes } from './skill-homes.mjs';
+import { materializeAuditorPrivateKey, prepareSkillHomes } from './skill-homes.mjs';
+import { runRoleTask } from './role-runtime.mjs';
 import { initialState, transition } from './state-machine.mjs';
 
 function mapImplementerBlock(status) {
@@ -21,22 +22,31 @@ function mapImplementerBlock(status) {
 export async function runDelivery(config, executor) {
   const runId = config.runId ?? randomUUID();
   const runDir = path.join(config.runsRoot, runId);
-  const runtimeRoot = path.join(runDir, 'runtime');
+  const implementerRuntimeRoot = path.join(os.tmpdir(), `delivery-orchestrator-${runId}-implementer`);
+  const auditorRuntimeRoot = path.join(os.tmpdir(), `delivery-orchestrator-${runId}-auditor`);
   await mkdir(runDir, { recursive: true });
+  await chmod(runDir, 0o700);
   let state = initialState({ runId, repository: config.repository, issueNumber: config.issueNumber, maxCycles: config.maxCycles });
   const persist = async () => writeJson(path.join(runDir, 'state.json'), state);
   await persist();
 
   const homes = await prepareSkillHomes({
-    runtimeRoot,
+    implementerRuntimeRoot,
+    auditorRuntimeRoot,
     catalog: config.skillCatalog,
-    auditorPrivateKeyB64: config.auditorPrivateKeyB64,
     authMode: config.authMode,
     implementerCodexHome: config.implementerCodexHome,
-    auditorCodexHome: config.auditorCodexHome
+    auditorCodexHome: config.auditorCodexHome,
+    implementerUser: config.implementerUser,
+    auditorUser: config.auditorUser
   });
-  const implementerWorkspace = path.join(runtimeRoot, 'implementation', 'repo');
-  await cloneForImplementation({ repository: config.repository, dest: implementerWorkspace, token: config.writeToken });
+  const implementerWorkspace = path.join(implementerRuntimeRoot, 'repo');
+  await cloneForImplementation({
+    repository: config.repository,
+    dest: implementerWorkspace,
+    token: config.writeToken,
+    roleUser: config.implementerUser
+  });
 
   let previousAudit = null;
   let previousFingerprint = null;
@@ -103,24 +113,32 @@ export async function runDelivery(config, executor) {
     await persist();
     if (ciWait.status === 'timeout') {
       const pending = ciWait.runs.filter((run) => run.status !== 'completed').map((run) => run.name).join(', ');
-      state = transition(state, STATES.BLOCKED_EXTERNAL, {
-        cycle,
-        reason: `exact-head CI did not reach a terminal state before timeout${pending ? `: ${pending}` : ''}`
-      });
+      state = transition(state, STATES.BLOCKED_EXTERNAL, { cycle, reason: `exact-head CI did not reach a terminal state before timeout${pending ? `: ${pending}` : ''}` });
       await persist();
       return state;
     }
 
-    const auditorWorkspace = path.join(runtimeRoot, `audit-${cycle}`, 'repo');
-    await cloneForAudit({ repository: config.repository, dest: auditorWorkspace, ref: state.handoff_head_sha, token: config.readToken });
+    const auditorWorkspace = path.join(auditorRuntimeRoot, `audit-${cycle}`, 'repo');
+    await cloneForAudit({
+      repository: config.repository,
+      dest: auditorWorkspace,
+      ref: state.handoff_head_sha,
+      token: config.readToken,
+      roleUser: config.auditorUser
+    });
     state = transition(state, STATES.AUDITING, { cycle });
     await persist();
 
-    const trustedAuditorsPath = config.trustedAuditorsPath
-      ? path.resolve(config.trustedAuditorsPath)
-      : path.join(auditorWorkspace, 'trusted-auditors.json');
-    const auditOutputDir = path.join(os.tmpdir(), `delivery-orchestrator-${runId}-audit-${cycle}`);
-    await resetDir(auditOutputDir);
+    const trustedAuditorsPath = config.trustedAuditorsPath ? path.resolve(config.trustedAuditorsPath) : path.join(auditorWorkspace, 'trusted-auditors.json');
+    const auditOutputDir = path.join(os.tmpdir(), `delivery-orchestrator-${runId}-audit-output-${cycle}`);
+    await runRoleTask(config.auditorUser, 'reset-dir', { path: auditOutputDir, mode: 0o755 });
+    const auditorPrivateKeyPath = await materializeAuditorPrivateKey({
+      auditorRuntimeRoot,
+      auditorPrivateKeyB64: config.auditorPrivateKeyB64,
+      implementerUser: config.implementerUser,
+      auditorUser: config.auditorUser
+    });
+
     const auditPrompt = await loadPrompt(config.auditorPrompt, {
       repository: config.repository,
       issue_number: config.issueNumber,
@@ -128,33 +146,40 @@ export async function runDelivery(config, executor) {
       material_head_sha: state.material_head_sha,
       handoff_head_sha: state.handoff_head_sha,
       auditor_key_id: config.auditorKeyId ?? 'not-configured',
-      auditor_private_key_path: homes.auditorPrivateKeyPath ?? 'not-configured',
+      auditor_private_key_path: auditorPrivateKeyPath ?? 'not-configured',
       trusted_auditors_path: trustedAuditorsPath,
       audit_output_dir: auditOutputDir
     });
 
-    const auditRun = await executor.runFresh({
-      workingDirectory: auditorWorkspace,
-      codexHome: homes.auditor,
-      prompt: auditPrompt,
-      outputSchema: AUDIT_RESULT_SCHEMA,
-      role: 'auditor',
-      githubToken: config.readToken,
-      sandboxMode: config.sandboxMode,
-      extraEnv: {
-        AUDITOR_KEY_PASSWORD: config.auditorKeyPassword ?? '',
-        AUDITOR_KEY_ID: config.auditorKeyId ?? '',
-        AUDIT_OUTPUT_DIR: auditOutputDir
-      }
-    });
+    let auditRun;
     try {
-      await verifyAuditWorkspaceClean({ cwd: auditorWorkspace, expectedHead: state.handoff_head_sha });
+      auditRun = await executor.runFresh({
+        workingDirectory: auditorWorkspace,
+        codexHome: homes.auditor,
+        prompt: auditPrompt,
+        outputSchema: AUDIT_RESULT_SCHEMA,
+        role: 'auditor',
+        githubToken: config.readToken,
+        sandboxMode: config.sandboxMode,
+        extraEnv: {
+          AUDITOR_KEY_PASSWORD: config.auditorKeyPassword ?? '',
+          AUDITOR_KEY_ID: config.auditorKeyId ?? '',
+          AUDIT_OUTPUT_DIR: auditOutputDir
+        }
+      });
+    } finally {
+      if (auditorPrivateKeyPath) await runRoleTask(config.auditorUser, 'remove-path', { path: path.dirname(auditorPrivateKeyPath) });
+    }
+
+    try {
+      await verifyAuditWorkspaceClean({ cwd: auditorWorkspace, expectedHead: state.handoff_head_sha, roleUser: config.auditorUser });
     } catch (error) {
       state = transition(state, STATES.FAILED, { cycle, reason: `independence violation: ${error.message}` });
       await persist();
       return state;
     }
     await copyDir(auditOutputDir, path.join(runDir, `cycle-${cycle}-audit-output`));
+    await runRoleTask(config.auditorUser, 'remove-path', { path: auditOutputDir });
 
     state.audit_context_ids.push(auditRun.contextId);
     state.last_audit = auditRun.result;
@@ -166,19 +191,16 @@ export async function runDelivery(config, executor) {
       return state;
     }
 
-    if ((auditRun.result.status === 'approved' || auditRun.result.status === 'approved_with_reservations') &&
-        auditRun.result.validity === 'independent' && auditRun.result.release_gate_satisfied) {
+    if ((auditRun.result.status === 'approved' || auditRun.result.status === 'approved_with_reservations') && auditRun.result.validity === 'independent' && auditRun.result.release_gate_satisfied) {
       state = transition(state, STATES.COMPLETE, { cycle, verdict: auditRun.result.status });
       await persist();
       return state;
     }
-
     if (auditRun.result.status === 'inconclusive') {
       state = transition(state, STATES.BLOCKED_EXTERNAL, { cycle, reason: auditRun.result.limitations.join('; ') || auditRun.result.summary });
       await persist();
       return state;
     }
-
     if (auditRun.result.status !== 'rejected') {
       state = transition(state, STATES.FAILED, { cycle, reason: `non-releasable audit result: ${auditRun.result.status}/${auditRun.result.validity}` });
       await persist();
