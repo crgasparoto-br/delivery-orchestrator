@@ -1,0 +1,613 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/auditar-issue/controller-audit-result-v3.schema.json",
+  "title": "Controller and independent audit result v3",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mode",
+    "approval_scope",
+    "release_gate_satisfied",
+    "verdict",
+    "identity",
+    "started_at",
+    "finished_at",
+    "read_only",
+    "requirements_rederived",
+    "modifications_detected",
+    "source_manifest_sha256",
+    "requirements_rederivation_sha256",
+    "coverage_matrix_sha256",
+    "neutral_packet_sha256",
+    "neutral_packet",
+    "prior_internal_approval",
+    "audit_escapes",
+    "requirements",
+    "findings",
+    "gates",
+    "limitations"
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "identity": {
+      "type": "object",
+      "required": [
+        "repository",
+        "issue",
+        "pull_request",
+        "branch",
+        "head_sha",
+        "base_sha",
+        "merge_preview_sha",
+        "issue_snapshot_sha256",
+        "diff_sha256",
+        "skills_sha256",
+        "captured_at"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 3
+        },
+        "issue": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pull_request": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "head_sha": {
+          "type": "string",
+          "minLength": 7
+        },
+        "base_sha": {
+          "type": "string",
+          "minLength": 7
+        },
+        "merge_preview_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "issue_snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "diff_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "skills_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "captured_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "negativeControlEvidence": {
+      "type": "object",
+      "required": [
+        "id",
+        "risk_family",
+        "dimension",
+        "failure_mode",
+        "plausible_wrong_implementation",
+        "control_type",
+        "procedure",
+        "expected",
+        "observed",
+        "status",
+        "evidence_path",
+        "evidence_sha256",
+        "head_sha",
+        "sibling_cases"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "risk_family": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dimension": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failure_mode": {
+          "type": "string",
+          "minLength": 5
+        },
+        "plausible_wrong_implementation": {
+          "type": "string",
+          "minLength": 5
+        },
+        "control_type": {
+          "enum": [
+            "test",
+            "gate",
+            "scenario",
+            "procedure"
+          ]
+        },
+        "procedure": {
+          "type": "string",
+          "minLength": 5
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observed": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "not-run"
+          ]
+        },
+        "evidence_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "head_sha": {
+          "type": "string",
+          "minLength": 7
+        },
+        "sibling_cases": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "const": 3
+    },
+    "mode": {
+      "enum": [
+        "controller-adversarial",
+        "isolated-within-run",
+        "independent"
+      ]
+    },
+    "verdict": {
+      "enum": [
+        "Aprovado",
+        "Aprovado com ressalvas",
+        "Reprovado"
+      ]
+    },
+    "identity": {
+      "$ref": "#/$defs/identity"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "read_only": {
+      "const": true
+    },
+    "requirements_rederived": {
+      "const": true
+    },
+    "modifications_detected": {
+      "const": false
+    },
+    "source_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "requirements_rederivation_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "coverage_matrix_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "neutral_packet_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "origin",
+          "statement",
+          "status",
+          "evidence",
+          "negative_controls",
+          "negative_control_evidence",
+          "regression_evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "origin": {
+            "type": "string",
+            "minLength": 1
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 5
+          },
+          "status": {
+            "enum": [
+              "Implementado",
+              "Parcial",
+              "Nao implementado",
+              "Incorreto",
+              "Nao verificavel",
+              "Fora do escopo"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "negative_controls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "regression_evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "scope_basis": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "negative_control_evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/negativeControlEvidence"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "fingerprint",
+          "severity",
+          "status",
+          "disposition",
+          "requirement_id",
+          "impact",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fingerprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "enum": [
+              "Bloqueador",
+              "Alto",
+              "Medio",
+              "Baixo"
+            ]
+          },
+          "status": {
+            "enum": [
+              "open",
+              "closed"
+            ]
+          },
+          "disposition": {
+            "enum": [
+              "blocking",
+              "recommendation"
+            ]
+          },
+          "requirement_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "impact": {
+            "type": "string",
+            "minLength": 5
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "escape_category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sibling_cases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "attestation_sha256"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "failed",
+              "not-run",
+              "not-applicable"
+            ]
+          },
+          "attestation_sha256": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/sha256"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "description",
+          "material"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "material": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "approval_scope": {
+      "enum": [
+        "internal-only",
+        "independent-release-gate"
+      ]
+    },
+    "neutral_packet": {
+      "type": "object",
+      "required": [
+        "implementation_conclusions_included",
+        "implementation_narrative_included",
+        "allowed_contents"
+      ],
+      "properties": {
+        "implementation_conclusions_included": {
+          "const": false
+        },
+        "implementation_narrative_included": {
+          "const": false
+        },
+        "allowed_contents": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "canonical-sources",
+              "identity",
+              "diff",
+              "source",
+              "tests",
+              "raw-evidence",
+              "manifests"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "prior_internal_approval": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "head_sha",
+            "report_sha256",
+            "assurance_level",
+            "approved_at"
+          ],
+          "properties": {
+            "head_sha": {
+              "type": "string",
+              "minLength": 7
+            },
+            "report_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "assurance_level": {
+              "enum": [
+                "controller-adversarial",
+                "isolated-within-run"
+              ]
+            },
+            "approved_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "audit_escapes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "finding_id",
+          "fingerprint",
+          "affected_head_sha",
+          "prior_internal_report_sha256",
+          "detected_at"
+        ],
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fingerprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "affected_head_sha": {
+            "type": "string",
+            "minLength": 7
+          },
+          "prior_internal_report_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "release_gate_satisfied": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "enum": [
+              "controller-adversarial",
+              "isolated-within-run"
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "approval_scope": {
+            "const": "internal-only"
+          },
+          "release_gate_satisfied": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "independent"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "approval_scope": {
+            "const": "independent-release-gate"
+          },
+          "release_gate_satisfied": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  ]
+}

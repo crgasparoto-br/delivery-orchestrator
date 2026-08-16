@@ -1,0 +1,169 @@
+{
+  "schema_version": 2,
+  "contract_version": "2026-08-06.2",
+  "stages": {
+    "preflight": {
+      "depends_on": []
+    },
+    "contract": {
+      "depends_on": [
+        "preflight"
+      ]
+    },
+    "implementation": {
+      "depends_on": [
+        "contract"
+      ]
+    },
+    "documentation": {
+      "depends_on": [
+        "contract",
+        "implementation"
+      ]
+    },
+    "domain-validation": {
+      "depends_on": [
+        "contract",
+        "implementation"
+      ]
+    },
+    "hygiene": {
+      "depends_on": [
+        "implementation"
+      ]
+    },
+    "final-gate": {
+      "depends_on": [
+        "implementation",
+        "documentation",
+        "domain-validation",
+        "hygiene"
+      ]
+    },
+    "freeze": {
+      "depends_on": [
+        "final-gate"
+      ]
+    },
+    "remote-gate": {
+      "depends_on": [
+        "freeze"
+      ]
+    },
+    "audit": {
+      "depends_on": [
+        "freeze",
+        "remote-gate"
+      ]
+    },
+    "decision": {
+      "depends_on": [
+        "audit"
+      ]
+    }
+  },
+  "invalidation_rules": {
+    "specification_changed": [
+      "contract",
+      "implementation",
+      "documentation",
+      "domain-validation",
+      "hygiene",
+      "final-gate",
+      "freeze",
+      "remote-gate",
+      "audit",
+      "decision"
+    ],
+    "head_changed": [
+      "final-gate",
+      "freeze",
+      "remote-gate",
+      "audit",
+      "decision"
+    ],
+    "base_or_merge_preview_changed": [
+      "remote-gate",
+      "audit",
+      "decision"
+    ],
+    "risk_changed": [
+      "domain-validation",
+      "final-gate",
+      "freeze",
+      "remote-gate",
+      "audit",
+      "decision"
+    ],
+    "contract_version_changed": [
+      "preflight",
+      "contract",
+      "implementation",
+      "documentation",
+      "domain-validation",
+      "hygiene",
+      "final-gate",
+      "freeze",
+      "remote-gate",
+      "audit",
+      "decision"
+    ],
+    "identity_observed": [],
+    "workflow_inventory_changed": [
+      "remote-gate",
+      "audit",
+      "decision"
+    ],
+    "source_manifest_changed": [
+      "contract",
+      "implementation",
+      "documentation",
+      "domain-validation",
+      "hygiene",
+      "final-gate",
+      "freeze",
+      "remote-gate",
+      "audit",
+      "decision"
+    ],
+    "baseline_changed": [
+      "final-gate",
+      "freeze",
+      "remote-gate",
+      "audit",
+      "decision"
+    ],
+    "work_items_changed": [
+      "implementation",
+      "documentation",
+      "domain-validation",
+      "hygiene",
+      "final-gate",
+      "freeze",
+      "remote-gate",
+      "audit",
+      "decision"
+    ],
+    "implementation_scope_changed": [
+      "implementation",
+      "documentation",
+      "domain-validation",
+      "hygiene",
+      "final-gate",
+      "freeze",
+      "remote-gate",
+      "audit",
+      "decision"
+    ],
+    "observed_diff_changed": [
+      "documentation",
+      "domain-validation",
+      "hygiene",
+      "final-gate",
+      "freeze",
+      "remote-gate",
+      "audit",
+      "decision"
+    ]
+  }
+}

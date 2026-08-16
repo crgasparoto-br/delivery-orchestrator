@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/execution-context.schema.json",
+  "title": "Orchestration execution context",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "contract_version",
+    "repository",
+    "repo_path",
+    "issue",
+    "base_ref",
+    "branch",
+    "mode",
+    "execution_profile",
+    "implementation_context_id",
+    "cycle",
+    "permissions",
+    "artifacts_dir",
+    "workflow_change_authorized",
+    "manual_approval_workflow_authorized",
+    "remote_action_mode",
+    "publish_policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 3
+    },
+    "repo_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "base_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pull_request": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "mode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "execution_profile": {
+      "enum": [
+        "light",
+        "standard",
+        "critical"
+      ]
+    },
+    "implementation_context_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "cycle": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "head_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "base_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "merge_preview_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "artifacts_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "permissions": {
+      "type": "object",
+      "required": [
+        "may_write_code",
+        "may_update_issue",
+        "may_merge",
+        "may_execute_destructive_actions"
+      ],
+      "properties": {
+        "may_write_code": {
+          "type": "boolean"
+        },
+        "may_update_issue": {
+          "type": "boolean"
+        },
+        "may_merge": {
+          "type": "boolean"
+        },
+        "may_execute_destructive_actions": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "controller_mode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        null,
+        "delivery-single-invocation",
+        "issue-loop-single-invocation"
+      ]
+    },
+    "controller_context_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 8
+    },
+    "controller_cycle_limit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 10
+    },
+    "return_control_to": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workflow_change_authorized": {
+      "type": "boolean"
+    },
+    "manual_approval_workflow_authorized": {
+      "const": false
+    },
+    "remote_action_mode": {
+      "const": "observe-only"
+    },
+    "publish_policy": {
+      "const": "single-final-candidate"
+    },
+    "contract_version": {
+      "const": "2026-08-06.2"
+    },
+    "controller_cycle": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 10
+    },
+    "controller_state_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "cycle_authority": {
+      "enum": [
+        "entregar-issue",
+        "issue-loop-engineer",
+        "orquestrador"
+      ]
+    },
+    "controller_context_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "controller_mode": {
+            "enum": [
+              "delivery-single-invocation",
+              "issue-loop-single-invocation"
+            ]
+          }
+        },
+        "required": [
+          "controller_mode"
+        ]
+      },
+      "then": {
+        "required": [
+          "controller_cycle",
+          "controller_state_revision",
+          "cycle_authority",
+          "controller_context_sha256"
+        ],
+        "properties": {
+          "cycle_authority": {
+            "enum": [
+              "entregar-issue",
+              "issue-loop-engineer"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "external-audit.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "report_id",
+    "generated_by",
+    "repository",
+    "issue",
+    "base_ref",
+    "head_sha",
+    "head_sha_after",
+    "base_sha",
+    "base_sha_after",
+    "merge_preview_sha",
+    "merge_preview_sha_after",
+    "orchestration_cycle",
+    "implementation_context_id",
+    "audit_context_id",
+    "source_context_proof",
+    "same_conversation",
+    "independent",
+    "neutral_packet",
+    "prior_internal_approval",
+    "issued_at",
+    "verdict",
+    "findings",
+    "evidence",
+    "limitations",
+    "origin",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 3
+    },
+    "report_id": {
+      "type": "string",
+      "minLength": 16
+    },
+    "generated_by": {
+      "const": "auditar-issue"
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 3
+    },
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "base_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "head_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "head_sha_after": {
+      "type": "string",
+      "minLength": 7
+    },
+    "base_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "base_sha_after": {
+      "type": "string",
+      "minLength": 7
+    },
+    "merge_preview_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "merge_preview_sha_after": {
+      "type": "string",
+      "minLength": 7
+    },
+    "orchestration_cycle": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "implementation_context_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "audit_context_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "source_context_proof": {
+      "type": "object",
+      "required": [
+        "kind",
+        "value",
+        "issuer",
+        "issued_at"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "chatgpt-conversation-id",
+            "agent-run-id",
+            "tool-attestation"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 8
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 3
+        },
+        "issued_at": {
+          "type": "string",
+          "minLength": 20
+        }
+      },
+      "additionalProperties": false
+    },
+    "same_conversation": {
+      "const": false
+    },
+    "independent": {
+      "const": true
+    },
+    "issued_at": {
+      "type": "string",
+      "minLength": 20
+    },
+    "verdict": {
+      "enum": [
+        "approved",
+        "approved-with-reservations",
+        "rejected"
+      ]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "severity",
+          "description",
+          "evidence",
+          "escape_category",
+          "required_gate",
+          "literal_case",
+          "sibling_cases",
+          "audit_escape",
+          "reusable_control_requirement"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "enum": [
+              "blocker",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 12
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "escape_category": {
+            "enum": [
+              "execution-state-gap",
+              "control-propagation-gap",
+              "capability-operation-drift",
+              "adapter-support-drift",
+              "silent-translation-loss",
+              "legacy-variant-gap",
+              "documentation-claim-drift",
+              "other"
+            ]
+          },
+          "required_gate": {
+            "type": "string",
+            "pattern": "^F[0-9]{2}$"
+          },
+          "literal_case": {
+            "type": "string",
+            "minLength": 12
+          },
+          "sibling_cases": {
+            "type": "array",
+            "minItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 8
+            }
+          },
+          "audit_escape": {
+            "type": "boolean"
+          },
+          "reusable_control_requirement": {
+            "type": "string",
+            "minLength": 12
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "claim",
+          "source",
+          "observed_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "claim": {
+            "type": "string",
+            "minLength": 12
+          },
+          "source": {
+            "type": "string",
+            "minLength": 4
+          },
+          "observed_at": {
+            "type": "string",
+            "minLength": 20
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 8
+      }
+    },
+    "origin": {
+      "type": "string",
+      "minLength": 12
+    },
+    "signature": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "key_id",
+        "signed_payload_sha256",
+        "value_base64",
+        "signed_at"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 4
+        },
+        "signed_payload_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "value_base64": {
+          "type": "string",
+          "minLength": 80
+        },
+        "signed_at": {
+          "type": "string",
+          "minLength": 20
+        }
+      },
+      "additionalProperties": false
+    },
+    "neutral_packet": {
+      "type": "object",
+      "required": [
+        "implementation_conclusions_included",
+        "implementation_narrative_included",
+        "allowed_contents"
+      ],
+      "properties": {
+        "implementation_conclusions_included": {
+          "const": false
+        },
+        "implementation_narrative_included": {
+          "const": false
+        },
+        "allowed_contents": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "canonical-sources",
+              "identity",
+              "diff",
+              "source",
+              "tests",
+              "raw-evidence",
+              "manifests"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "prior_internal_approval": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "head_sha",
+            "report_sha256",
+            "assurance_level",
+            "approved_at"
+          ],
+          "properties": {
+            "head_sha": {
+              "type": "string",
+              "minLength": 7
+            },
+            "report_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "assurance_level": {
+              "enum": [
+                "controller-adversarial",
+                "isolated-within-run"
+              ]
+            },
+            "approved_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "evidence.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "repository",
+    "repository_path",
+    "issue",
+    "base_ref",
+    "head_sha",
+    "head_sha_after",
+    "packet_path",
+    "packet_manifest_sha256",
+    "orchestration_state",
+    "risk_detection",
+    "requirement_closure",
+    "remote_gate",
+    "risk_profile",
+    "requirements",
+    "wrong_implementations",
+    "evidence",
+    "scenarios",
+    "scenario_families",
+    "passes",
+    "findings",
+    "later_findings_imported",
+    "validation_commands",
+    "handoff"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 9
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 3
+    },
+    "repository_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "base_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "head_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "head_sha_after": {
+      "type": "string",
+      "minLength": 7
+    },
+    "packet_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "packet_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "orchestration_state": {
+      "$ref": "#/$defs/fileRef"
+    },
+    "risk_detection": {
+      "$ref": "#/$defs/fileRef"
+    },
+    "remote_gate": {
+      "type": "object",
+      "required": [
+        "snapshot_path",
+        "snapshot_sha256",
+        "pull_request"
+      ],
+      "properties": {
+        "snapshot_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "snapshot_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "pull_request": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "risk_profile": {
+      "type": "object"
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object"
+      }
+    },
+    "wrong_implementations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object"
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object"
+      }
+    },
+    "scenario_families": {
+      "type": "array",
+      "minItems": 34,
+      "items": {
+        "type": "object"
+      }
+    },
+    "passes": {
+      "type": "object",
+      "required": [
+        "pass_a",
+        "pass_b"
+      ],
+      "properties": {
+        "pass_a": {
+          "$ref": "#/$defs/pass"
+        },
+        "pass_b": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/pass"
+            },
+            {
+              "type": "object",
+              "required": [
+                "plan_path",
+                "plan_sha256",
+                "novel_scenarios"
+              ],
+              "properties": {
+                "plan_path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "plan_sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "novel_scenarios": {
+                  "type": "array",
+                  "minItems": 3,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "validation_commands": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "command",
+          "exit_code",
+          "output_path"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "minLength": 4
+          },
+          "exit_code": {
+            "const": 0
+          },
+          "output_path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "handoff": {
+      "type": "object",
+      "required": [
+        "independent_audit_required",
+        "same_conversation_prohibited",
+        "new_conversation_instruction",
+        "audit_command",
+        "issue_completion",
+        "remaining_issue_ids",
+        "parent_issue_must_remain_open"
+      ],
+      "properties": {
+        "independent_audit_required": {
+          "const": true
+        },
+        "same_conversation_prohibited": {
+          "const": true
+        },
+        "new_conversation_instruction": {
+          "type": "string",
+          "minLength": 30
+        },
+        "audit_command": {
+          "type": "string",
+          "minLength": 20
+        },
+        "issue_completion": {
+          "enum": [
+            "complete",
+            "partial"
+          ]
+        },
+        "remaining_issue_ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true
+        },
+        "parent_issue_must_remain_open": {
+          "type": "boolean"
+        }
+      }
+    },
+    "requirement_closure": {
+      "$ref": "#/$defs/fileRef"
+    }
+  },
+  "$defs": {
+    "fileRef": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "pass": {
+      "type": "object",
+      "required": [
+        "status",
+        "evidence"
+      ],
+      "properties": {
+        "status": {
+          "const": "passed"
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

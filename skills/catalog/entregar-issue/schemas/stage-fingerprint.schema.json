@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "stage", "fingerprint", "inputs"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "stage": {"type": "string", "minLength": 1},
+    "fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "name", "sha256"],
+        "properties": {
+          "kind": {"enum": ["file", "value"]},
+          "name": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "size": {"type": "integer", "minimum": 0}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+interface:
+  display_name: Documentação do Repositório
+  short_description: Governa fontes canônicas e auditoria documental independente.
+  default_prompt: Use @documentacao-repositorio para mapear, atualizar e validar fontes
+    canônicas. Diferencie verificação interna de auditoria documental independente
+    ancorada no SHA.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
