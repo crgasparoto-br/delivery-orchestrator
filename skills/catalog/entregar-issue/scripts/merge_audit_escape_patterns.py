@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse, json
 from pathlib import Path
 
+
 def main() -> int:
     p=argparse.ArgumentParser(); p.add_argument("--closure", required=True); p.add_argument("--catalog", required=True); a=p.parse_args()
     closure=json.loads(Path(a.closure).read_text(encoding="utf-8")); entries=closure.get("escapes") if isinstance(closure,dict) and isinstance(closure.get("escapes"),list) else [closure]
@@ -22,6 +23,7 @@ def main() -> int:
             "detection_change": item.get("detection_change"),
             "trigger_terms": item.get("trigger_terms") or [],
             "required_risk_families": item.get("required_risk_families") or [],
+            "required_attack_dimensions": item.get("required_attack_dimensions") or [],
         }
     catalog={"schema_version":1,"patterns":[patterns[key] for key in sorted(patterns)]}
     path.parent.mkdir(parents=True,exist_ok=True); path.write_text(json.dumps(catalog,ensure_ascii=False,indent=2)+"\n",encoding="utf-8"); print(path); return 0
