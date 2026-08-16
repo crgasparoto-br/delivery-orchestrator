@@ -16,6 +16,8 @@ implementer Codex thread (WRITE token, implementation CODEX_HOME)
       |
       X thread ends
       |
+      +--> wait for exact handoff SHA GitHub Actions runs to become terminal
+      |
       v
 auditor Codex thread (READ token, audit-only CODEX_HOME, fresh clone)
       |
@@ -43,6 +45,8 @@ Repository variables:
 - `OPENAI_MODEL` (defaults to `gpt-5.6-sol`).
 
 The GitHub-hosted workflow sets `CODEX_SANDBOX_MODE=danger-full-access` because the hosted Ubuntu runner used by the workflow can block the `bwrap`/user-namespace setup required by Codex `workspace-write`. This does not merge the worker identities: implementer and auditor still use separate Codex threads and `CODEX_HOME` directories; the auditor receives a read-only GitHub credential, works from a fresh clone, and the orchestrator rejects the audit if the candidate SHA or working tree changes. Local execution keeps `workspace-write` by default.
+
+Before each independent audit, the control plane observes GitHub Actions for the exact `handoff_head_sha`. If runs appear, it waits until the observed run set is terminal and stable before creating the auditor context. This prevents a transient `in_progress` release gate from being misclassified as a terminal external block. If no runs appear during the discovery grace period, auditing proceeds and the auditor remains responsible for deciding applicability. The wait is bounded by `CI_WAIT_TIMEOUT_SECONDS` (default 1800), with `CI_DISCOVERY_GRACE_SECONDS`, `CI_POLL_INTERVAL_SECONDS`, and `CI_SETTLE_SECONDS` available for tuning.
 
 ## One-time auditor trust bootstrap
 

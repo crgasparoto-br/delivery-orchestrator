@@ -16,3 +16,12 @@ test('cannot self-promote NEW directly to COMPLETE', () => {
   const s = initialState({ runId: 'r', repository: 'o/r', issueNumber: 1, maxCycles: 3 });
   assert.throws(() => transition(s, STATES.COMPLETE), /Invalid orchestrator transition/);
 });
+
+
+test('handoff can block externally while exact-head CI is pending', () => {
+  let s = initialState({ runId: 'r', repository: 'o/r', issueNumber: 1, maxCycles: 3 });
+  s = transition(s, STATES.IMPLEMENTING);
+  s = transition(s, STATES.HANDOFF_READY);
+  s = transition(s, STATES.BLOCKED_EXTERNAL);
+  assert.equal(s.status, STATES.BLOCKED_EXTERNAL);
+});

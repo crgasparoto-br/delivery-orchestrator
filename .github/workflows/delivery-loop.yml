@@ -40,6 +40,10 @@ jobs:
           TARGET_ISSUE: ${{ inputs.issue_number }}
           MAX_CYCLES: ${{ inputs.max_cycles }}
           MAX_STAGNANT_CYCLES: '1'
+          CI_WAIT_TIMEOUT_SECONDS: '2700'
+          CI_DISCOVERY_GRACE_SECONDS: '30'
+          CI_POLL_INTERVAL_SECONDS: '15'
+          CI_SETTLE_SECONDS: '15'
           # GitHub-hosted runners block the Linux bwrap/userns sandbox used by workspace-write.
           # The job is ephemeral; auditor isolation is still enforced by a fresh thread/CODEX_HOME,
           # a read-only GitHub token, a fresh detached clone, and the post-audit clean-head guard.

@@ -6,6 +6,7 @@ import { STATES } from './constants.mjs';
 import { auditFingerprint } from './fingerprint.mjs';
 import { copyDir, resetDir, writeJson } from './files.mjs';
 import { cloneForAudit, cloneForImplementation, verifyAuditWorkspaceClean } from './git-workspace.mjs';
+import { waitForExactHeadWorkflowRuns } from './github-ci.mjs';
 import { loadPrompt } from './prompts.mjs';
 import { AUDIT_RESULT_SCHEMA, IMPLEMENTER_RESULT_SCHEMA } from './schemas.mjs';
 import { prepareSkillHomes } from './skill-homes.mjs';
@@ -73,6 +74,35 @@ export async function runDelivery(config, executor) {
     state.handoff_head_sha = implRun.result.handoff_head_sha;
     state = transition(state, STATES.HANDOFF_READY, { cycle, material_head_sha: state.material_head_sha, handoff_head_sha: state.handoff_head_sha });
     await persist();
+
+    let ciWait;
+    try {
+      ciWait = await waitForExactHeadWorkflowRuns({
+        repository: config.repository,
+        sha: state.handoff_head_sha,
+        token: config.readToken,
+        timeoutMs: config.ciWaitTimeoutSeconds * 1000,
+        discoveryGraceMs: config.ciDiscoveryGraceSeconds * 1000,
+        pollIntervalMs: config.ciPollIntervalSeconds * 1000,
+        settleMs: config.ciSettleSeconds * 1000
+      });
+    } catch (error) {
+      state = transition(state, STATES.BLOCKED_EXTERNAL, { cycle, reason: `exact-head CI observation failed: ${error.message}` });
+      await persist();
+      return state;
+    }
+    state.last_ci_wait = ciWait;
+    await writeJson(path.join(runDir, `cycle-${cycle}-ci-wait.json`), ciWait);
+    await persist();
+    if (ciWait.status === 'timeout') {
+      const pending = ciWait.runs.filter((run) => run.status !== 'completed').map((run) => run.name).join(', ');
+      state = transition(state, STATES.BLOCKED_EXTERNAL, {
+        cycle,
+        reason: `exact-head CI did not reach a terminal state before timeout${pending ? `: ${pending}` : ''}`
+      });
+      await persist();
+      return state;
+    }
 
     const auditorWorkspace = path.join(runtimeRoot, `audit-${cycle}`, 'repo');
     await cloneForAudit({ repository: config.repository, dest: auditorWorkspace, ref: state.handoff_head_sha, token: config.readToken });
