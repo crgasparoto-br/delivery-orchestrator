@@ -32,4 +32,8 @@ test('runner bootstrap creates isolated role users and validates venv support', 
   assert.match(bootstrap, /\/etc\/sudoers\.d\/delivery-orchestrator-roles/);
   assert.match(bootstrap, /python3 -m venv/);
   assert.match(bootstrap, /visudo -cf/);
+  assert.match(
+    bootstrap,
+    /sudo -n -u "\$runner_user" -H -- sudo -n -u "\$role_user" -H -- true/
+  );
 });
