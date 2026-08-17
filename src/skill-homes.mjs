@@ -1,26 +1,64 @@
 import path from 'node:path';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { AUDITOR_SKILLS, IMPLEMENTER_SKILLS } from './constants.mjs';
-import { copyDir, resetDir } from './files.mjs';
+import { assertPathUnreadableByRole, runRoleTask, validateRoleUsers } from './role-runtime.mjs';
 
-async function buildHome({ root, catalog, names }) {
-  await resetDir(root);
-  const skillsDir = path.join(root, 'skills');
-  await mkdir(skillsDir, { recursive: true });
-  for (const name of names) {
-    await copyDir(path.join(catalog, name), path.join(skillsDir, name));
+export async function prepareSkillHomes({
+  implementerRuntimeRoot,
+  auditorRuntimeRoot,
+  catalog,
+  authMode = 'api-key',
+  implementerCodexHome,
+  auditorCodexHome,
+  implementerUser,
+  auditorUser,
+  runRoleTaskFn = runRoleTask
+}) {
+  validateRoleUsers(implementerUser, auditorUser);
+  const persistent = authMode === 'chatgpt';
+  const implementerRoot = persistent ? implementerCodexHome : path.join(implementerRuntimeRoot, 'codex-home');
+  const auditorRoot = persistent ? auditorCodexHome : path.join(auditorRuntimeRoot, 'codex-home');
+
+  if (persistent && implementerRoot && auditorRoot && path.resolve(implementerRoot) === path.resolve(auditorRoot)) {
+    throw new Error('Implementer and auditor CODEX_HOME paths must be different');
   }
-  return root;
+
+  const implementer = await runRoleTaskFn(implementerUser, 'prepare-home', {
+    root: implementerRoot || null,
+    role: 'implementer',
+    catalog,
+    names: IMPLEMENTER_SKILLS,
+    persistent
+  });
+  const auditor = await runRoleTaskFn(auditorUser, 'prepare-home', {
+    root: auditorRoot || null,
+    role: 'auditor',
+    catalog,
+    names: AUDITOR_SKILLS,
+    persistent
+  });
+
+  if (path.resolve(implementer.root) === path.resolve(auditor.root)) {
+    throw new Error('Implementer and auditor CODEX_HOME paths must be different');
+  }
+  const implementerProbeTarget = persistent ? auditor.authPath : auditor.root;
+  const auditorProbeTarget = persistent ? implementer.authPath : implementer.root;
+  await assertPathUnreadableByRole({ readerUser: implementerUser, path: implementerProbeTarget, runRoleTaskFn });
+  await assertPathUnreadableByRole({ readerUser: auditorUser, path: auditorProbeTarget, runRoleTaskFn });
+
+  return { implementer: implementer.root, auditor: auditor.root };
 }
 
-export async function prepareSkillHomes({ runtimeRoot, catalog, auditorPrivateKeyB64 }) {
-  const implementer = await buildHome({ root: path.join(runtimeRoot, 'codex-home-implementer'), catalog, names: IMPLEMENTER_SKILLS });
-  const auditor = await buildHome({ root: path.join(runtimeRoot, 'codex-home-auditor'), catalog, names: AUDITOR_SKILLS });
-  let auditorPrivateKeyPath = null;
-  if (auditorPrivateKeyB64) {
-    auditorPrivateKeyPath = path.join(auditor, 'auditor-private.pem');
-    await writeFile(auditorPrivateKeyPath, Buffer.from(auditorPrivateKeyB64, 'base64'));
-    await chmod(auditorPrivateKeyPath, 0o600);
-  }
-  return { implementer, auditor, auditorPrivateKeyPath };
+export async function materializeAuditorPrivateKey({
+  auditorRuntimeRoot,
+  auditorPrivateKeyB64,
+  implementerUser,
+  auditorUser,
+  runRoleTaskFn = runRoleTask
+}) {
+  if (!auditorPrivateKeyB64) return null;
+  validateRoleUsers(implementerUser, auditorUser);
+  const keyPath = path.join(auditorRuntimeRoot, 'secrets', 'auditor-private.pem');
+  await runRoleTaskFn(auditorUser, 'write-secret', { path: keyPath, base64: auditorPrivateKeyB64 });
+  await assertPathUnreadableByRole({ readerUser: implementerUser, path: keyPath, runRoleTaskFn });
+  return keyPath;
 }

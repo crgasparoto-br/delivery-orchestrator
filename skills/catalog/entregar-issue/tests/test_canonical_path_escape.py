@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -7,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+EVIDENCE_SHA = hashlib.sha256(b"canonical negative").hexdigest()
 sys.path.insert(0, str(ROOT / "scripts"))
 from orchestrator_gate.specification import flags_for
 
@@ -80,9 +82,20 @@ def test_handoff_accepts_canon_divergence_control_and_closed_escape() -> None:
                 "requirement_id": "REQ-001",
                 "obligation_ids": ["OBL-001"],
                 "risk_families": ["structural-contract"],
+                "risk_surfaces": [{"risk_family": "structural-contract", "surface": "canonical-parser-path", "reason": "A specialized parser competes with the canonical parser path."}],
                 "plausible_wrong_implementation": "The specialized parser bypasses the canonical parser and silently drops one semantic field.",
                 "positive_control": {"id": "POS-001", "status": "passed", "head_sha": "e" * 40, "evidence": "positive.log"},
-                "negative_controls": [{"id": "CANON-DIVERGENCE-001", "status": "passed", "head_sha": "e" * 40, "evidence": "negative.log", "sibling_cases": [{"id": "S1", "status": "passed"}]}],
+                "negative_controls": [{
+                    "id": "CANON-DIVERGENCE-001", "status": "passed", "head_sha": "e" * 40,
+                    "evidence_path": "negative.log", "evidence_sha256": EVIDENCE_SHA,
+                    "risk_family": "structural-contract", "surface": "canonical-parser-path", "dimension": "canonical-precedence",
+                    "failure_mode": "The specialized parser intercepts before the canonical parser and drops semantics.",
+                    "plausible_wrong_implementation": "Keep a specialized parser that bypasses the canonical path while happy-path fixtures remain equivalent.",
+                    "control_type": "scenario", "procedure": "Feed divergent semantic fields through specialized and canonical parser paths.",
+                    "expected": "The canonical parser remains authoritative for every semantic field.",
+                    "observed": "The divergence control preserved the canonical parser as authoritative.",
+                    "sibling_cases": [{"id": "S1", "surface": "canonical-parser-path", "dimension": "semantic-field-parity", "status": "passed"}]
+                }],
                 "regression_controls": [{"id": "REG-001", "status": "passed", "head_sha": "e" * 40, "evidence": "regression.log"}],
             }],
             "uncovered_requirements": [],
@@ -91,7 +104,14 @@ def test_handoff_accepts_canon_divergence_control_and_closed_escape() -> None:
         canonical = ["authorization", "tenant-isolation", "public-boundary", "reference-liveness", "temporal-consistency", "temporal-destination", "concurrency-atomicity", "idempotency", "rollback", "historical-immutability", "structural-contract", "documentation"]
         risk.write_text(json.dumps({
             "schema_version": 1, "head_sha": "e" * 40,
-            "families": [{"family": name, "applicable": name == "structural-contract", "reason": "Structural canonical path requirement." if name == "structural-contract" else "Not applicable to this fixture.", "control_ids": ["CANON-DIVERGENCE-001"] if name == "structural-contract" else [], "status": "passed" if name == "structural-contract" else "not-applicable"} for name in canonical],
+            "families": [{
+                "family": name,
+                "applicable": name == "structural-contract",
+                "reason": "Structural canonical path requirement." if name == "structural-contract" else "Not applicable to this fixture.",
+                "control_ids": ["CANON-DIVERGENCE-001"] if name == "structural-contract" else [],
+                "dimensions": [{"surface": "canonical-parser-path", "reason": "A specialized parser competes with the canonical parser path.", "control_ids": ["CANON-DIVERGENCE-001"], "status": "passed"}] if name == "structural-contract" else [],
+                "status": "passed" if name == "structural-contract" else "not-applicable",
+            } for name in canonical],
             "material_families_missing_controls": [],
         }), encoding="utf-8")
         inherited = base / "inherited-controls.json"
@@ -107,9 +127,14 @@ def test_handoff_accepts_canon_divergence_control_and_closed_escape() -> None:
             "escape_class": "canonical-path-divergence",
             "plausible_wrong_implementation": "The specialized parser intercepts before the canonical path and drops semantics.",
             "status": "passed",
+            "required_risk_families": ["structural-contract"],
+            "required_attack_dimensions": [
+                {"risk_family": "structural-contract", "surface": "canonical-parser-path", "dimension": "canonical-precedence"},
+                {"risk_family": "structural-contract", "surface": "canonical-parser-path", "dimension": "semantic-field-parity"},
+            ],
             "sibling_cases": [
-                {"id": "S1", "status": "passed"},
-                {"id": "S2", "status": "passed"},
+                {"id": "S1", "surface": "canonical-parser-path", "dimension": "canonical-precedence", "status": "passed"},
+                {"id": "S2", "surface": "canonical-parser-path", "dimension": "semantic-field-parity", "status": "passed"},
             ],
             "prevention_change": {"evidence": "structural gate"},
             "detection_change": {"evidence": "CANON-DIVERGENCE-001"},

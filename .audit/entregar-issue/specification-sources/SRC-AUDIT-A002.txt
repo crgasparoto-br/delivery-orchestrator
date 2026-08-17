@@ -1,0 +1,10 @@
+O pacote de handoff deve cobrir o escopo material integral do PR, e nao apenas a remediacao anterior, antes de solicitar nova auditoria independente.
+O contrato de autenticacao deve cobrir ChatGPT como padrao, fallback api-key explicito e sanitizacao das credenciais de API/acesso no ambiente filho.
+Os CODEX_HOME de implementador e auditor devem permanecer persistentes e separados, preservar auth.json e atualizar somente os skills por execucao.
+O workflow deve usar runner Linux self-hosted dedicado e serializado, validar o cache ChatGPT e falhar fechado para autenticacao gerenciada quando o repositorio de controle for publico.
+O wait de CI do exact-head deve permanecer coberto por regressao para run pendente, ausencia de run, aparecimento tardio e timeout.
+A chave privada do auditor deve ficar fora dos CODEX_HOME persistentes, e os diretorios runtime devem ser removidos e excluidos antes do upload de artefatos.
+A fronteira de credenciais deve garantir que implementador receba somente a credencial de escrita selecionada e auditor somente a credencial de leitura selecionada, sem reintroducao por extraEnv e com papel desconhecido rejeitado.
+A documentacao deve cobrir bootstrap unico por papel, requisitos do runner, modos de autenticacao, restricoes de seguranca e tratamento do material de assinatura.
+A saturacao de risco deve marcar structural-contract e documentation como familias aplicaveis quando o diff altera workflow/configuracao estrutural e README/SECURITY.
+A matriz de ataques deve mapear todo requisito material e todos os nove caminhos materiais alterados a controles positivos, negativos e regressivos executados no material head.

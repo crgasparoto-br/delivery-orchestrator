@@ -1,0 +1,2 @@
+Deve remediar A-003 substituindo separação de caminhos no mesmo usuário por UIDs Linux distintos, negar leitura recíproca de auth.json, materializar a chave do auditor tardiamente, negar sua leitura pelo implementador e executar controles reutilizáveis cross-surface de authorization.
+Deve remediar A-004 removendo a afirmação stale de que o repositório de controle está público e documentar que a visibilidade privada é verificada em runtime.

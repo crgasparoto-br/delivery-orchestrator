@@ -1,0 +1,130 @@
+TAP version 13
+# Subtest: ChatGPT auth is the default and unsupported modes fail closed
+ok 1 - ChatGPT auth is the default and unsupported modes fail closed
+  ---
+  duration_ms: 0.967408
+  type: 'test'
+  ...
+# Subtest: ChatGPT mode strips API credentials and forces ChatGPT login
+ok 2 - ChatGPT mode strips API credentials and forces ChatGPT login
+  ---
+  duration_ms: 0.623531
+  type: 'test'
+  ...
+# Subtest: API-key mode is explicit and requires a key
+ok 3 - API-key mode is explicit and requires a key
+  ---
+  duration_ms: 1.23621
+  type: 'test'
+  ...
+# Subtest: persistent role homes preserve auth but refresh skills and isolate auditor signing key
+ok 4 - persistent role homes preserve auth but refresh skills and isolate auditor signing key
+  ---
+  duration_ms: 57.464374
+  type: 'test'
+  ...
+# Subtest: implementer and auditor cannot share a persistent CODEX_HOME
+ok 5 - implementer and auditor cannot share a persistent CODEX_HOME
+  ---
+  duration_ms: 6.199971
+  type: 'test'
+  ...
+# Subtest: workflow keeps ChatGPT auth on a dedicated serialized self-hosted runner and never uploads runtime
+ok 6 - workflow keeps ChatGPT auth on a dedicated serialized self-hosted runner and never uploads runtime
+  ---
+  duration_ms: 2.642223
+  type: 'test'
+  ...
+# Subtest: implementer child strips auditor and raw orchestration credentials
+ok 7 - implementer child strips auditor and raw orchestration credentials
+  ---
+  duration_ms: 0.314977
+  type: 'test'
+  ...
+# Subtest: auditor child strips write/raw orchestration credentials but keeps explicit audit inputs
+ok 8 - auditor child strips write/raw orchestration credentials but keeps explicit audit inputs
+  ---
+  duration_ms: 0.446789
+  type: 'test'
+  ...
+# Subtest: credential boundary fails closed for unknown delivery roles
+ok 9 - credential boundary fails closed for unknown delivery roles
+  ---
+  duration_ms: 0.314245
+  type: 'test'
+  ...
+# Subtest: finding order does not change audit fingerprint
+ok 10 - finding order does not change audit fingerprint
+  ---
+  duration_ms: 14.110303
+  type: 'test'
+  ...
+# Subtest: structured result contract requires independent release gate for completion
+ok 11 - structured result contract requires independent release gate for completion
+  ---
+  duration_ms: 8.308529
+  type: 'test'
+  ...
+# Subtest: auditor workspace guard rejects local candidate mutation
+ok 12 - auditor workspace guard rejects local candidate mutation
+  ---
+  duration_ms: 94.801628
+  type: 'test'
+  ...
+# Subtest: sandbox mode is explicit and rejects invalid values
+ok 13 - sandbox mode is explicit and rejects invalid values
+  ---
+  duration_ms: 3.546573
+  type: 'test'
+  ...
+# Subtest: exact-head CI wait observes pending runs until the stable run set is terminal
+ok 14 - exact-head CI wait observes pending runs until the stable run set is terminal
+  ---
+  duration_ms: 2.42212
+  type: 'test'
+  ...
+# Subtest: exact-head CI wait proceeds after discovery grace when no workflow applies
+ok 15 - exact-head CI wait proceeds after discovery grace when no workflow applies
+  ---
+  duration_ms: 0.393568
+  type: 'test'
+  ...
+# Subtest: exact-head CI wait catches a workflow that appears during the settle window
+ok 16 - exact-head CI wait catches a workflow the settle window
+  ---
+  duration_ms: 0.48276
+  type: 'test'
+  ...
+# Subtest: exact-head CI wait times out instead of auditing a perpetually pending head
+ok 17 - exact-head CI wait times out instead of auditing a perpetually pending head
+  ---
+  duration_ms: 1.323447
+  type: 'test'
+  ...
+# Subtest: happy state path reaches COMPLETE
+ok 18 - happy state path reaches COMPLETE
+  ---
+  duration_ms: 1.290789
+  type: 'test'
+  ...
+# Subtest: cannot self-promote NEW directly to COMPLETE
+ok 19 - cannot self-promote NEW directly to COMPLETE
+  ---
+  duration_ms: 0.372923
+  type: 'test'
+  ...
+# Subtest: handoff can block externally while exact-head CI is pending
+ok 20 - handoff can block externally while exact-head CI is pending
+  ---
+  duration_ms: 0.278974
+  type: 'test'
+  ...
+1..20
+# tests 20
+# suites 0
+# pass 20
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 189.094205
