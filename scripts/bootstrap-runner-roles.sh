@@ -44,7 +44,10 @@ fi
 codex_bin="$(command -v codex || true)"
 if [ -z "$codex_bin" ]; then
   echo "Codex CLI is required for the one-time role device-auth bootstrap." >&2
-  echo "Install it system-wide so both role users can execute it: sudo npm install -g @openai/codex" >&2
+  echo "Install the official standalone CLI in a shared location such as /usr/local/bin." >&2
+  echo "Example:" >&2
+  echo "  curl -fsSL https://chatgpt.com/codex/install.sh -o /tmp/codex-install.sh" >&2
+  echo "  sudo env CODEX_INSTALL_DIR=/usr/local/bin CODEX_HOME=/opt/openai-codex CODEX_NON_INTERACTIVE=1 sh /tmp/codex-install.sh" >&2
   exit 1
 fi
 
@@ -55,7 +58,8 @@ for role_user in "$implementer_user" "$auditor_user"; do
   fi
   if ! sudo -n -u "$role_user" -H -- "$codex_bin" --version >/dev/null 2>&1; then
     echo "Codex CLI at $codex_bin is not executable by $role_user." >&2
-    echo "Install it in a system-wide location accessible to both role users." >&2
+    echo "Do not expose a runner-user NVM tree to the isolated roles." >&2
+    echo "Install the official standalone CLI in /usr/local/bin instead." >&2
     exit 1
   fi
 done
