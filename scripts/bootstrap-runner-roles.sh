@@ -6,7 +6,7 @@ auditor_user="${DELIVERY_AUDITOR_USER:-delivery-auditor}"
 runner_user="${1:-${SUDO_USER:-}}"
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Run this script as root (for example: sudo ./scripts/bootstrap-runner-roles.sh <runner-user>)." >&2
+  echo "Run this script as root (for example: sudo bash scripts/bootstrap-runner-roles.sh <runner-user>)." >&2
   exit 1
 fi
 
@@ -42,7 +42,7 @@ if ! python3 -m venv "$venv_probe/venv" >/dev/null 2>&1; then
 fi
 
 for role_user in "$implementer_user" "$auditor_user"; do
-  if ! sudo -n -u "$role_user" -H -- true; then
+  if ! sudo -n -u "$runner_user" -H -- sudo -n -u "$role_user" -H -- true; then
     echo "Runner user cannot execute commands as $role_user without interaction." >&2
     exit 1
   fi
