@@ -54,7 +54,15 @@ jobs:
       - name: Install orchestrator dependencies
         run: npm install --no-audit --no-fund
       - name: Install worker skill dependencies
-        run: python3 -m pip install -r skills/catalog/entregar-issue/requirements.txt -r skills/catalog/auditar-issue/requirements.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install \
+            -r skills/catalog/entregar-issue/requirements.txt \
+            -r skills/catalog/auditar-issue/requirements.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Validate bundle
         run: npm run validate
       - name: Validate isolated Codex role runtime
@@ -156,7 +164,9 @@ jobs:
         run: |
           set -euo pipefail
           for role_user in "$DELIVERY_IMPLEMENTER_USER" "$DELIVERY_AUDITOR_USER"; do
-            sudo -n -u "$role_user" -H -- find /tmp -maxdepth 1 -type d -user "$role_user" -name 'delivery-orchestrator-*' -exec rm -rf -- {} + || true
+            if id "$role_user" >/dev/null 2>&1; then
+              sudo -n -u "$role_user" -H -- find /tmp -maxdepth 1 -type d -user "$role_user" -name 'delivery-orchestrator-*' -exec rm -rf -- {} + || true
+            fi
           done
           if [ -d runs ]; then
             find runs -type d -name runtime -prune -exec rm -rf -- {} +
