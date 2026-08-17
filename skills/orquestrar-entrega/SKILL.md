@@ -21,15 +21,35 @@ Nao pedir novamente informacao ja presente na conversa, issue ou repositorio.
 ## Fluxo
 
 1. Verificar se o control plane `delivery-orchestrator` esta instalado e se o workflow `Independent delivery loop` existe.
-2. Iniciar uma unica execucao do workflow com repositorio, issue e limite de ciclos.
+2. Iniciar exatamente uma execucao do workflow com repositorio, issue e limite de ciclos:
+   - usar `workflow_dispatch` quando o conector expuser uma acao de dispatch;
+   - se `workflow_dispatch` nao estiver disponivel, mas houver escrita de issues no repositorio privado de controle, criar exatamente uma issue de controle com titulo `delivery-request: owner/repo#N` e corpo JSON puro contendo somente `target_repository`, `issue_number` e `max_cycles`;
+   - nunca criar a issue de controle no repositorio alvo; cria-la no repositorio `delivery-orchestrator` que contem o workflow;
+   - depois de criar a issue de controle, localizar o run `Independent delivery loop` disparado pelo evento `issues`, usando o titulo da issue/run e o horario de criacao para correlacao;
+   - nao criar uma segunda solicitacao se um run correlacionado ja existir.
 3. Tratar o workflow como dono do loop. Nao executar `entregar-issue` ou `auditar-issue` manualmente em paralelo enquanto o run estiver ativo.
 4. Interpretar o estado final:
    - `COMPLETE`: informar a entrega e a auditoria independente aprovadas; nunca fazer merge automaticamente.
    - `BLOCKED_REQUIREMENT`: apresentar a decisao material que bloqueou a implementacao.
    - `BLOCKED_EXTERNAL`: apresentar a dependencia externa/runtime que impediu conclusao.
    - `NO_PROGRESS`: apresentar fingerprint/causa recorrente e exigir intervencao de causa raiz, nao nova repeticao cega.
-   - `FAILED`: apresentar a falha do controlador/contrato.
+   - `FAILED`: apresentar a falha do controlador/contrato. Se a falha ocorrer antes de existir estado persistido, incluir a validacao rejeitada do request de controle.
 5. Reutilizar artefatos do run para diagnostico; nao substituir o estado persistido por narrativa de conversa.
+6. Se o fallback por issue de controle tiver sido usado e um estado terminal tiver sido capturado, a issue de controle pode ser fechada como concluida. Nunca fechar ou fazer merge da issue/PR alvo automaticamente.
+
+### Contrato da issue de controle
+
+Usar corpo JSON sem Markdown ou campos adicionais:
+
+```json
+{
+  "target_repository": "owner/repo",
+  "issue_number": 123,
+  "max_cycles": 6
+}
+```
+
+O workflow valida ator, repositorio permitido, formato da issue e limite de ciclos antes de iniciar o loop. Nao tentar contornar uma rejeicao dessas validacoes alterando o payload para incluir comandos, refs, tokens ou parametros nao suportados.
 
 ## Independencia obrigatoria
 

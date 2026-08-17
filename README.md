@@ -7,10 +7,13 @@ The project embeds the current `entregar-issue`/`auditar-issue` skill families a
 ## Runtime model
 
 ```text
-workflow_dispatch on trusted private self-hosted runner
+workflow_dispatch OR trusted delivery-request control issue
       |
       v
-runner control plane
+request normalization + actor/repository allowlists
+      |
+      v
+trusted private self-hosted runner control plane
       |
       +--> sudo -> delivery-implementer
       |      Codex thread + WRITE token + implementer CODEX_HOME
@@ -99,6 +102,9 @@ Optional repository variables:
 - `OPENAI_MODEL` (defaults to `gpt-5.6-sol`).
 - `AUDITOR_KEY_ID`.
 - `TRUSTED_AUDITORS_PATH` when the trusted registry is external.
+- `DELIVERY_REQUEST_ACTORS`: comma/space-separated GitHub logins allowed to create control issues. Defaults to the control repository owner.
+- `DELIVERY_ALLOWED_REPOSITORIES`: comma/space-separated exact repositories or `owner/*` patterns accepted from control issues. Defaults to `<control-repository-owner>/*`.
+- `DELIVERY_REQUEST_MAX_CYCLES`: maximum `max_cycles` accepted from control issues. Defaults to `12`.
 
 ## Credential boundary
 
@@ -133,7 +139,31 @@ Store `auditor-private.pem.b64` as `AUDITOR_PRIVATE_KEY_B64`; publish only the p
 
 ## Start a delivery
 
-Run the **Independent delivery loop** GitHub Action and provide the target repository, issue number, and optional maximum cycle count. The job never merges or closes the issue automatically.
+### Manual GitHub Actions dispatch
+
+Run the **Independent delivery loop** GitHub Action and provide the target repository, issue number, and optional maximum cycle count.
+
+### Trusted control issue
+
+An authorized automation client that can create GitHub issues but cannot call `workflow_dispatch` can open an issue in this private control repository. The title must start with `delivery-request:` and the body must be a plain JSON object containing only the supported fields:
+
+```json
+{
+  "target_repository": "crgasparoto-br/controle_calorias",
+  "issue_number": 987,
+  "max_cycles": 6
+}
+```
+
+The workflow rejects the request before running the delivery loop when:
+
+- the creator is not in `DELIVERY_REQUEST_ACTORS` (or is not the repository owner when the variable is unset);
+- the target is outside `DELIVERY_ALLOWED_REPOSITORIES` (or outside the control repository owner's namespace by default);
+- the title does not use the `delivery-request:` prefix;
+- the JSON contains unsupported fields or invalid repository/issue/cycle values;
+- `max_cycles` exceeds `DELIVERY_REQUEST_MAX_CYCLES` (12 by default).
+
+Control-issue and manual requests both execute the same **Independent delivery loop** workflow, so run discovery, forensic artifacts, isolation guarantees and terminal-state handling remain unchanged. The job never merges or closes the target issue automatically.
 
 ## Local validation
 

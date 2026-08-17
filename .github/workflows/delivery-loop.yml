@@ -1,4 +1,6 @@
 name: Independent delivery loop
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Delivery {0}#{1}', inputs.target_repository, inputs.issue_number) || github.event.issue.title }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +17,8 @@ on:
         required: false
         default: '6'
         type: string
+  issues:
+    types: [opened]
 
 permissions:
   contents: read
@@ -27,6 +31,9 @@ concurrency:
 
 jobs:
   delivery:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && startsWith(github.event.issue.title, 'delivery-request:'))
     runs-on: [self-hosted, linux, delivery-orchestrator]
     timeout-minutes: 360
     steps:
@@ -34,6 +41,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Normalize delivery request
+        id: request
+        env:
+          MANUAL_TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          MANUAL_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          MANUAL_MAX_CYCLES: ${{ inputs.max_cycles }}
+          DELIVERY_REQUEST_ACTORS: ${{ vars.DELIVERY_REQUEST_ACTORS }}
+          DELIVERY_ALLOWED_REPOSITORIES: ${{ vars.DELIVERY_ALLOWED_REPOSITORIES }}
+          DELIVERY_REQUEST_MAX_CYCLES: ${{ vars.DELIVERY_REQUEST_MAX_CYCLES || '12' }}
+        run: node scripts/normalize-delivery-request.mjs
       - name: Install orchestrator dependencies
         run: npm install --no-audit --no-fund
       - name: Install worker skill dependencies
@@ -107,9 +124,9 @@ jobs:
           fi
       - name: Run independent delivery loop
         env:
-          TARGET_REPOSITORY: ${{ inputs.target_repository }}
-          TARGET_ISSUE: ${{ inputs.issue_number }}
-          MAX_CYCLES: ${{ inputs.max_cycles }}
+          TARGET_REPOSITORY: ${{ steps.request.outputs.target_repository }}
+          TARGET_ISSUE: ${{ steps.request.outputs.issue_number }}
+          MAX_CYCLES: ${{ steps.request.outputs.max_cycles }}
           MAX_STAGNANT_CYCLES: '1'
           CI_WAIT_TIMEOUT_SECONDS: '2700'
           CI_DISCOVERY_GRACE_SECONDS: '30'
