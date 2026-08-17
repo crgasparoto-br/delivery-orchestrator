@@ -98,11 +98,12 @@ export function normalizeDeliveryRequest({
     throw new Error(`target repository ${targetRepository} is not allowed`);
   }
 
+  const requestCycleLimit = parseInteger(issueMaxCycles, 'DELIVERY_REQUEST_MAX_CYCLES', { min: 1, max: 100 });
   return {
     source: 'control_issue',
     targetRepository,
     issueNumber: parseInteger(payload.issue_number, 'issue_number', { min: 1 }),
-    maxCycles: parseInteger(payload.max_cycles || 6, 'max_cycles', { min: 1, max: issueMaxCycles }),
+    maxCycles: parseInteger(payload.max_cycles || 6, 'max_cycles', { min: 1, max: requestCycleLimit }),
     controlIssueNumber: parseInteger(controlIssue.number, 'control_issue_number', { min: 1 })
   };
 }
