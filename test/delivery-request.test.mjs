@@ -98,3 +98,12 @@ test('limits control issue max_cycles', () => {
     repositoryOwner: owner
   }), /max_cycles must be >= 1 and <= 12/);
 });
+
+test('fails closed when the configured control issue cycle limit is invalid', () => {
+  assert.throws(() => normalizeDeliveryRequest({
+    eventName: 'issues',
+    event: issueEvent(),
+    repositoryOwner: owner,
+    issueMaxCycles: Number.NaN
+  }), /DELIVERY_REQUEST_MAX_CYCLES must be an integer/);
+});
