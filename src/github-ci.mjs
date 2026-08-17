@@ -1,4 +1,5 @@
 const DEFAULT_API_URL = 'https://api.github.com';
+const NON_BLOCKING_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
 
 function splitRepository(repository) {
   const parts = repository.split('/');
@@ -20,6 +21,14 @@ function normalizeRun(run) {
     created_at: run.created_at ?? null,
     updated_at: run.updated_at ?? null
   };
+}
+
+export function blockingExactHeadWorkflowRuns(runs = []) {
+  return runs
+    .filter((run) => run.status === 'completed' && !NON_BLOCKING_CONCLUSIONS.has(run.conclusion))
+    .map(({ id, name, event, status, conclusion, head_sha, html_url }) => ({
+      id, name, event, status, conclusion, head_sha, html_url
+    }));
 }
 
 export async function listExactHeadWorkflowRuns({

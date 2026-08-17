@@ -3,10 +3,10 @@ import os from 'node:os';
 import { chmod, mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { STATES } from './constants.mjs';
-import { auditFingerprint } from './fingerprint.mjs';
+import { auditFingerprint, ciFingerprint } from './fingerprint.mjs';
 import { copyDir, writeJson } from './files.mjs';
 import { cloneForAudit, cloneForImplementation, verifyAuditWorkspaceClean } from './git-workspace.mjs';
-import { waitForExactHeadWorkflowRuns } from './github-ci.mjs';
+import { blockingExactHeadWorkflowRuns, waitForExactHeadWorkflowRuns } from './github-ci.mjs';
 import { loadPrompt } from './prompts.mjs';
 import { AUDIT_RESULT_SCHEMA, IMPLEMENTER_RESULT_SCHEMA } from './schemas.mjs';
 import { materializeAuditorPrivateKey, prepareSkillHomes } from './skill-homes.mjs';
@@ -52,6 +52,10 @@ export async function runDelivery(config, executor) {
   let previousFingerprint = null;
   let previousRejectedHead = null;
   let stagnantCount = 0;
+  let previousCiFailures = [];
+  let previousCiFingerprint = null;
+  let previousCiRejectedHead = null;
+  let ciStagnantCount = 0;
 
   for (let cycle = 1; cycle <= config.maxCycles; cycle += 1) {
     state.cycle = cycle;
@@ -62,7 +66,8 @@ export async function runDelivery(config, executor) {
       repository: config.repository,
       issue_number: config.issueNumber,
       cycle,
-      audit_findings: previousAudit ? JSON.stringify(previousAudit.findings, null, 2) : '[]'
+      audit_findings: previousAudit ? JSON.stringify(previousAudit.findings, null, 2) : '[]',
+      ci_findings: JSON.stringify(previousCiFailures, null, 2)
     });
 
     const implRun = await executor.runFresh({
@@ -117,6 +122,40 @@ export async function runDelivery(config, executor) {
       await persist();
       return state;
     }
+
+    const ciFailures = blockingExactHeadWorkflowRuns(ciWait.runs);
+    if (ciFailures.length > 0) {
+      const fp = ciFingerprint(ciFailures);
+      state.ci_fingerprints.push(fp);
+      state.last_ci_failures = ciFailures;
+      await writeJson(path.join(runDir, `cycle-${cycle}-ci-failures.json`), { fingerprint: fp, runs: ciFailures });
+      state = transition(state, STATES.CI_FAILED, {
+        cycle,
+        fingerprint: fp,
+        workflows: ciFailures.map((run) => `${run.name}:${run.conclusion}`)
+      });
+      await persist();
+
+      if (fp === previousCiFingerprint && state.material_head_sha === previousCiRejectedHead) ciStagnantCount += 1;
+      else ciStagnantCount = 0;
+      if (ciStagnantCount >= config.maxStagnantCycles) {
+        state = transition(state, STATES.NO_PROGRESS, { cycle, fingerprint: fp, reason: 'same exact-head CI failures repeated on the same material head' });
+        await persist();
+        return state;
+      }
+
+      previousCiFingerprint = fp;
+      previousCiRejectedHead = state.material_head_sha;
+      previousCiFailures = ciFailures;
+      continue;
+    }
+
+    previousCiFailures = [];
+    previousCiFingerprint = null;
+    previousCiRejectedHead = null;
+    ciStagnantCount = 0;
+    state.last_ci_failures = [];
+    await persist();
 
     const auditorWorkspace = path.join(auditorRuntimeRoot, `audit-${cycle}`, 'repo');
     await cloneForAudit({
@@ -221,7 +260,10 @@ export async function runDelivery(config, executor) {
     previousAudit = auditRun.result;
   }
 
-  state = transition(state, STATES.NO_PROGRESS, { reason: `max cycles reached (${config.maxCycles})` });
+  const exhaustionReason = state.status === STATES.CI_FAILED
+    ? `max cycles reached (${config.maxCycles}) while remediating exact-head CI failures`
+    : `max cycles reached (${config.maxCycles})`;
+  state = transition(state, STATES.NO_PROGRESS, { reason: exhaustionReason });
   await persist();
   return state;
 }

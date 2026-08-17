@@ -8,6 +8,8 @@ Hard constraints:
 - Produce/repair the complete `.audit/entregar-issue` handoff package required by `entregar-issue`.
 - Do not merge the pull request or close the issue.
 - If audit findings are supplied below, treat all of them as remediation inputs in this cycle; close the escape class, sibling cases and inherited controls required by the skill before a new handoff.
+- If exact-head CI failures are supplied below, invoke the installed `corrigir-ci` skill for those failures, diagnose the failing jobs/logs, apply the root-cause correction, validate it, publish the correction, and restore a fresh certified handoff before returning `ready_for_audit`.
+- Never treat a red, cancelled, timed-out, stale, startup-failed, or action-required workflow as audit-ready. CI remediation remains implementation work and must be completed before independent audit.
 - Before returning `ready_for_audit`, the remote current head must contain a valid result-only handoff child and the structured output must report the exact `material_head_sha` and `handoff_head_sha`.
 
 Target repository: {{repository}}
@@ -16,5 +18,8 @@ Cycle: {{cycle}}
 
 Previous independent audit findings (empty on first cycle):
 {{audit_findings}}
+
+Previous exact-head CI failures (empty unless the preceding candidate reached terminal CI with a blocking conclusion):
+{{ci_findings}}
 
 Return only the structured result requested by the caller.

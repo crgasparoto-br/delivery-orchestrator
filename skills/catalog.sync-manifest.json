@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "source": "chatgpt-web-installed-skills",
+  "skills": {
+    "entregar-issue": {
+      "digest": "sha256:2b0d8b18bbb4f59fe39691ae8932f518d4358b48b36bfae602bca3e8b6d2ab6f",
+      "files": 185
+    },
+    "revisar-issue": {
+      "digest": "sha256:98a8742147e305f310027abb06778de697a49904313082b277c891e4fa760082",
+      "files": 13
+    },
+    "fluxos-conversacionais": {
+      "digest": "sha256:caf8feb5c72883eacf44e283c495c158440e03a5ce15ae7654d9d76c0855942c",
+      "files": 11
+    },
+    "documentacao-repositorio": {
+      "digest": "sha256:197699ab1fa3c3fbcf2236520b57e702c6ef25fc2a7ed8f692f9b7abe647caf3",
+      "files": 14
+    },
+    "design-interface": {
+      "digest": "sha256:53989db3a7f3ebdb008619637261837be463e540d8f18dab9478f38576650787",
+      "files": 15
+    },
+    "corrigir-ci": {
+      "digest": "sha256:34e4393c7e858ddaadb64aa188a3de706a7f0ba1cd4763a6ea6d2d435fcbc898",
+      "files": 6
+    },
+    "auditar-issue": {
+      "digest": "sha256:447d43019f0e66a7197e2f55b6ef9743c24e731d4614e69695c312f89b5acac9",
+      "files": 58
+    }
+  }
+}
