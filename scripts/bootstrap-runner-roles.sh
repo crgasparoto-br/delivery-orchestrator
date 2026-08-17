@@ -41,12 +41,25 @@ if ! python3 -m venv "$venv_probe/venv" >/dev/null 2>&1; then
   exit 1
 fi
 
+codex_bin="$(command -v codex || true)"
+if [ -z "$codex_bin" ]; then
+  echo "Codex CLI is required for the one-time role device-auth bootstrap." >&2
+  echo "Install it system-wide so both role users can execute it: sudo npm install -g @openai/codex" >&2
+  exit 1
+fi
+
 for role_user in "$implementer_user" "$auditor_user"; do
   if ! sudo -n -u "$runner_user" -H -- sudo -n -u "$role_user" -H -- true; then
     echo "Runner user cannot execute commands as $role_user without interaction." >&2
     exit 1
   fi
+  if ! sudo -n -u "$role_user" -H -- "$codex_bin" --version >/dev/null 2>&1; then
+    echo "Codex CLI at $codex_bin is not executable by $role_user." >&2
+    echo "Install it in a system-wide location accessible to both role users." >&2
+    exit 1
+  fi
 done
 
 echo "Runner role bootstrap completed."
+echo "Codex CLI available to both isolated role users: $codex_bin"
 echo "Next: perform the documented Codex device-auth login separately as $implementer_user and $auditor_user."
