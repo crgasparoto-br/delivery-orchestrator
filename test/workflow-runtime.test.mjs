@@ -23,7 +23,7 @@ test('cleanup tolerates bootstrap failures before role users exist', async () =>
   assert.match(workflow, /if id "\$role_user" >\/dev\/null 2>&1; then/);
 });
 
-test('runner bootstrap creates isolated role users and validates venv support', async () => {
+test('runner bootstrap creates isolated role users and validates required runtime tools', async () => {
   const bootstrap = await readFile(bootstrapUrl, 'utf8');
 
   assert.match(bootstrap, /delivery-implementer/);
@@ -32,6 +32,10 @@ test('runner bootstrap creates isolated role users and validates venv support', 
   assert.match(bootstrap, /\/etc\/sudoers\.d\/delivery-orchestrator-roles/);
   assert.match(bootstrap, /python3 -m venv/);
   assert.match(bootstrap, /visudo -cf/);
+  assert.match(bootstrap, /command -v codex/);
+  assert.match(bootstrap, /CODEX_INSTALL_DIR=\/usr\/local\/bin/);
+  assert.match(bootstrap, /CODEX_HOME=\/opt\/openai-codex/);
+  assert.match(bootstrap, /"\$codex_bin" --version/);
   assert.match(
     bootstrap,
     /sudo -n -u "\$runner_user" -H -- sudo -n -u "\$role_user" -H -- true/

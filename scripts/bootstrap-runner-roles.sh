@@ -41,12 +41,29 @@ if ! python3 -m venv "$venv_probe/venv" >/dev/null 2>&1; then
   exit 1
 fi
 
+codex_bin="$(command -v codex || true)"
+if [ -z "$codex_bin" ]; then
+  echo "Codex CLI is required for the one-time role device-auth bootstrap." >&2
+  echo "Install the official standalone CLI in a shared location such as /usr/local/bin." >&2
+  echo "Example:" >&2
+  echo "  curl -fsSL https://chatgpt.com/codex/install.sh -o /tmp/codex-install.sh" >&2
+  echo "  sudo env CODEX_INSTALL_DIR=/usr/local/bin CODEX_HOME=/opt/openai-codex CODEX_NON_INTERACTIVE=1 sh /tmp/codex-install.sh" >&2
+  exit 1
+fi
+
 for role_user in "$implementer_user" "$auditor_user"; do
   if ! sudo -n -u "$runner_user" -H -- sudo -n -u "$role_user" -H -- true; then
     echo "Runner user cannot execute commands as $role_user without interaction." >&2
     exit 1
   fi
+  if ! sudo -n -u "$role_user" -H -- "$codex_bin" --version >/dev/null 2>&1; then
+    echo "Codex CLI at $codex_bin is not executable by $role_user." >&2
+    echo "Do not expose a runner-user NVM tree to the isolated roles." >&2
+    echo "Install the official standalone CLI in /usr/local/bin instead." >&2
+    exit 1
+  fi
 done
 
 echo "Runner role bootstrap completed."
+echo "Codex CLI available to both isolated role users: $codex_bin"
 echo "Next: perform the documented Codex device-auth login separately as $implementer_user and $auditor_user."
