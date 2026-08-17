@@ -33,7 +33,8 @@ test('runner bootstrap creates isolated role users and validates required runtim
   assert.match(bootstrap, /python3 -m venv/);
   assert.match(bootstrap, /visudo -cf/);
   assert.match(bootstrap, /command -v codex/);
-  assert.match(bootstrap, /npm install -g @openai\/codex/);
+  assert.match(bootstrap, /CODEX_INSTALL_DIR=\/usr\/local\/bin/);
+  assert.match(bootstrap, /CODEX_HOME=\/opt\/openai-codex/);
   assert.match(bootstrap, /"\$codex_bin" --version/);
   assert.match(
     bootstrap,
