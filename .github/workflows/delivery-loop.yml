@@ -36,6 +36,8 @@ jobs:
       (github.event_name == 'issues' && startsWith(github.event.issue.title, 'delivery-request:'))
     runs-on: [self-hosted, linux, delivery-orchestrator]
     timeout-minutes: 360
+    env:
+      DELIVERY_RUNTIME_ROOT: /tmp/delivery-orchestrator-runtime-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -53,18 +55,24 @@ jobs:
         run: node scripts/normalize-delivery-request.mjs
       - name: Install orchestrator dependencies
         run: npm install --no-audit --no-fund
-      - name: Install worker skill dependencies
+      - name: Validate bundle
+        run: npm run validate
+      - name: Prepare shared role runtime
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install \
-            -r skills/catalog/entregar-issue/requirements.txt \
-            -r skills/catalog/auditar-issue/requirements.txt
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-      - name: Validate bundle
-        run: npm run validate
+          rm -rf -- "$DELIVERY_RUNTIME_ROOT"
+          install -d -m 755 "$DELIVERY_RUNTIME_ROOT"
+          cp -a src skills prompts schemas trust node_modules package.json "$DELIVERY_RUNTIME_ROOT"/
+
+          python3 -m venv "$DELIVERY_RUNTIME_ROOT/.venv"
+          "$DELIVERY_RUNTIME_ROOT/.venv/bin/python" -m pip install --upgrade pip
+          "$DELIVERY_RUNTIME_ROOT/.venv/bin/python" -m pip install \
+            -r "$DELIVERY_RUNTIME_ROOT/skills/catalog/entregar-issue/requirements.txt" \
+            -r "$DELIVERY_RUNTIME_ROOT/skills/catalog/auditar-issue/requirements.txt"
+
+          chmod -R a+rX "$DELIVERY_RUNTIME_ROOT"
+          chmod -R go-w "$DELIVERY_RUNTIME_ROOT"
       - name: Validate isolated Codex role runtime
         shell: bash
         env:
@@ -77,7 +85,18 @@ jobs:
           set -euo pipefail
           implementer_user="$DELIVERY_IMPLEMENTER_USER"
           auditor_user="$DELIVERY_AUDITOR_USER"
-          node_bin="$(command -v node)"
+          node_bin="/usr/local/bin/node"
+          worker="$DELIVERY_RUNTIME_ROOT/src/role-runtime-worker.mjs"
+
+          if [ ! -x "$node_bin" ]; then
+            echo "::error::Shared Node.js runtime is missing at $node_bin. Install Node.js >=22 in /usr/local/bin."
+            exit 1
+          fi
+          node_major="$("$node_bin" -p 'Number(process.versions.node.split(".")[0])')"
+          if [ "$node_major" -lt 22 ]; then
+            echo "::error::Shared Node.js runtime at $node_bin must be version 22 or newer."
+            exit 1
+          fi
           if [ "$implementer_user" = "$auditor_user" ]; then
             echo "::error::Implementer and auditor Linux users must be different."
             exit 1
@@ -87,8 +106,8 @@ jobs:
               echo "::error::Missing dedicated Linux role user: $role_user"
               exit 1
             fi
-            if ! printf '%s\n' '{"path":"/dev/null"}' | sudo -n -u "$role_user" -H -- "$node_bin" src/role-runtime-worker.mjs probe-readable >/dev/null; then
-              echo "::error::Runner cannot execute the role worker as $role_user without interaction."
+            if ! printf '%s\n' '{"path":"/dev/null"}' | sudo -n -u "$role_user" -H -- "$node_bin" "$worker" probe-readable >/dev/null; then
+              echo "::error::Runner cannot execute the shared role worker as $role_user without interaction."
               exit 1
             fi
           done
@@ -154,7 +173,14 @@ jobs:
           AUDITOR_KEY_PASSWORD: ${{ secrets.AUDITOR_KEY_PASSWORD }}
           AUDITOR_KEY_ID: ${{ vars.AUDITOR_KEY_ID }}
           TRUSTED_AUDITORS_PATH: ${{ vars.TRUSTED_AUDITORS_PATH }}
-        run: node src/cli.mjs run
+          RUNS_ROOT: ${{ env.DELIVERY_RUNTIME_ROOT }}/runs
+          SKILL_CATALOG: ${{ env.DELIVERY_RUNTIME_ROOT }}/skills/catalog
+          PATH: ${{ env.DELIVERY_RUNTIME_ROOT }}/.venv/bin:/usr/local/bin:/usr/bin:/bin
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$DELIVERY_RUNTIME_ROOT"
+          /usr/local/bin/node src/cli.mjs run
       - name: Remove ephemeral role workspaces and secrets
         if: always()
         shell: bash
@@ -168,15 +194,19 @@ jobs:
               sudo -n -u "$role_user" -H -- find /tmp -maxdepth 1 -type d -user "$role_user" -name 'delivery-orchestrator-*' -exec rm -rf -- {} + || true
             fi
           done
-          if [ -d runs ]; then
-            find runs -type d -name runtime -prune -exec rm -rf -- {} +
-          fi
       - name: Upload forensic run state
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: delivery-orchestrator-run-${{ github.run_id }}
-          path: |
-            runs/
-            !runs/**/runtime/**
+          path: ${{ env.DELIVERY_RUNTIME_ROOT }}/runs/
           if-no-files-found: warn
+      - name: Remove shared orchestration runtime
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$DELIVERY_RUNTIME_ROOT" in
+            /tmp/delivery-orchestrator-runtime-*) rm -rf -- "$DELIVERY_RUNTIME_ROOT" ;;
+            *) echo "::error::Refusing to remove unexpected runtime path: $DELIVERY_RUNTIME_ROOT"; exit 1 ;;
+          esac

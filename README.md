@@ -64,6 +64,24 @@ sudo chmod 440 /etc/sudoers.d/delivery-orchestrator-roles
 
 The role names can be overridden with repository variables `DELIVERY_IMPLEMENTER_USER` and `DELIVERY_AUDITOR_USER`. They must remain distinct.
 
+The isolated roles also require a shared Node.js runtime at `/usr/local/bin/node`, version 22 or newer. Do **not** point role execution at a runner-user NVM tree or the private `actions/setup-node` tool cache: those paths commonly live below the runner user's home and are intentionally not traversable by the isolated role users.
+
+Validate the shared runtime before enabling delivery:
+
+```bash
+/usr/local/bin/node --version
+sudo -u delivery-implementer -H /usr/local/bin/node --version
+sudo -u delivery-auditor -H /usr/local/bin/node --version
+```
+
+The workflow uses `actions/setup-node` only for runner-owned checkout/bootstrap steps. Before role execution it stages the orchestrator code, SDK dependencies, skill catalog and Python virtualenv in an ephemeral read-only shared bundle under `/tmp/delivery-orchestrator-runtime-<run>-<attempt>`. The controller is then started with `/usr/local/bin/node` from that bundle, so `process.execPath`, the role worker, SDK imports, skills and Python tooling all resolve through paths both isolated roles can traverse. The bundle is removed only after forensic state upload.
+
+The bootstrap script validates the shared Node runtime and shared Codex CLI executability for both role users:
+
+```bash
+sudo bash scripts/bootstrap-runner-roles.sh "$(id -un)"
+```
+
 ### One-time ChatGPT auth bootstrap
 
 Authenticate each role while already running as that role user. The default persistent homes are resolved from each user's own OS home:
@@ -121,7 +139,7 @@ Only when `CODEX_AUTH_MODE=api-key`:
 
 The parent runner environment is no longer inherited wholesale by Codex. Only a small operational allowlist plus explicitly selected role inputs is forwarded. Sensitive role payloads are delivered to the role worker over stdin rather than command-line arguments.
 
-The auditor private key is created only after implementation and CI observation, under the auditor UID with mode `0600`. Before the audit begins, the orchestrator executes an implementer-role readability probe and fails closed if the key is readable. The key directory is removed immediately after the auditor call. Persistent ChatGPT homes remain outside run artifacts, and forensic upload excludes `runs/**/runtime/**`.
+The auditor private key is created only after implementation and CI observation, under the auditor UID with mode `0600`. Before the audit begins, the orchestrator executes an implementer-role readability probe and fails closed if the key is readable. The key directory is removed immediately after the auditor call. Persistent ChatGPT homes remain outside run artifacts. Forensic state is written beneath the ephemeral shared control bundle and uploaded before that bundle is removed.
 
 ## Exact-head CI observation
 
@@ -172,4 +190,4 @@ npm test
 npm run validate
 ```
 
-A live end-to-end run additionally requires `gh`, Codex, the two dedicated Linux users, the runner-to-role sudo policy, the two GitHub credentials, the selected Codex authentication mode, and auditor trust material.
+A live end-to-end run additionally requires `gh`, a shared Node.js >=22 runtime at `/usr/local/bin/node`, Codex in a shared executable location, the two dedicated Linux users, the runner-to-role sudo policy, the two GitHub credentials, the selected Codex authentication mode, and auditor trust material.
