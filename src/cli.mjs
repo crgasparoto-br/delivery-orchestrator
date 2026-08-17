@@ -4,6 +4,7 @@ import { access, readFile } from 'node:fs/promises';
 import { CodexExecutor } from './codex-executor.mjs';
 import { loadConfig } from './config.mjs';
 import { runDelivery } from './orchestrator.mjs';
+import { verifySynchronizedSkillCatalog } from './skill-catalog-sync.mjs';
 
 function parseArgs(argv) {
   const out = {};
@@ -16,6 +17,7 @@ function parseArgs(argv) {
 
 async function validate() {
   const root = path.resolve(new URL('..', import.meta.url).pathname);
+  const synchronizedCatalog = await verifySynchronizedSkillCatalog(root);
   const required = [
     'prompts/implementer.md', 'prompts/auditor.md',
     'skills/catalog/entregar-issue/SKILL.md', 'skills/catalog/auditar-issue/SKILL.md',
@@ -24,7 +26,7 @@ async function validate() {
   for (const rel of required) await access(path.join(root, rel));
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
   if (!pkg.dependencies?.['@openai/codex-sdk']) throw new Error('Missing @openai/codex-sdk dependency');
-  console.log(JSON.stringify({ ok: true, required }, null, 2));
+  console.log(JSON.stringify({ ok: true, synchronizedCatalog, required }, null, 2));
 }
 
 const [command = 'run', ...rest] = process.argv.slice(2);

@@ -171,6 +171,7 @@ def test_build_and_validate_handoff_certificate() -> None:
         assert payload["certificate_commit_policy"]["mode"] == "result-only-child"
         assert ".audit/entregar-issue/handoff-ready.json" in payload["certificate_commit_policy"]["allowed_paths"]
 
+        # The certificate may be validated out-of-band against the material head.
         proc = run(
             "validate_handoff_certificate.py",
             "--certificate", str(cert), "--artifacts-dir", str(base),
@@ -179,6 +180,7 @@ def test_build_and_validate_handoff_certificate() -> None:
         )
         assert proc.returncode == 0, proc.stdout
 
+        # Once committed, the published head is a direct child that changes only allow-listed result paths.
         child = "d" * 40
         proc = run(
             "validate_handoff_certificate.py",

@@ -5,7 +5,6 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
 
-
 def test_merge_preserves_required_attack_dimensions(tmp_path):
     closure=tmp_path/'closure.json'; catalog=tmp_path/'catalog.json'
     closure.write_text(json.dumps({'escapes':[{

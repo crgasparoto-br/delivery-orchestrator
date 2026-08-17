@@ -27,7 +27,7 @@ Requisito sem ataque ou com superficie declarada sem controle primario nao esta 
 
 Familia de risco nao e superficie. Para `authorization`, por exemplo, a mesma classe pode atravessar `environment`, `filesystem`, `persistent-credential-store`, `artifact-export`, `process-identity`, endpoint ou storage. Para cada superficie realmente exposta pela arquitetura, criar uma entrada em `risk_surfaces` e um controle negativo cujo `surface` corresponda exatamente.
 
-Nao omitir superficie evidente para fazer o gate passar. O validador rederiva um conjunto minimo de superficies sensiveis a partir da implementacao errada e dos procedimentos declarados. Sinais como `process.env`/`extraEnv`, `private key`/filesystem, `CODEX_HOME`/`auth.json`, artifact upload e mesma identidade de processo ativam respectivamente as superficies genericas correspondentes. A inferencia automatica e apenas piso de seguranca; a entrega continua responsavel por declarar outras superficies derivaveis da arquitetura.
+Nao omitir superficie evidente para fazer o gate passar. O validador rederiva um conjunto minimo de superficies sensiveis a partir da implementacao errada e dos procedimentos declarados. No contexto de `authorization`, sinais como `process.env`/`extraEnv`, `private key`/filesystem, `CODEX_HOME`/`auth.json`, artifact upload e mesma identidade de processo ativam respectivamente as superficies genericas correspondentes. A inferencia automatica e apenas piso de seguranca; a entrega continua responsavel por declarar outras superficies derivaveis da arquitetura.
 
 Cada `negative_control` deve registrar:
 
