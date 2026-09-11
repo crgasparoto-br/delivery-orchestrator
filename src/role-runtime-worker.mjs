@@ -53,13 +53,19 @@ async function cloneRepo(payload) {
   await rm(payload.dest, { recursive: true, force: true });
   await mkdir(path.dirname(payload.dest), { recursive: true });
   const env = safeChildEnv({ GH_TOKEN: payload.token, GITHUB_TOKEN: payload.token });
-  await run('gh', ['repo', 'clone', payload.repository, path.basename(payload.dest)], { cwd: path.dirname(payload.dest), env });
+  const cloneArgs = ['repo', 'clone', payload.repository, path.basename(payload.dest)];
+  if (payload.branch) cloneArgs.push('--', '--branch', payload.branch, '--single-branch');
+  await run('gh', cloneArgs, { cwd: path.dirname(payload.dest), env });
+  if (payload.branch) {
+    const branch = (await run('git', ['branch', '--show-current'], { cwd: payload.dest, env })).stdout.trim();
+    if (branch !== payload.branch) throw new Error(`Clone branch mismatch: expected ${payload.branch}, got ${branch || '<detached>'}`);
+  }
   if (payload.ref) {
     await run('git', ['checkout', '--detach', payload.ref], { cwd: payload.dest, env });
     const head = (await run('git', ['rev-parse', 'HEAD'], { cwd: payload.dest, env })).stdout.trim();
     if (head !== payload.ref) throw new Error(`Clone identity mismatch: expected ${payload.ref}, got ${head}`);
   }
-  return { dest: payload.dest };
+  return { dest: payload.dest, branch: payload.branch ?? null };
 }
 
 async function writeSecret(payload) {
