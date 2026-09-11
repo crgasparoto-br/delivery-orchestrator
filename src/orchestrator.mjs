@@ -7,6 +7,7 @@ import { auditFingerprint, ciFingerprint } from './fingerprint.mjs';
 import { copyDir, writeJson } from './files.mjs';
 import { cloneForAudit, cloneForImplementation, verifyAuditWorkspaceClean } from './git-workspace.mjs';
 import { blockingExactHeadWorkflowRuns, waitForExactHeadWorkflowRuns } from './github-ci.mjs';
+import { resolveReusablePullRequest } from './pull-request-binding.mjs';
 import { loadPrompt } from './prompts.mjs';
 import { AUDIT_RESULT_SCHEMA, IMPLEMENTER_RESULT_SCHEMA } from './schemas.mjs';
 import { materializeAuditorPrivateKey, prepareSkillHomes } from './skill-homes.mjs';
@@ -19,6 +20,32 @@ function mapImplementerBlock(status) {
   return STATES.FAILED;
 }
 
+async function resolvePullRequestBinding(config) {
+  const binding = await resolveReusablePullRequest({
+    repository: config.repository,
+    issueNumber: config.issueNumber,
+    token: config.readToken || config.writeToken
+  });
+  if (binding.status === 'ambiguous') return binding;
+  if (binding.status === 'bound') return binding;
+  if (config.reuseExistingPr && config.boundPullRequest && config.boundHeadRef) {
+    return {
+      status: 'bound',
+      pullRequest: {
+        number: config.boundPullRequest,
+        head: { ref: config.boundHeadRef, sha: config.boundHeadSha }
+      },
+      candidates: [{ number: config.boundPullRequest, score: 100 }]
+    };
+  }
+  return binding;
+}
+
+function newCandidateNumbers(before, after) {
+  const previous = new Set((before?.candidates ?? []).map((item) => Number(item.number)));
+  return (after?.candidates ?? []).map((item) => Number(item.number)).filter((number) => !previous.has(number));
+}
+
 export async function runDelivery(config, executor) {
   const runId = config.runId ?? randomUUID();
   const runDir = path.join(config.runsRoot, runId);
@@ -28,6 +55,21 @@ export async function runDelivery(config, executor) {
   await chmod(runDir, 0o700);
   let state = initialState({ runId, repository: config.repository, issueNumber: config.issueNumber, maxCycles: config.maxCycles });
   const persist = async () => writeJson(path.join(runDir, 'state.json'), state);
+  await persist();
+
+  const initialPrBinding = await resolvePullRequestBinding(config);
+  if (initialPrBinding.status === 'ambiguous') {
+    state = transition(state, STATES.BLOCKED_REQUIREMENT, {
+      reason: `multiple equally plausible open pull requests already exist for ${config.repository}#${config.issueNumber}: ${initialPrBinding.candidates.map((item) => `#${item.number}`).join(', ')}`
+    });
+    await persist();
+    return state;
+  }
+  const boundPullRequest = initialPrBinding.pullRequest;
+  state.bound_pull_request = boundPullRequest?.number ?? null;
+  state.bound_head_ref = boundPullRequest?.head?.ref ?? null;
+  state.bound_head_sha = boundPullRequest?.head?.sha ?? null;
+  state.reuse_existing_pr = Boolean(boundPullRequest);
   await persist();
 
   const homes = await prepareSkillHomes({
@@ -45,7 +87,8 @@ export async function runDelivery(config, executor) {
     repository: config.repository,
     dest: implementerWorkspace,
     token: config.writeToken,
-    roleUser: config.implementerUser
+    roleUser: config.implementerUser,
+    branch: boundPullRequest?.head?.ref
   });
 
   let previousAudit = null;
@@ -66,6 +109,10 @@ export async function runDelivery(config, executor) {
       repository: config.repository,
       issue_number: config.issueNumber,
       cycle,
+      reuse_existing_pr: state.reuse_existing_pr ? 'true' : 'false',
+      bound_pull_request: state.bound_pull_request ?? 'none',
+      bound_head_ref: state.bound_head_ref ?? 'none',
+      bound_head_sha: state.bound_head_sha ?? 'none',
       audit_findings: previousAudit ? JSON.stringify(previousAudit.findings, null, 2) : '[]',
       ci_findings: JSON.stringify(previousCiFailures, null, 2)
     });
@@ -81,6 +128,19 @@ export async function runDelivery(config, executor) {
     });
     state.implementation_context_ids.push(implRun.contextId);
     await writeJson(path.join(runDir, `cycle-${cycle}-implementation.json`), implRun);
+
+    if (state.reuse_existing_pr) {
+      const afterImplementationBinding = await resolvePullRequestBinding(config);
+      const unexpectedPrs = newCandidateNumbers(initialPrBinding, afterImplementationBinding);
+      if (unexpectedPrs.length > 0) {
+        state = transition(state, STATES.FAILED, {
+          cycle,
+          reason: `implementer created additional pull request(s) ${unexpectedPrs.map((number) => `#${number}`).join(', ')} while bound to existing PR #${state.bound_pull_request}`
+        });
+        await persist();
+        return state;
+      }
+    }
 
     if (implRun.result.status !== 'ready_for_audit') {
       state = transition(state, mapImplementerBlock(implRun.result.status), { cycle, reason: implRun.result.blocking_reason ?? implRun.result.summary });
