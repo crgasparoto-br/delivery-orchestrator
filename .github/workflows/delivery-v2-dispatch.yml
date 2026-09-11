@@ -1,0 +1,107 @@
+name: Delivery V2 - Dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repository:
+        description: Target repository in owner/repo form
+        required: true
+        type: string
+      target_issue:
+        description: Target issue number
+        required: true
+        type: string
+      ai_provider:
+        description: AI implementation provider
+        required: true
+        default: copilot
+        type: choice
+        options: [copilot, codex, claude]
+      risk_profile:
+        description: Delivery risk profile
+        required: true
+        default: auto
+        type: choice
+        options: [auto, fast, standard, critical]
+      base_branch:
+        description: Target base branch
+        required: true
+        default: main
+        type: choice
+        options: [main, develop]
+      changed_paths:
+        description: Optional comma/newline-separated known changed paths
+        required: false
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: delivery-v2-${{ inputs.target_repository }}-${{ inputs.target_issue }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Plan and dispatch one provider worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TARGET_REPOSITORY: ${{ inputs.target_repository }}
+      TARGET_ISSUE: ${{ inputs.target_issue }}
+      DELIVERY_AI_PROVIDER: ${{ inputs.ai_provider }}
+      DELIVERY_RISK_PROFILE: ${{ inputs.risk_profile }}
+      DELIVERY_CHANGED_PATHS: ${{ inputs.changed_paths }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Restrict target repository
+        shell: bash
+        run: |
+          case "$TARGET_REPOSITORY" in
+            crgasparoto-br/*) ;;
+            *) echo "Target repository is outside the allowed owner: $TARGET_REPOSITORY" >&2; exit 2 ;;
+          esac
+          case "${{ inputs.base_branch }}" in
+            main|develop) ;;
+            *) echo "Unsupported base branch" >&2; exit 2 ;;
+          esac
+
+      - name: Checkout control plane
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build deterministic plan
+        run: node src/cli.mjs plan-v2 | tee delivery-v2-plan.json
+
+      - name: Dispatch exact worker
+        shell: bash
+        run: |
+          WORKFLOW="$(node -e "const p=require('./delivery-v2-plan.json'); process.stdout.write(p.implementation.workflow)")"
+          PROFILE="$(node -e "const p=require('./delivery-v2-plan.json'); process.stdout.write(p.risk.profile)")"
+          PROVIDER="$(node -e "const p=require('./delivery-v2-plan.json'); process.stdout.write(p.implementation.provider)")"
+          echo "Dispatching provider=$PROVIDER risk=$PROFILE workflow=$WORKFLOW"
+          gh workflow run "$WORKFLOW" --ref main \
+            -f target_repository="$TARGET_REPOSITORY" \
+            -f target_issue="$TARGET_ISSUE" \
+            -f base_branch="${{ inputs.base_branch }}"
+          {
+            echo "## Delivery V2 dispatch"
+            echo "- Provider: \`$PROVIDER\`"
+            echo "- Risk: \`$PROFILE\`"
+            echo "- Worker: \`$WORKFLOW\`"
+            echo "- Target: \`$TARGET_REPOSITORY#$TARGET_ISSUE\`"
+            echo "- Automatic merge: **disabled**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-v2-dispatch-plan-${{ github.run_id }}
+          path: delivery-v2-plan.json
+          if-no-files-found: error
+          retention-days: 7

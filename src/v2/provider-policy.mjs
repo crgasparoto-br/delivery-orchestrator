@@ -5,7 +5,7 @@ const METADATA = Object.freeze({
   codex: Object.freeze({
     engine: 'codex',
     runtime: 'github-agentic-workflows',
-    auth: 'CODEX_API_KEY or OPENAI_API_KEY (or GitHub Copilot-backed Codex when configured)'
+    auth: 'CODEX_API_KEY or OPENAI_API_KEY'
   }),
   claude: Object.freeze({
     engine: 'claude',

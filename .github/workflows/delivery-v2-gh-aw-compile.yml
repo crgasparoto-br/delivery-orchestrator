@@ -1,0 +1,57 @@
+name: Delivery V2 - Compile gh-aw
+
+on:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - '.github/workflows/delivery-v2-worker-*.md'
+      - '.github/workflows/delivery-v2-gh-aw-compile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delivery-v2-gh-aw-compile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Compile provider workers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout branch with delivery write token
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
+
+      - name: Install pinned gh-aw
+        uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
+        with:
+          version: v0.88.7
+
+      - name: Compile workers in strict mode
+        run: gh aw compile --strict
+
+      - name: Stage generated locks for controlled publication
+        shell: bash
+        run: |
+          rm -rf .generated/gh-aw
+          mkdir -p .generated/gh-aw
+          for file in .github/workflows/delivery-v2-worker-*.lock.yml; do
+            cp "$file" ".generated/gh-aw/$(basename "$file").txt"
+          done
+          cp .github/aw/actions-lock.json .generated/gh-aw/actions-lock.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .generated/gh-aw
+          if git diff --cached --quiet; then
+            echo "Staged compiler artifacts already current."
+            exit 0
+          fi
+          git commit -m "chore: stage compiled Delivery V2 workers"
+          git push origin "HEAD:${{ github.ref_name }}"

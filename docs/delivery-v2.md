@@ -14,103 +14,90 @@ V2 accepts these providers:
 - `codex` — OpenAI Codex engine;
 - `claude` — Anthropic Claude Code engine.
 
-Configuration:
-
-- `DELIVERY_AI_PROVIDER` sets the default provider;
-- `DELIVERY_IMPLEMENTER_PROVIDER` optionally overrides the implementation provider;
-- `DELIVERY_AUDITOR_PROVIDER` optionally selects a different audit provider;
-- `DELIVERY_AI_MODEL`, `DELIVERY_IMPLEMENTER_MODEL`, and `DELIVERY_AUDITOR_MODEL` optionally pin models.
-
 Invalid providers fail closed. There is no automatic provider fallback.
 
-GitHub Agentic Workflows (`gh-aw`) is the target execution runtime because it supports built-in `copilot`, `claude`, and `codex` engines and compiles Markdown sources into normal GitHub Actions workflows. Conventional GitHub Actions remain responsible for builds, tests, linting and other deterministic checks.
-
-Official references:
-
-- https://github.github.com/gh-aw/reference/engines/
-- https://github.github.com/gh-aw/reference/faq/
+GitHub Agentic Workflows (`gh-aw`) is the execution runtime. Conventional GitHub Actions remain responsible for builds, tests, linting and other deterministic checks.
 
 ## Risk profiles
 
 `DELIVERY_RISK_PROFILE` accepts `auto`, `fast`, `standard`, or `critical`.
 
 ### FAST
-
-Use for bounded presentation/UI fixes and documentation/styles when no sensitive path is touched.
-
 - focused CI;
-- maximum 2 implementation attempts;
+- max 2 implementation attempts;
+- 20 AI turns / 100 AI Credits;
 - no mandatory LLM audit by default;
-- full regression after merge;
-- escalation to `standard` after the retry budget is exhausted.
+- full regression after merge.
+
+FAST workers use a safe-output file allowlist. If broader paths are required, publication fails closed.
 
 ### STANDARD
-
-Use for ordinary application/API changes.
-
 - affected tests plus build;
-- maximum 2 implementation attempts;
-- one focused independent audit;
-- full regression after merge;
-- escalation to `critical` when necessary.
+- max 2 implementation attempts;
+- 40 AI turns / 250 AI Credits;
+- focused independent audit.
 
 ### CRITICAL
-
-Use for migrations, authentication/authorization/security, finance/payments/billing, CI/workflows, infrastructure, shared domain/config packages, dependency manifests/locks, and unknown paths.
-
 - full PR regression;
 - independent audit;
-- larger but bounded AI budget;
-- escalation to a human rather than an unbounded retry loop.
+- max 3 implementation attempts;
+- 80 AI turns / 500 AI Credits;
+- human escalation instead of unbounded retries.
 
-## Deterministic promotion
+Protected governance files remain blocked from agent publication in this migration phase.
 
-Risk can only stay the same or move upward after changed paths are known. Examples:
+## Provider execution
 
-- an explicitly requested `fast` change that touches a migration becomes `critical`;
-- an unknown path becomes `critical`;
-- a presentation-only component may remain `fast`.
+The user-facing selection remains **provider + risk**. Internally the dispatcher resolves that pair to one compiled worker. There are three provider families and three risk variants because `max-ai-credits` is a compile-time gh-aw guardrail:
 
-The AI model does not decide this promotion.
-
-## V2 plan contract
-
-Generate a plan locally or in Actions:
-
-```bash
-DELIVERY_AI_PROVIDER=claude \
-DELIVERY_RISK_PROFILE=fast \
-DELIVERY_CHANGED_PATHS='apps/web/src/components/Filter.tsx' \
-node src/cli.mjs plan-v2 --repo owner/repo --issue 123
+```text
+copilot × fast|standard|critical
+codex   × fast|standard|critical
+claude  × fast|standard|critical
 ```
 
-The JSON result records provider, risk, budgets, CI mode, audit requirements and the invariant `noAutomaticMerge=true`.
+`Delivery V2 - Dispatch` builds the deterministic plan and dispatches exactly one `.lock.yml` worker. Failed provider dispatches never fall back to another provider.
 
-The manual workflow `Delivery V2 - Plan` exposes provider and risk as GitHub inputs and uploads the resulting JSON plan. It does not invoke an AI yet; it is the control-plane foundation for the next migration step.
+Workers use a compact contract: read the issue, identify the smallest cause, make the smallest cohesive fix, add regression coverage when practical, run profile-appropriate checks, and create one reviewable PR. They do not invoke full orchestration Skills.
+
+### Credential isolation
+
+The agent receives `DELIVERY_GITHUB_READ_TOKEN` for cross-repository checkout and reads. `DELIVERY_GITHUB_WRITE_TOKEN` is referenced only by `safe-outputs`, so agent shell access does not receive the write credential.
+
+Provider inference prerequisites in `delivery-orchestrator`:
+- Copilot: `copilot-requests: write` or supported Copilot token configuration;
+- Codex: `CODEX_API_KEY` or `OPENAI_API_KEY`;
+- Claude: `ANTHROPIC_API_KEY` or Anthropic WIF.
+
+Missing provider authentication is a hard failure; there is no provider substitution.
+
+## gh-aw compilation
+
+Worker Markdown sources are compiled with pinned `gh-aw v0.88.7` into `.lock.yml`. The setup action is pinned to `bde367913adeb3132f0a171594c88a17f4b7d08c`.
+
+Branch automation compiles changed worker sources and commits generated locks. PR CI recompiles in strict mode and requires zero diff.
 
 ## Execution architecture
 
-Target flow:
-
 ```text
-Issue / PR
-  -> deterministic risk classification
-  -> provider-specific gh-aw workflow (copilot | codex | claude)
-  -> focused or full deterministic CI based on risk
-  -> optional/required independent audit based on risk
+Issue
+  -> deterministic risk plan
+  -> exact provider×risk gh-aw worker
+  -> safe-output PR
+  -> focused / affected / full deterministic CI
+  -> optional or required independent audit
   -> exact-head release gate
   -> human merge
 ```
 
-The `engine` is an Agentic Workflow frontmatter setting. Runtime provider selection will therefore be implemented by a deterministic dispatcher choosing among compiled provider-specific workflows rather than asking an LLM to switch engines.
+No worker exposes a merge safe output.
 
 ## Migration sequence
-
-1. Foundation: provider/risk contract, budgets and observable plan workflow.
-2. Add three small provider-specific `gh-aw` implementation workflows and compile their `.lock.yml` files.
-3. Add adaptive CI reusable workflows (`fast`, `standard`, `critical`).
-4. Pilot one repository with FAST fixes while V1 remains fallback.
-5. Migrate the other repositories after measured success-rate and duration improve.
-6. Retire the V1 agent loop only after the V2 path is proven.
+1. **Done:** provider/risk contract, budgets and plan workflow.
+2. **Current:** provider×risk gh-aw workers, deterministic dispatcher and compiled-lock verification.
+3. Add adaptive CI reusable workflows.
+4. Pilot `controle_calorias` with FAST fixes while V1 remains available.
+5. Migrate SolverFin and training-system after measured improvement.
+6. Retire V1 only after V2 is proven.
 
 No phase enables automatic merge.
