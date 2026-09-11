@@ -38,13 +38,13 @@ jobs:
       - name: Commit generated locks
         shell: bash
         run: |
-          if git diff --quiet -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json 2>/dev/null; then
-            echo "Compiled locks already current."
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .github/workflows/delivery-v2-worker-*.lock.yml
           if [ -f .github/aw/actions-lock.json ]; then git add .github/aw/actions-lock.json; fi
+          if git diff --cached --quiet; then
+            echo "Compiled locks already current."
+            exit 0
+          fi
           git commit -m "chore: compile Delivery V2 gh-aw workers"
           git push origin "HEAD:${{ github.ref_name }}"

@@ -42,13 +42,14 @@ tools:
     toolsets: [repos, issues, pull_requests]
     github-token: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
     allowed-repos:
-      - crgasparoto-br/*
+      - "crgasparoto-br/*"
+    min-integrity: approved
 safe-outputs:
   github-token: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
   create-pull-request:
     target-repo: ${{ github.event.inputs.target_repository }}
     allowed-repos:
-      - crgasparoto-br/*
+      - "crgasparoto-br/*"
     base-branch: ${{ github.event.inputs.base_branch }}
     allowed-base-branches:
       - main

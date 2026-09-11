@@ -27,12 +27,13 @@ tools:
     mode: gh-proxy
     toolsets: [repos, issues, pull_requests]
     github-token: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
-    allowed-repos: [crgasparoto-br/*]
+    allowed-repos: ["crgasparoto-br/*"]
+    min-integrity: approved
 safe-outputs:
   github-token: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
   create-pull-request:
     target-repo: ${{ github.event.inputs.target_repository }}
-    allowed-repos: [crgasparoto-br/*]
+    allowed-repos: ["crgasparoto-br/*"]
     base-branch: ${{ github.event.inputs.base_branch }}
     allowed-base-branches: [main, develop]
     draft: false
@@ -46,4 +47,4 @@ Work only on **${{ github.event.inputs.target_repository }} issue #${{ github.ev
 
 Risk profile: **standard**. AI provider: **claude**.
 
-Read the issue and local contributor instructions; identify the smallest concrete cause; implement the smallest cohesive fix; add regression coverage when testable; run affected tests plus the smallest applicable typecheck/build checks. Never weaken workflow security, expose credentials, bypass protected files, broaden repository access, merge the PR, or close the issue directly. Create exactly one PR with `Closes #${{ github.event.inputs.target_issue }}` and list validations actually executed. If blocked, report rather than bypass.
+Read the target issue and local contributor instructions; identify the smallest concrete cause; implement the smallest cohesive fix; add regression coverage when testable; run affected tests plus the smallest applicable typecheck/build checks. Never weaken workflow security, expose credentials, bypass protected files, broaden repository access, merge the PR, or close the issue directly. Create exactly one PR with `Closes #${{ github.event.inputs.target_issue }}` and list validations actually executed. If blocked, report rather than bypass.
