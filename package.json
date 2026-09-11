@@ -1,6 +1,6 @@
 {
   "name": "delivery-orchestrator",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "GitHub-native delivery control plane with risk-adaptive CI and pluggable AI execution, retaining the independent V1 loop during migration.",
