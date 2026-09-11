@@ -1,5 +1,5 @@
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const REQUEST_TITLE_PREFIX = 'delivery-request:';
+export const REQUEST_TITLE_PREFIX = 'delivery-request:';
 
 function parseInteger(value, name, { min = 1, max }) {
   const text = String(value ?? '').trim();
@@ -36,7 +36,7 @@ function validateRepository(repository) {
   return value;
 }
 
-function parseControlIssueBody(body) {
+export function parseControlIssueBody(body) {
   let payload;
   try {
     payload = JSON.parse(String(body ?? ''));
@@ -64,12 +64,15 @@ export function normalizeDeliveryRequest({
   issueMaxCycles = 12
 }) {
   if (eventName === 'workflow_dispatch') {
+    const queuedControlIssue = String(manualInputs.controlIssueNumber ?? '').trim();
     return {
-      source: 'workflow_dispatch',
+      source: queuedControlIssue ? 'control_queue' : 'workflow_dispatch',
       targetRepository: validateRepository(manualInputs.targetRepository),
       issueNumber: parseInteger(manualInputs.issueNumber, 'issue_number', { min: 1 }),
       maxCycles: parseInteger(manualInputs.maxCycles || 6, 'max_cycles', { min: 1, max: 100 }),
-      controlIssueNumber: null
+      controlIssueNumber: queuedControlIssue
+        ? parseInteger(queuedControlIssue, 'control_issue_number', { min: 1 })
+        : null
     };
   }
 
