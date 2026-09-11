@@ -3,7 +3,9 @@ import path from 'node:path';
 import { access, readFile } from 'node:fs/promises';
 import { CodexExecutor } from './codex-executor.mjs';
 import { loadConfig } from './config.mjs';
+import { writeJson } from './files.mjs';
 import { runDelivery } from './orchestrator.mjs';
+import { finalizeIndependentRelease } from './release-finalizer.mjs';
 import { verifySynchronizedSkillCatalog } from './skill-catalog-sync.mjs';
 
 function parseArgs(argv) {
@@ -21,7 +23,7 @@ async function validate() {
   const required = [
     'prompts/implementer.md', 'prompts/auditor.md',
     'skills/catalog/entregar-issue/SKILL.md', 'skills/catalog/auditar-issue/SKILL.md',
-    'src/role-runtime-worker.mjs'
+    'src/role-runtime-worker.mjs', 'src/pr-release-signal.mjs', 'src/release-finalizer.mjs'
   ];
   for (const rel of required) await access(path.join(root, rel));
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -40,7 +42,9 @@ else if (command === 'run') {
     implementerUser: config.implementerUser,
     auditorUser: config.auditorUser
   });
-  const state = await runDelivery(config, executor);
+  let state = await runDelivery(config, executor);
+  state = await finalizeIndependentRelease({ state, config });
+  await writeJson(path.join(config.runsRoot, state.run_id, 'state.json'), state);
   console.log(JSON.stringify(state, null, 2));
   if (state.status !== 'COMPLETE') process.exitCode = 2;
 } else throw new Error(`Unknown command: ${command}`);
