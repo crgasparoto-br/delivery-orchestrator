@@ -1,5 +1,5 @@
 name: Independent delivery loop
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('Delivery {0}#{1}', inputs.target_repository, inputs.issue_number) || github.event.issue.title }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.control_issue_title != '' && inputs.control_issue_title || format('Delivery {0}#{1}', inputs.target_repository, inputs.issue_number)) || github.event.issue.title }}
 
 on:
   workflow_dispatch:
@@ -17,14 +17,28 @@ on:
         required: false
         default: '6'
         type: string
+      control_issue_number:
+        description: Internal persistent queue item
+        required: false
+        default: ''
+        type: string
+      control_issue_title:
+        description: Internal queue display title
+        required: false
+        default: ''
+        type: string
   issues:
     types: [opened]
 
 permissions:
   contents: read
+  actions: write
+  issues: write
 
 # ChatGPT-managed Codex auth refreshes auth.json in place. Keep one serialized
-# workflow stream while each role runs under a distinct Linux identity.
+# workflow stream while each role runs under a distinct Linux identity. Control
+# issues are the durable FIFO queue, so a cancelled GitHub pending run does not
+# lose the delivery request.
 concurrency:
   group: delivery-orchestrator
   cancel-in-progress: false
@@ -49,10 +63,19 @@ jobs:
           MANUAL_TARGET_REPOSITORY: ${{ inputs.target_repository }}
           MANUAL_ISSUE_NUMBER: ${{ inputs.issue_number }}
           MANUAL_MAX_CYCLES: ${{ inputs.max_cycles }}
+          MANUAL_CONTROL_ISSUE_NUMBER: ${{ inputs.control_issue_number }}
           DELIVERY_REQUEST_ACTORS: ${{ vars.DELIVERY_REQUEST_ACTORS }}
           DELIVERY_ALLOWED_REPOSITORIES: ${{ vars.DELIVERY_ALLOWED_REPOSITORIES }}
           DELIVERY_REQUEST_MAX_CYCLES: ${{ vars.DELIVERY_REQUEST_MAX_CYCLES || '12' }}
         run: node scripts/normalize-delivery-request.mjs
+      - name: Resolve reusable pull request
+        id: binding
+        env:
+          TARGET_REPOSITORY: ${{ steps.request.outputs.target_repository }}
+          TARGET_ISSUE: ${{ steps.request.outputs.issue_number }}
+          DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
+          DELIVERY_GITHUB_WRITE_TOKEN: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
+        run: node scripts/resolve-bound-pr.mjs
       - name: Install orchestrator dependencies
         run: npm install --no-audit --no-fund
       - name: Validate bundle
@@ -150,6 +173,9 @@ jobs:
             exit 1
           fi
       - name: Run independent delivery loop
+        id: delivery
+        if: steps.binding.outputs.binding_status != 'ambiguous'
+        continue-on-error: true
         env:
           TARGET_REPOSITORY: ${{ steps.request.outputs.target_repository }}
           TARGET_ISSUE: ${{ steps.request.outputs.issue_number }}
@@ -159,6 +185,10 @@ jobs:
           CI_DISCOVERY_GRACE_SECONDS: '30'
           CI_POLL_INTERVAL_SECONDS: '15'
           CI_SETTLE_SECONDS: '15'
+          BOUND_PULL_REQUEST: ${{ steps.binding.outputs.bound_pull_request }}
+          BOUND_HEAD_REF: ${{ steps.binding.outputs.bound_head_ref }}
+          BOUND_HEAD_SHA: ${{ steps.binding.outputs.bound_head_sha }}
+          REUSE_EXISTING_PR: ${{ steps.binding.outputs.reuse_existing_pr }}
           CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'chatgpt' }}
           CODEX_IMPLEMENTER_HOME: ${{ vars.CODEX_IMPLEMENTER_HOME }}
           CODEX_AUDITOR_HOME: ${{ vars.CODEX_AUDITOR_HOME }}
@@ -201,6 +231,21 @@ jobs:
           name: delivery-orchestrator-run-${{ github.run_id }}
           path: ${{ env.DELIVERY_RUNTIME_ROOT }}/runs/
           if-no-files-found: warn
+      - name: Finalize persistent queue item
+        if: always() && steps.request.outcome == 'success' && (steps.delivery.outcome != 'skipped' || steps.binding.outputs.binding_status == 'ambiguous')
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CONTROL_ISSUE_NUMBER: ${{ steps.request.outputs.control_issue_number }}
+          DELIVERY_OUTCOME: ${{ steps.binding.outputs.binding_status == 'ambiguous' && 'blocked-pr-ambiguity' || steps.delivery.outcome }}
+        run: node scripts/finalize-control-request.mjs
+      - name: Pump persistent delivery queue
+        if: always() && steps.request.outcome == 'success' && (steps.delivery.outcome != 'skipped' || steps.binding.outputs.binding_status == 'ambiguous')
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DELIVERY_REQUEST_ACTORS: ${{ vars.DELIVERY_REQUEST_ACTORS }}
+          DELIVERY_ALLOWED_REPOSITORIES: ${{ vars.DELIVERY_ALLOWED_REPOSITORIES }}
+          DELIVERY_REQUEST_MAX_CYCLES: ${{ vars.DELIVERY_REQUEST_MAX_CYCLES || '12' }}
+        run: node scripts/pump-control-queue.mjs
       - name: Remove shared orchestration runtime
         if: always()
         shell: bash
@@ -210,3 +255,11 @@ jobs:
             /tmp/delivery-orchestrator-runtime-*) rm -rf -- "$DELIVERY_RUNTIME_ROOT" ;;
             *) echo "::error::Refusing to remove unexpected runtime path: $DELIVERY_RUNTIME_ROOT"; exit 1 ;;
           esac
+      - name: Propagate blocked PR ambiguity
+        if: always() && steps.binding.outputs.binding_status == 'ambiguous'
+        run: |
+          echo "::error::Multiple equally plausible open pull requests exist for this issue. Queue item consumed as blocked-pr-ambiguity."
+          exit 1
+      - name: Propagate delivery failure
+        if: always() && steps.binding.outputs.binding_status != 'ambiguous' && steps.delivery.outcome == 'failure'
+        run: exit 1
