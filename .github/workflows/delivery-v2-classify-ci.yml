@@ -1,0 +1,65 @@
+name: Delivery V2 - Classify CI
+
+on:
+  workflow_call:
+    inputs:
+      requested_risk:
+        description: Requested Delivery V2 risk profile (auto|fast|standard|critical).
+        required: false
+        default: auto
+        type: string
+    outputs:
+      risk_profile:
+        description: Effective risk profile after deterministic promotion.
+        value: ${{ jobs.classify.outputs.risk_profile }}
+      ci_mode:
+        description: focused|affected-plus-build|full.
+        value: ${{ jobs.classify.outputs.ci_mode }}
+      audit_required:
+        description: Whether the Delivery V2 policy requires independent AI audit.
+        value: ${{ jobs.classify.outputs.audit_required }}
+      audit_mode:
+        description: Audit mode selected by policy.
+        value: ${{ jobs.classify.outputs.audit_mode }}
+      full_regression_on_pr:
+        description: Whether full regression is required before merge.
+        value: ${{ jobs.classify.outputs.full_regression_on_pr }}
+      full_regression_after_merge:
+        description: Whether full regression is required after merge.
+        value: ${{ jobs.classify.outputs.full_regression_after_merge }}
+      promoted:
+        description: Whether observed risk promoted the requested profile.
+        value: ${{ jobs.classify.outputs.promoted }}
+      changed_paths_json:
+        description: JSON array of changed paths.
+        value: ${{ jobs.classify.outputs.changed_paths_json }}
+      reasons_json:
+        description: JSON array of deterministic classification reasons.
+        value: ${{ jobs.classify.outputs.reasons_json }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  classify:
+    name: Classify Delivery V2 risk
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      risk_profile: ${{ steps.risk.outputs.risk-profile }}
+      ci_mode: ${{ steps.risk.outputs.ci-mode }}
+      audit_required: ${{ steps.risk.outputs.audit-required }}
+      audit_mode: ${{ steps.risk.outputs.audit-mode }}
+      full_regression_on_pr: ${{ steps.risk.outputs.full-regression-on-pr }}
+      full_regression_after_merge: ${{ steps.risk.outputs.full-regression-after-merge }}
+      promoted: ${{ steps.risk.outputs.promoted }}
+      changed_paths_json: ${{ steps.risk.outputs.changed-paths-json }}
+      reasons_json: ${{ steps.risk.outputs.reasons-json }}
+    steps:
+      - name: Classify changed paths deterministically
+        id: risk
+        uses: crgasparoto-br/delivery-orchestrator/actions/delivery-v2-risk@main
+        with:
+          requested-risk: ${{ inputs.requested_risk }}
+          github-token: ${{ github.token }}

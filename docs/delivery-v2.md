@@ -77,6 +77,53 @@ Worker Markdown sources are compiled with pinned `gh-aw v0.88.7` into `.lock.yml
 
 Branch automation compiles changed worker sources and commits generated locks. PR CI recompiles in strict mode and requires zero diff.
 
+## Adaptive CI classification
+
+`actions/delivery-v2-risk` classifies a pull request without invoking an AI model. It reads the PR changed-file list through the GitHub API and delegates the decision to the same `risk-profile.mjs` and `execution-policy.mjs` used by the Delivery V2 planner.
+
+The classifier fails closed:
+
+- a requested profile can keep or increase the observed risk, never reduce it;
+- workflow, migration, authentication/security, finance, database, lockfile and shared/domain changes are critical;
+- unknown paths are critical;
+- a known low-risk web component can remain FAST;
+- empty or unavailable evidence never implies FAST.
+
+The reusable workflow `.github/workflows/delivery-v2-classify-ci.yml` exposes these outputs to caller repositories:
+
+- `risk_profile`;
+- `ci_mode`;
+- `audit_required` and `audit_mode`;
+- `full_regression_on_pr` and `full_regression_after_merge`;
+- `promoted`;
+- `changed_paths_json` and `reasons_json`.
+
+Caller repositories keep their own concrete commands. The central classifier decides **how much CI is required**, not how a product builds or tests itself. This keeps repository-specific commands deterministic and versioned with the product.
+
+### Pilot contract for controle_calorias
+
+The first pilot will call the reusable classifier from the PR workflow and route existing checks according to the returned profile:
+
+```text
+FAST
+  -> affected lint/typecheck
+  -> focused regression tests
+  -> affected build/checks
+
+STANDARD
+  -> affected lint/typecheck/tests
+  -> full build
+  -> focused independent audit when required
+
+CRITICAL
+  -> current full PR regression
+  -> independent audit
+```
+
+The full regression suite remains required after merge for FAST and STANDARD. During the pilot, the existing full path remains available as fallback; no automatic merge is enabled.
+
+Private caller repositories must be allowed to consume the private reusable workflow/action from `delivery-orchestrator` before the pilot is enabled.
+
 ## Execution architecture
 
 ```text
@@ -84,7 +131,8 @@ Issue
   -> deterministic risk plan
   -> exact provider×risk gh-aw worker
   -> safe-output PR
-  -> focused / affected / full deterministic CI
+  -> deterministic adaptive CI classification
+  -> focused / affected / full product CI
   -> optional or required independent audit
   -> exact-head release gate
   -> human merge
@@ -94,8 +142,8 @@ No worker exposes a merge safe output.
 
 ## Migration sequence
 1. **Done:** provider/risk contract, budgets and plan workflow.
-2. **Current:** provider×risk gh-aw workers, deterministic dispatcher and compiled-lock verification.
-3. Add adaptive CI reusable workflows.
+2. **Done:** provider×risk gh-aw workers, deterministic dispatcher and compiled-lock verification.
+3. **Current:** adaptive CI classifier and reusable workflow.
 4. Pilot `controle_calorias` with FAST fixes while V1 remains available.
 5. Migrate SolverFin and training-system after measured improvement.
 6. Retire V1 only after V2 is proven.
