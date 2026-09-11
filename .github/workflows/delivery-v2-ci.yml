@@ -1,0 +1,60 @@
+name: Delivery V2 CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/v2/**'
+      - 'test/v2-*.test.mjs'
+      - 'src/cli.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/delivery-orchestrator-capabilities.json'
+      - '.github/workflows/delivery-v2-*.yml'
+      - 'docs/delivery-v2.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delivery-v2-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    name: V2 foundation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: V2 unit tests
+        run: node --test test/v2-*.test.mjs
+
+      - name: Syntax checks
+        shell: bash
+        run: |
+          node --check src/cli.mjs
+          for file in src/v2/*.mjs; do
+            node --check "$file"
+          done
+
+      - name: Smoke deterministic plan
+        run: >-
+          node src/cli.mjs plan-v2
+          --repo example/repository
+          --issue 1
+          --provider copilot
+          --risk fast
+          --path apps/web/src/components/Example.tsx
