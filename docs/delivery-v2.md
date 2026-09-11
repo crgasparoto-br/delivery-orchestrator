@@ -19,7 +19,7 @@ Configuration:
 - `DELIVERY_AI_PROVIDER` sets the default provider;
 - `DELIVERY_IMPLEMENTER_PROVIDER` optionally overrides the implementation provider;
 - `DELIVERY_AUDITOR_PROVIDER` optionally selects a different audit provider;
-- `DELIVERY_AI_MODEL`, `DELIVERY_IMPLEMENTER_MODEL`, and `DELIVERY_AUDITOR_MODEL` remain plan metadata until model-specific execution routing is enabled.
+- model selectors remain plan metadata until model-specific execution routing is enabled.
 
 Invalid providers fail closed. There is no automatic provider fallback.
 
