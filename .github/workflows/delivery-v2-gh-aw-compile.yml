@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - '.github/workflows/delivery-v2-worker-*.md'
+      - '.github/workflows/delivery-v2-gh-aw-compile.yml'
   workflow_dispatch:
 
 permissions:
@@ -36,16 +37,21 @@ jobs:
       - name: Compile workers in strict mode
         run: gh aw compile --strict
 
-      - name: Commit generated locks
+      - name: Stage generated locks for controlled publication
         shell: bash
         run: |
+          rm -rf .generated/gh-aw
+          mkdir -p .generated/gh-aw
+          for file in .github/workflows/delivery-v2-worker-*.lock.yml; do
+            cp "$file" ".generated/gh-aw/$(basename "$file").txt"
+          done
+          cp .github/aw/actions-lock.json .generated/gh-aw/actions-lock.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/delivery-v2-worker-*.lock.yml
-          if [ -f .github/aw/actions-lock.json ]; then git add .github/aw/actions-lock.json; fi
+          git add .generated/gh-aw
           if git diff --cached --quiet; then
-            echo "Compiled locks already current."
+            echo "Staged compiler artifacts already current."
             exit 0
           fi
-          git commit -m "chore: compile Delivery V2 gh-aw workers"
+          git commit -m "chore: stage compiled Delivery V2 workers"
           git push origin "HEAD:${{ github.ref_name }}"
