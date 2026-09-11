@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: delivery-v2-gh-aw-compile-${{ github.ref }}
@@ -21,11 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout branch
+      - name: Checkout branch with delivery write token
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
+          token: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
 
       - name: Install pinned gh-aw
         uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
