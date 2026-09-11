@@ -1,0 +1,35 @@
+name: Delivery V2 Risk Classifier
+description: Deterministically classifies a pull request into fast, standard, or critical CI.
+inputs:
+  requested-risk:
+    description: Requested risk profile. auto, fast, standard, or critical.
+    required: false
+    default: auto
+  github-token:
+    description: GitHub token with read access to the target pull request.
+    required: true
+  pr-number:
+    description: Pull request number. Defaults to the current pull_request event.
+    required: false
+outputs:
+  risk-profile:
+    description: Effective risk profile.
+  ci-mode:
+    description: CI mode selected by the Delivery V2 policy.
+  audit-required:
+    description: Whether independent AI audit is required by policy.
+  audit-mode:
+    description: Audit mode selected by policy.
+  full-regression-on-pr:
+    description: Whether the full regression suite is required on the PR.
+  full-regression-after-merge:
+    description: Whether full regression is required after merge.
+  promoted:
+    description: Whether the requested profile was promoted because observed risk was higher.
+  changed-paths-json:
+    description: JSON array with all changed paths observed in the pull request.
+  reasons-json:
+    description: JSON array with deterministic classification reasons.
+runs:
+  using: node20
+  main: index.cjs
