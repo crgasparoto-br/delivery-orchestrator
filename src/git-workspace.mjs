@@ -3,9 +3,9 @@ import { runRoleTask } from './role-runtime.mjs';
 
 function githubEnv(token) { return { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: token }; }
 
-export async function cloneForImplementation({ repository, dest, token, roleUser, runRoleTaskFn = runRoleTask }) {
+export async function cloneForImplementation({ repository, dest, token, roleUser, branch, runRoleTaskFn = runRoleTask }) {
   if (!token) throw new Error('DELIVERY_GITHUB_WRITE_TOKEN is required');
-  if (roleUser) await runRoleTaskFn(roleUser, 'clone', { repository, dest, token });
+  if (roleUser) await runRoleTaskFn(roleUser, 'clone', { repository, dest, token, branch });
   else throw new Error('cloneForImplementation requires an isolated roleUser');
   return dest;
 }
