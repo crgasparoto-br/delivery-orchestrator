@@ -1,4 +1,7 @@
 {
   "persistent_control_queue": "v1",
-  "canonical_pr_binding": "v1"
+  "canonical_pr_binding": "v1",
+  "delivery_v2_foundation": "v1",
+  "ai_provider_selection": "codex|claude|copilot",
+  "risk_profiles": "auto|fast|standard|critical"
 }

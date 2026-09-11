@@ -1,9 +1,9 @@
 {
   "name": "delivery-orchestrator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Independent implement-audit-remediate loop for GitHub issues using isolated Codex contexts and Skills.",
+  "description": "GitHub-native delivery control plane with risk-adaptive CI and pluggable AI execution, retaining the independent V1 loop during migration.",
   "engines": { "node": ">=22" },
   "dependencies": {
     "@openai/codex-sdk": "0.144.6"
@@ -11,6 +11,7 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "validate": "node src/cli.mjs validate",
+    "plan:v2": "node src/cli.mjs plan-v2",
     "run": "node src/cli.mjs run"
   }
 }
