@@ -7,6 +7,7 @@ on:
       base_branch: {description: Target base branch, required: true, default: main, type: string}
 permissions:
   contents: read
+  issues: read
   copilot-requests: write
 engine: copilot
 max-turns: 40
@@ -26,7 +27,7 @@ tools:
   bash: true
   github:
     mode: gh-proxy
-    toolsets: [repos, issues, pull_requests]
+    toolsets: [issues]
     github-token: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
     allowed-repos: ["crgasparoto-br/*"]
     min-integrity: approved
@@ -44,8 +45,8 @@ safe-outputs:
 ---
 # Delivery V2 implementation worker
 
-Work only on **${{ github.event.inputs.target_repository }} issue #${{ github.event.inputs.target_issue }}**. The repository is checked out at `${{ github.workspace }}/target`; start there.
+Work only on **${{ github.event.inputs.target_repository }} issue #${{ github.event.inputs.target_issue }}**. Start in `${{ github.workspace }}/target`.
 
 Risk profile: **standard**. AI provider: **copilot**.
 
-Read the target issue and local contributor instructions. Identify the smallest concrete cause before editing. Implement the smallest cohesive fix without unrelated refactoring. Add or update regression coverage when testable. Run affected tests plus the smallest applicable typecheck/build checks; do not run unrelated full regression suites. Never weaken workflow security, expose credentials, bypass protected files, broaden repository access, merge the PR, or close the issue directly. Create exactly one PR whose body includes `Closes #${{ github.event.inputs.target_issue }}` and only validations actually executed. If blocked, report rather than bypass.
+Read the target issue and local repository instructions. Identify the smallest concrete cause before editing. Implement the smallest cohesive fix without unrelated refactoring. Add regression coverage when testable. Run affected tests plus the smallest applicable typecheck/build checks; do not run unrelated full regression suites. Never weaken workflow security, expose credentials, bypass protected files, broaden repository access, merge the PR, or close the issue directly. Create exactly one PR with `Closes #${{ github.event.inputs.target_issue }}` and list only validations actually executed. If blocked, report rather than bypass.

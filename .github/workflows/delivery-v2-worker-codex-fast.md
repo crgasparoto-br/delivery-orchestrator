@@ -7,6 +7,7 @@ on:
       base_branch: {description: Target base branch, required: true, default: main, type: string}
 permissions:
   contents: read
+  issues: read
 engine: codex
 max-turns: 20
 max-ai-credits: 100
@@ -25,7 +26,7 @@ tools:
   bash: true
   github:
     mode: gh-proxy
-    toolsets: [repos, issues, pull_requests]
+    toolsets: [issues]
     github-token: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
     allowed-repos: ["crgasparoto-br/*"]
     min-integrity: approved
@@ -48,4 +49,4 @@ Work only on **${{ github.event.inputs.target_repository }} issue #${{ github.ev
 
 Risk profile: **fast**. AI provider: **codex**.
 
-Read the target issue and local contributor instructions. Identify the smallest concrete cause, implement the smallest cohesive fix, add regression coverage when testable, and run only focused checks directly related to the issue. Do not run the full repository suite. Never weaken workflow security, expose credentials, bypass the FAST file envelope, broaden repository access, merge the PR, or close the issue directly. Create exactly one PR with `Closes #${{ github.event.inputs.target_issue }}` and list validations actually executed. If the fix requires broader scope, stop and report the blocker.
+Read the target issue and local repository instructions. Identify the smallest concrete cause, implement the smallest cohesive fix, add regression coverage when testable, and run only focused checks related to the issue. Do not run the full repository suite. Never weaken workflow security, expose credentials, bypass the FAST file envelope, broaden repository access, merge the PR, or close the issue directly. Create exactly one PR with `Closes #${{ github.event.inputs.target_issue }}` and list only validations actually executed. If broader scope is required, stop and report the blocker.
