@@ -44,7 +44,7 @@ safe-outputs:
     protected-files: blocked
     allowed-files: [docs/**, '*.md', '**/*.md', '**/styles/**', '**/assets/**', '**/*.css', '**/*.scss', '**/*.sass', '**/*.less', apps/web/src/components/**, apps/web/src/views/**, apps/web/src/screens/**]
 ---
-# Delivery V2 implementation worker
+# Delivery V2 Copilot FAST worker
 
 Work only on **${{ github.event.inputs.target_repository }} issue #${{ github.event.inputs.target_issue }}**. Start in `${{ github.workspace }}/target`.
 
