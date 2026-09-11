@@ -35,7 +35,7 @@ async function validate() {
     'skills/catalog/entregar-issue/SKILL.md', 'skills/catalog/auditar-issue/SKILL.md',
     'src/role-runtime-worker.mjs', 'src/pr-release-signal.mjs', 'src/release-finalizer.mjs',
     'src/v2/provider-policy.mjs', 'src/v2/risk-profile.mjs', 'src/v2/execution-policy.mjs',
-    'src/v2/config.mjs', 'src/v2/delivery-plan.mjs'
+    'src/v2/provider-dispatch.mjs', 'src/v2/config.mjs', 'src/v2/delivery-plan.mjs'
   ];
   for (const rel of required) await access(path.join(root, rel));
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));

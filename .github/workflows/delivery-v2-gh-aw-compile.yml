@@ -1,0 +1,50 @@
+name: Delivery V2 - Compile gh-aw
+
+on:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - '.github/workflows/delivery-v2-worker-*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: delivery-v2-gh-aw-compile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Compile provider workers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Install pinned gh-aw
+        uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
+        with:
+          version: v0.88.7
+
+      - name: Compile workers in strict mode
+        run: gh aw compile --strict
+
+      - name: Commit generated locks
+        shell: bash
+        run: |
+          if git diff --quiet -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json 2>/dev/null; then
+            echo "Compiled locks already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/delivery-v2-worker-*.lock.yml
+          if [ -f .github/aw/actions-lock.json ]; then git add .github/aw/actions-lock.json; fi
+          git commit -m "chore: compile Delivery V2 gh-aw workers"
+          git push origin "HEAD:${{ github.ref_name }}"
