@@ -11,7 +11,8 @@ const request = normalizeDeliveryRequest({
   manualInputs: {
     targetRepository: process.env.MANUAL_TARGET_REPOSITORY,
     issueNumber: process.env.MANUAL_ISSUE_NUMBER,
-    maxCycles: process.env.MANUAL_MAX_CYCLES
+    maxCycles: process.env.MANUAL_MAX_CYCLES,
+    controlIssueNumber: process.env.MANUAL_CONTROL_ISSUE_NUMBER
   },
   repositoryOwner: process.env.GITHUB_REPOSITORY_OWNER,
   allowedActorsText: process.env.DELIVERY_REQUEST_ACTORS,
