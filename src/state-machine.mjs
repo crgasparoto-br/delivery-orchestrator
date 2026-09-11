@@ -6,7 +6,8 @@ const ALLOWED = new Map([
   [STATES.REMEDIATING, new Set([STATES.HANDOFF_READY, STATES.BLOCKED_REQUIREMENT, STATES.BLOCKED_EXTERNAL, STATES.FAILED])],
   [STATES.HANDOFF_READY, new Set([STATES.CI_FAILED, STATES.AUDITING, STATES.BLOCKED_EXTERNAL, STATES.FAILED])],
   [STATES.CI_FAILED, new Set([STATES.REMEDIATING, STATES.NO_PROGRESS, STATES.BLOCKED_EXTERNAL, STATES.FAILED])],
-  [STATES.AUDITING, new Set([STATES.COMPLETE, STATES.REMEDIATING, STATES.BLOCKED_EXTERNAL, STATES.NO_PROGRESS, STATES.FAILED])]
+  [STATES.AUDITING, new Set([STATES.COMPLETE, STATES.REMEDIATING, STATES.BLOCKED_EXTERNAL, STATES.NO_PROGRESS, STATES.FAILED])],
+  [STATES.COMPLETE, new Set([STATES.FAILED])]
 ]);
 
 export function transition(state, next, detail = {}) {
@@ -40,6 +41,7 @@ export function initialState({ runId, repository, issueNumber, maxCycles }) {
     ci_fingerprints: [],
     last_ci_failures: [],
     last_audit: null,
+    release_signal: null,
     created_at: now,
     updated_at: now,
     history: []
