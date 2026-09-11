@@ -24,6 +24,13 @@ function int(name, fallback) {
   if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer`);
   return parsed;
 }
+function optionalInt(name) {
+  const value = process.env[name]?.trim();
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer`);
+  return parsed;
+}
 function optionalPath(envName) { const configured = process.env[envName]?.trim(); return configured ? path.resolve(configured) : undefined; }
 
 export function loadConfig(args = {}) {
@@ -61,6 +68,10 @@ export function loadConfig(args = {}) {
     auditorKeyPassword: process.env.AUDITOR_KEY_PASSWORD ?? '',
     auditorKeyId: process.env.AUDITOR_KEY_ID ?? '',
     trustedAuditorsPath: process.env.TRUSTED_AUDITORS_PATH ?? '',
+    boundPullRequest: optionalInt('BOUND_PULL_REQUEST'),
+    boundHeadRef: process.env.BOUND_HEAD_REF?.trim() || undefined,
+    boundHeadSha: process.env.BOUND_HEAD_SHA?.trim() || undefined,
+    reuseExistingPr: process.env.REUSE_EXISTING_PR === 'true',
     runsRoot: process.env.RUNS_ROOT ? path.resolve(process.env.RUNS_ROOT) : path.join(ROOT, 'runs'),
     skillCatalog: process.env.SKILL_CATALOG ? path.resolve(process.env.SKILL_CATALOG) : path.join(ROOT, 'skills', 'catalog'),
     implementerPrompt: path.join(ROOT, 'prompts', 'implementer.md'),
