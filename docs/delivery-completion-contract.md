@@ -25,6 +25,16 @@ The next implementer context receives the exact-head CI failures and must use th
 
 A repeated identical CI failure fingerprint on the same material head is treated as `NO_PROGRESS` rather than consuming audits indefinitely. CI observation timeout or inability to query GitHub is `BLOCKED_EXTERNAL`.
 
+## Human merge release signal
+
+A delivery is not presented as ready for human merge merely because the implementation loop reached `COMPLETE`. Before the CLI returns success, it resolves the current PR for the target issue and revalidates that the PR is still open and that its head SHA exactly matches the independently audited `handoff_head_sha`.
+
+A merge-release signal is published only when the audit result is `approved` or `approved_with_reservations`, `validity=independent`, and `release_gate_satisfied=true`. The orchestrator then creates or updates one idempotent PR conversation comment containing the audit verdict, `material_head_sha`, validated `handoff_head_sha`, and the explicit state `ready-for-human-merge`.
+
+The signal is valid only for that exact PR head. Any later commit invalidates it and requires another independent audit. If the PR cannot be resolved unambiguously, is no longer open, has moved to a different head, or the release comment cannot be published, the final run state is changed from `COMPLETE` to `FAILED` and the release signal evidence records the reason. The workflow therefore cannot report success while the visible merge authorization is stale or absent.
+
+This signal is informational authorization for a human merge. It never performs the merge itself.
+
 ## Outer workflow completion
 
 `orquestrar-entrega` is the external controller and has a narrow polling exception: after correlating a single `Independent delivery loop` run, it follows that same run until terminal. It does not dispatch a second run while the correlated one is active.
