@@ -15,7 +15,8 @@ test('canonical Delivery V2 manifest is structurally valid', () => {
   assert.equal(result.ok, true, result.errors.join('\n'));
   assert.equal(result.total >= 16, true);
   assert.equal(result.complete, false);
-  assert.ok(result.incompleteRequired.includes('DV2-006'));
+  assert.equal(result.incompleteRequired.includes('DV2-006'), false);
+  assert.ok(result.incompleteRequired.includes('DV2-007'));
   assert.ok(result.incompleteRequired.includes('DV2-014'));
 });
 
