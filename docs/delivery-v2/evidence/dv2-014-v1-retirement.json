@@ -3,6 +3,7 @@
   "requirement": "DV2-014",
   "pullRequestNumber": 58,
   "baseMainSha": "65364eae35ed4889c9a62d09116056dff5da05d4",
+  "materialHeadSha": "298ec6b1af23f9ddc14c95447926364a2150e753",
   "decision": "retire-v1-active-paths",
   "openLegacyControlIssuesAtRetirement": 0,
   "v2DefaultEntrypoint": ".github/workflows/delivery-v2-dispatch.yml",
@@ -46,7 +47,8 @@
   ],
   "validation": {
     "test": "test/v2-retirement.test.mjs",
-    "exactHeadCiRunId": null,
-    "status": "awaiting-exact-head-ci"
+    "exactHeadCiRunId": 34704146442,
+    "conclusion": "success",
+    "status": "validated"
   }
 }
