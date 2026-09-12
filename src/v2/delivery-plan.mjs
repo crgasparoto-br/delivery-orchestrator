@@ -1,5 +1,6 @@
 import { DELIVERY_V2_AUDIT_SCHEMA_VERSION } from './audit-contract.mjs';
 import { executionPolicyFor } from './execution-policy.mjs';
+import { DELIVERY_V2_RELEASE_GATE_SCHEMA_VERSION, DELIVERY_V2_RELEASE_STATUS_NAME } from './release-gate.mjs';
 import { resolveImplementationWorkflow } from './provider-dispatch.mjs';
 import { resolveRiskProfile } from './risk-profile.mjs';
 
@@ -38,6 +39,14 @@ export function createDeliveryPlan(config) {
       mode: policy.ciMode,
       fullRegressionOnPr: policy.fullRegressionOnPr,
       fullRegressionAfterMerge: policy.fullRegressionAfterMerge
+    },
+    release: {
+      contractSchemaVersion: DELIVERY_V2_RELEASE_GATE_SCHEMA_VERSION,
+      requiredStatusName: DELIVERY_V2_RELEASE_STATUS_NAME,
+      exactRemoteHeadRequired: true,
+      evidenceReferencesOnly: true,
+      createsResultOnlyCommit: false,
+      automaticMergeAllowed: false
     },
     escalation: policy.escalation,
     controls: {
