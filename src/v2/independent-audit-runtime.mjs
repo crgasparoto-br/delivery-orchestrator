@@ -3,8 +3,16 @@ import { buildAuditRequest, evaluateAuditOutcome } from './audit-contract.mjs';
 
 export const DELIVERY_V2_CRITICAL_AUDIT_PILOT_MARKER = 'DV2-AUDIT-PILOT: critical';
 export const DELIVERY_V2_CODEX_AUDITOR_IDENTITY = 'delivery-v2-auditor-codex-critical';
+export const DELIVERY_V2_SOURCE_WORKFLOW_NAME = 'Delivery V2 CI';
+export const DELIVERY_V2_SOURCE_WORKFLOW_EVENT = 'pull_request';
+export const DELIVERY_V2_SOURCE_WORKFLOW_PATH = '.github/workflows/delivery-v2-ci.yml';
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
+
+function requiredObject(value, label) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be an object`);
+  return value;
+}
 
 function requiredString(value, label) {
   const resolved = String(value ?? '').trim();
@@ -23,6 +31,18 @@ function requiredSha(value, label) {
   return sha;
 }
 
+function assertSameString(actual, expected, label) {
+  if (requiredString(actual, label) !== requiredString(expected, `expected ${label}`)) {
+    throw new Error(`${label} does not match the audited pull request`);
+  }
+}
+
+function assertSameSha(actual, expected, label) {
+  if (requiredSha(actual, label) !== requiredSha(expected, `expected ${label}`)) {
+    throw new Error(`${label} does not match the audited pull request`);
+  }
+}
+
 export function isCriticalAuditPilot(pullRequest) {
   return String(pullRequest?.body ?? '').split(/\r?\n/).some((line) => line.trim() === DELIVERY_V2_CRITICAL_AUDIT_PILOT_MARKER);
 }
@@ -38,6 +58,61 @@ export function assertTrustedCriticalAuditPilot(pullRequest, repository) {
   return pullRequest;
 }
 
+export function assertTrustedSourceWorkflowRun(sourceWorkflowRun, repository, pullRequest, sourceWorkflowDefinition) {
+  const run = requiredObject(sourceWorkflowRun, 'sourceWorkflowRun');
+  const pr = requiredObject(pullRequest, 'pullRequest');
+  const definition = requiredObject(sourceWorkflowDefinition, 'sourceWorkflowDefinition');
+  const expectedRepository = requiredString(repository, 'repository');
+  const materialHeadSha = requiredSha(pr.head?.sha, 'pullRequest.head.sha');
+
+  if (requiredString(run.name, 'sourceWorkflowRun.name') !== DELIVERY_V2_SOURCE_WORKFLOW_NAME) {
+    throw new Error(`source workflow must be ${DELIVERY_V2_SOURCE_WORKFLOW_NAME}`);
+  }
+  if (requiredString(run.event, 'sourceWorkflowRun.event').toLowerCase() !== DELIVERY_V2_SOURCE_WORKFLOW_EVENT) {
+    throw new Error(`source workflow event must be ${DELIVERY_V2_SOURCE_WORKFLOW_EVENT}`);
+  }
+  if (requiredString(run.repository?.full_name, 'sourceWorkflowRun.repository.full_name') !== expectedRepository) {
+    throw new Error(`source workflow repository must be ${expectedRepository}`);
+  }
+  if (requiredSha(run.head_sha, 'sourceWorkflowRun.head_sha') !== materialHeadSha) {
+    throw new Error('source workflow is stale for the PR material head');
+  }
+  if (run.status !== 'completed' || run.conclusion !== 'success') {
+    throw new Error('source workflow must be terminal green before independent audit');
+  }
+
+  const runWorkflowId = requiredPositiveInteger(run.workflow_id, 'sourceWorkflowRun.workflow_id');
+  const definitionWorkflowId = requiredPositiveInteger(definition.id, 'sourceWorkflowDefinition.id');
+  if (runWorkflowId !== definitionWorkflowId) throw new Error('source workflow_id does not match the resolved workflow definition');
+  if (requiredString(definition.name, 'sourceWorkflowDefinition.name') !== DELIVERY_V2_SOURCE_WORKFLOW_NAME) {
+    throw new Error(`resolved workflow definition must be ${DELIVERY_V2_SOURCE_WORKFLOW_NAME}`);
+  }
+  if (requiredString(definition.path, 'sourceWorkflowDefinition.path') !== DELIVERY_V2_SOURCE_WORKFLOW_PATH) {
+    throw new Error(`resolved workflow definition must use ${DELIVERY_V2_SOURCE_WORKFLOW_PATH}`);
+  }
+  if (requiredString(run.path, 'sourceWorkflowRun.path') !== DELIVERY_V2_SOURCE_WORKFLOW_PATH) {
+    throw new Error(`source workflow run must use ${DELIVERY_V2_SOURCE_WORKFLOW_PATH}`);
+  }
+  if (definition.state != null && requiredString(definition.state, 'sourceWorkflowDefinition.state').toLowerCase() !== 'active') {
+    throw new Error('source workflow definition must be active');
+  }
+
+  assertSameString(run.head_branch, pr.head?.ref, 'sourceWorkflowRun.head_branch');
+  if (!Array.isArray(run.pull_requests) || run.pull_requests.length !== 1) {
+    throw new Error('source workflow must be bound to exactly one pull request');
+  }
+  const binding = requiredObject(run.pull_requests[0], 'sourceWorkflowRun.pull_requests[0]');
+  if (requiredPositiveInteger(binding.number, 'sourceWorkflowRun.pull_requests[0].number') !== requiredPositiveInteger(pr.number, 'pullRequest.number')) {
+    throw new Error('source workflow pull request number does not match the audited pull request');
+  }
+  assertSameString(binding.head?.ref, pr.head?.ref, 'source workflow PR head ref');
+  assertSameSha(binding.head?.sha, pr.head?.sha, 'source workflow PR head SHA');
+  assertSameString(binding.base?.ref, pr.base?.ref, 'source workflow PR base ref');
+  assertSameSha(binding.base?.sha, pr.base?.sha, 'source workflow PR base SHA');
+
+  return run;
+}
+
 export function fingerprintClassifierSource(source) {
   return createHash('sha256').update(requiredString(source, 'classifier source')).digest('hex');
 }
@@ -48,19 +123,15 @@ export function buildGithubNativeCriticalAuditRequest({
   pullRequest,
   changedPaths,
   sourceWorkflowRun,
+  sourceWorkflowDefinition,
   classifierSource,
   implementationAttempt = 1
 } = {}) {
   if (!pullRequest || typeof pullRequest !== 'object') throw new Error('pullRequest is required');
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) throw new Error('changedPaths must be a non-empty array');
-  if (!sourceWorkflowRun || typeof sourceWorkflowRun !== 'object') throw new Error('sourceWorkflowRun is required');
 
   const materialHeadSha = requiredSha(pullRequest.head?.sha, 'pullRequest.head.sha');
-  const runHeadSha = requiredSha(sourceWorkflowRun.head_sha, 'sourceWorkflowRun.head_sha');
-  if (runHeadSha !== materialHeadSha) throw new Error('source workflow is stale for the PR material head');
-  if (sourceWorkflowRun.status !== 'completed' || sourceWorkflowRun.conclusion !== 'success') {
-    throw new Error('source workflow must be terminal green before independent audit');
-  }
+  assertTrustedSourceWorkflowRun(sourceWorkflowRun, repository, pullRequest, sourceWorkflowDefinition);
 
   const mergePreviewSha = SHA_RE.test(String(pullRequest.merge_commit_sha ?? ''))
     ? String(pullRequest.merge_commit_sha).toLowerCase()
@@ -85,7 +156,7 @@ export function buildGithubNativeCriticalAuditRequest({
       fingerprint: fingerprintClassifierSource(classifierSource)
     },
     checks: [{
-      name: requiredString(sourceWorkflowRun.name, 'sourceWorkflowRun.name'),
+      name: DELIVERY_V2_SOURCE_WORKFLOW_NAME,
       required: true,
       scope: 'material-head',
       subjectSha: materialHeadSha,

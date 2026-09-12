@@ -115,11 +115,20 @@ async function main() {
   const pullRequest = await resolvePilotPullRequest({ repository, headBranch, headSha, token: githubToken });
   const sourceWorkflowRun = await fetchJson(`https://api.github.com/repos/${repository}/actions/runs/${sourceWorkflowRunId}`, githubToken);
   if (String(sourceWorkflowRun.head_sha).toLowerCase() !== headSha) throw new Error('source workflow head does not match requested audit head');
+  const sourceWorkflowDefinition = await fetchJson(`https://api.github.com/repos/${repository}/actions/workflows/${sourceWorkflowRun.workflow_id}`, githubToken);
   const changedPaths = await fetchChangedPaths(repository, pullRequest.number, githubToken);
   const classifierSource = await fetchFileAtRef(repository, 'src/v2/risk-profile.mjs', headSha, githubToken);
   const diffText = await fetchText(`https://api.github.com/repos/${repository}/pulls/${pullRequest.number}`, githubToken, 'application/vnd.github.v3.diff');
   const contractText = await readFile(new URL('../docs/delivery-v2/MASTER_SPEC.md', import.meta.url), 'utf8');
-  const request = buildGithubNativeCriticalAuditRequest({ repository, issueNumber, pullRequest, changedPaths, sourceWorkflowRun, classifierSource });
+  const request = buildGithubNativeCriticalAuditRequest({
+    repository,
+    issueNumber,
+    pullRequest,
+    changedPaths,
+    sourceWorkflowRun,
+    sourceWorkflowDefinition,
+    classifierSource
+  });
 
   let bundle;
   try {
