@@ -1,0 +1,122 @@
+import assert from 'node:assert/strict';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+
+import {
+  compareAgainstBaseline,
+  createDeliveryMetrics,
+  loadDeliveryMetricsStore,
+  summarizeDeliveryMetrics,
+  upsertDeliveryMetrics
+} from '../src/v2/metrics.mjs';
+
+const SHA_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const SHA_B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+function metricsInput(overrides = {}) {
+  return {
+    repository: 'acme/example',
+    issueNumber: 41,
+    pullRequestNumber: 42,
+    materialHeadSha: SHA_A,
+    risk: 'fast',
+    provider: 'codex',
+    classifier: { version: 'v2', fingerprint: 'fp-1' },
+    providerCalls: 1,
+    attempts: { implementation: 1, audit: 0 },
+    aiUsage: { turns: 2, credits: 1.5, inputTokens: 100, outputTokens: 50 },
+    providerCost: { amount: 0.12, currency: 'usd' },
+    durationsMs: { ciQueue: 1000, ciExecution: 30000, audit: 0, endToEnd: 45000 },
+    terminalReason: 'ready-for-human-merge',
+    change: { files: 2, additions: 10, deletions: 4 },
+    escalated: false,
+    evidenceRefs: ['github:run/1'],
+    ...overrides
+  };
+}
+
+test('normalizes all required delivery metrics and derives safe totals', () => {
+  const record = createDeliveryMetrics(metricsInput());
+  assert.equal(record.deliveryId, `acme/example#42@${SHA_A}`);
+  assert.equal(record.aiUsage.totalTokens, 150);
+  assert.equal(record.providerCost.currency, 'USD');
+  assert.equal(record.change.linesChanged, 14);
+  assert.equal(record.durationsMs.endToEnd, 45000);
+});
+
+test('provider cost contract rejects extra fields that could carry provider-sensitive secrets', () => {
+  assert.throws(() => createDeliveryMetrics(metricsInput({
+    providerCost: { amount: 0.12, currency: 'USD', apiKey: 'secret' }
+  })), /unsupported field/);
+});
+
+test('metrics allow unavailable token and cost values without inventing zeros', () => {
+  const record = createDeliveryMetrics(metricsInput({ aiUsage: {}, providerCost: null }));
+  assert.equal(record.aiUsage.totalTokens, null);
+  assert.equal(record.aiUsage.turns, null);
+  assert.equal(record.providerCost.available, false);
+  assert.equal(record.providerCost.amount, null);
+});
+
+test('explicit token total must reconcile with input plus output tokens', () => {
+  assert.throws(() => createDeliveryMetrics(metricsInput({
+    aiUsage: { inputTokens: 100, outputTokens: 50, totalTokens: 999 }
+  })), /must equal inputTokens \+ outputTokens/);
+});
+
+test('summary produces comparable repository/risk/provider groups with percentiles and cost totals', () => {
+  const first = createDeliveryMetrics(metricsInput());
+  const second = createDeliveryMetrics(metricsInput({
+    pullRequestNumber: 43,
+    materialHeadSha: SHA_B,
+    durationsMs: { ciQueue: 500, ciExecution: 10000, audit: 0, endToEnd: 15000 },
+    providerCost: { amount: 0.08, currency: 'USD' }
+  }));
+  const summary = summarizeDeliveryMetrics([first, second]);
+  const group = summary.byRepositoryRiskProvider['acme/example|fast|codex'];
+
+  assert.equal(summary.totalDeliveries, 2);
+  assert.equal(group.deliveries, 2);
+  assert.equal(group.endToEndMs.avg, 30000);
+  assert.equal(group.endToEndMs.p50, 15000);
+  assert.equal(group.endToEndMs.p95, 45000);
+  assert.equal(group.providerCostTotals.USD, 0.2);
+});
+
+test('baseline comparison derives reduction and speedup from measured end-to-end time', () => {
+  const comparison = compareAgainstBaseline(createDeliveryMetrics(metricsInput({
+    durationsMs: { ciQueue: 1000, ciExecution: 100000, audit: 0, endToEnd: 128000 }
+  })), 1255000);
+
+  assert.ok(comparison.reductionPercent > 89);
+  assert.ok(comparison.speedup > 9);
+});
+
+test('metrics store upsert is idempotent per repository/PR/material SHA', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dv2-metrics-'));
+  const filePath = join(dir, 'metrics.json');
+  const first = createDeliveryMetrics(metricsInput());
+  await upsertDeliveryMetrics(filePath, first);
+  await upsertDeliveryMetrics(filePath, first);
+  let store = await loadDeliveryMetricsStore(filePath);
+  assert.equal(store.records.length, 1);
+
+  const updated = createDeliveryMetrics(metricsInput({ providerCalls: 2, terminalReason: 'terminal' }));
+  await upsertDeliveryMetrics(filePath, updated);
+  store = await loadDeliveryMetricsStore(filePath);
+  assert.equal(store.records.length, 1);
+  assert.equal(store.records[0].providerCalls, 2);
+  assert.equal(store.records[0].terminalReason, 'terminal');
+});
+
+test('metrics reject unsupported risk and negative timing/cost inputs', () => {
+  assert.throws(() => createDeliveryMetrics(metricsInput({ risk: 'tiny' })), /Unknown risk profile/);
+  assert.throws(() => createDeliveryMetrics(metricsInput({
+    durationsMs: { ciQueue: -1, ciExecution: 1, audit: 0, endToEnd: 1 }
+  })), /non-negative integer/);
+  assert.throws(() => createDeliveryMetrics(metricsInput({
+    providerCost: { amount: -0.01, currency: 'USD' }
+  })), /non-negative finite number/);
+});

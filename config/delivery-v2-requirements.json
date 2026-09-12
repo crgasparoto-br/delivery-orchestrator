@@ -221,11 +221,18 @@
     {
       "id": "DV2-011",
       "title": "Observability, token/cost accounting and performance SLO evidence",
-      "status": "planned",
+      "status": "implemented",
       "requiredForV2Default": true,
       "summary": "Every delivery records provider calls, turns/credits, attempts, CI duration, audit duration, end-to-end duration and terminal reason so V2 can be optimized from evidence.",
-      "implementationRefs": [],
-      "validationRefs": [],
+      "implementationRefs": [
+        "file:src/v2/metrics.mjs",
+        "file:schemas/delivery-v2-metrics.schema.json",
+        "file:src/cli.mjs",
+        "file:package.json"
+      ],
+      "validationRefs": [
+        "file:test/v2-metrics.test.mjs"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },

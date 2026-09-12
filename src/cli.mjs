@@ -10,6 +10,7 @@ import { verifySynchronizedSkillCatalog } from './skill-catalog-sync.mjs';
 import { loadV2Config } from './v2/config.mjs';
 import { createDeliveryPlan } from './v2/delivery-plan.mjs';
 import { resumePersistentDelivery } from './v2/persistent-state.mjs';
+import { loadDeliveryMetricsStore, summarizeDeliveryMetrics } from './v2/metrics.mjs';
 
 function parseArgs(argv) {
   const out = { changedPaths: [] };
@@ -27,6 +28,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--pr') out.pullRequestNumber = argv[++i];
     else if (argv[i] === '--head-ref') out.headRef = argv[++i];
     else if (argv[i] === '--remote-head') out.remoteHeadSha = argv[++i];
+    else if (argv[i] === '--metrics-file') out.metricsFile = argv[++i];
     else if (argv[i] === '--path') out.changedPaths.push(argv[++i]);
   }
   return out;
@@ -41,7 +43,8 @@ async function validate() {
     'src/role-runtime-worker.mjs', 'src/pr-release-signal.mjs', 'src/release-finalizer.mjs',
     'src/v2/provider-policy.mjs', 'src/v2/risk-profile.mjs', 'src/v2/execution-policy.mjs',
     'src/v2/provider-dispatch.mjs', 'src/v2/config.mjs', 'src/v2/delivery-plan.mjs',
-    'src/v2/release-gate.mjs', 'src/v2/persistent-state.mjs', 'schemas/delivery-v2-persistent-state.schema.json'
+    'src/v2/release-gate.mjs', 'src/v2/persistent-state.mjs', 'schemas/delivery-v2-persistent-state.schema.json',
+    'src/v2/metrics.mjs', 'schemas/delivery-v2-metrics.schema.json'
   ];
   for (const rel of required) await access(path.join(root, rel));
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -69,6 +72,11 @@ else if (command === 'plan-v2') {
     }
   });
   console.log(JSON.stringify(result, null, 2));
+} else if (command === 'metrics-v2') {
+  const args = parseArgs(rest);
+  if (!args.metricsFile) throw new Error('metrics-v2 requires --metrics-file');
+  const store = await loadDeliveryMetricsStore(path.resolve(args.metricsFile));
+  console.log(JSON.stringify(summarizeDeliveryMetrics(store.records), null, 2));
 } else if (command === 'run') {
   const config = loadConfig(parseArgs(rest));
   const executor = new CodexExecutor({
