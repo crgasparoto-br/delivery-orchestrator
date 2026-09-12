@@ -36,17 +36,6 @@ jobs:
       - name: Compile workers in strict mode
         run: gh aw compile --strict
 
-      - name: Upload compiled locks
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: delivery-v2-compiled-workers-${{ github.run_id }}
-          path: |
-            .github/workflows/delivery-v2-worker-*.lock.yml
-            .github/aw/actions-lock.json
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Verify canonical locks are synchronized
         shell: bash
         run: git diff --exit-code -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
