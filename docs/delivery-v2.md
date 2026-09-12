@@ -71,7 +71,7 @@ Metrics preserve unknown values as `null`; a provider that does not report token
 
 ## Deterministic work deduplication
 
-`Delivery V2 CI` executes `verify:v2:complete` once; it no longer repeats the non-strict completeness/target pass first. Worker source compilation is delegated to one dedicated PR workflow, `Delivery V2 - Compile gh-aw`, rather than being repeated inside platform CI.
+`Delivery V2 CI` remains the trusted automatic exact-head gate. It runs `verify:v2` for the regular completeness + target-policy checks and `verify:v2:complete` only for the additional strict terminal-completeness assertion, so the target-policy scan is not repeated. The same trusted CI performs the single automatic `gh-aw` compile. `Delivery V2 - Compile gh-aw` is manual preflight only and cannot create a second automatic compile for a PR.
 
 ## V1 retirement
 
@@ -82,7 +82,8 @@ V1 remains retired. No active `delivery-request`, `max_cycles`, recursive contro
 ```bash
 npm test
 npm run validate
+npm run verify:v2
 npm run verify:v2:complete
 ```
 
-The terminal V2 contract remains protected by the completeness gate and `test/v2-retirement.test.mjs`.
+The terminal V2 contract remains protected by the strict completeness gate and `test/v2-retirement.test.mjs`.
