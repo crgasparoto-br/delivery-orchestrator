@@ -132,7 +132,7 @@ Exit condition: `ready-for-human-merge` can be derived entirely from current Git
 
 ### DV2-016 — Persistent resumable delivery state
 
-Status: **implemented; validation pending live cross-process resume exercise**.
+Status: **validated**.
 
 Required work:
 
@@ -151,7 +151,9 @@ Implementation evidence:
 - remote PR/head identity is re-read at resume time and a fresher remote head invalidates candidate-bound evidence and returns to `queued`;
 - `npm run resume:v2 -- --state-file ... --repo ... --pr ... --head-ref ... --remote-head ...` exposes the resume command/API and requires fresh GitHub identity as input.
 
-Exit condition: another process/chat can resume the same PR using repository/GitHub state only. Live cross-process exercise still required before `validated`.
+Validation evidence: PR #39 at material head `da06036d42a2a8b4fe28eb55e00cd1793b4e6b24` was resumed from durable state by two distinct Node processes using fresh GitHub PR/head identity; both independently derived `run-audit`. The machine-readable evidence is stored in `docs/delivery-v2/evidence/dv2-016-live-resume.json`.
+
+Exit condition: another process/chat can resume the same PR using repository/GitHub state only. **Satisfied.**
 
 ### DV2-011 — Observability and cost accounting
 
@@ -271,12 +273,11 @@ That means every required item below is terminal:
 
 Unless a production incident changes priority, continue in this order:
 
-1. validate DV2-016 with a live cross-process resume exercise
-2. validate DV2-011 with measured live deliveries
-3. validate DV2-008 with a real CRITICAL pilot
-4. validate DV2-009 with bounded CI/audit remediation evidence
-5. validate DV2-010 with a live exact-head release exercise
-6. close DV2-013
-7. DV2-014
+1. validate DV2-011 with measured live deliveries
+2. validate DV2-008 with a real CRITICAL pilot
+3. validate DV2-009 with bounded CI/audit remediation evidence
+4. validate DV2-010 with a live exact-head release exercise
+5. close DV2-013
+6. DV2-014
 
 Every PR should name the `DV2-*` IDs it advances and update the manifest only when the evidence justifies the new status.

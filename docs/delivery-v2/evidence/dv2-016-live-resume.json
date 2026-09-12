@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "requirement": "DV2-016",
+  "exercise": "live-cross-process-resume",
+  "repository": "crgasparoto-br/delivery-orchestrator",
+  "pullRequestNumber": 39,
+  "headRef": "feat/27-dv2-011-observability",
+  "materialHeadSha": "da06036d42a2a8b4fe28eb55e00cd1793b4e6b24",
+  "githubEvidence": {
+    "pullRequest": "github:delivery-orchestrator#39",
+    "workflowRunId": 34668025047,
+    "workflowName": "Delivery V2 CI",
+    "workflowConclusion": "success"
+  },
+  "persistedState": {
+    "status": "audit-pending",
+    "nextActionExpected": "run-audit",
+    "stateSha256": "31d1caf206ea2ebf7b012203a488fd52b15f66ba21e1af9263ec960ce34f36ea"
+  },
+  "resumeProcesses": [
+    {
+      "processId": 4227,
+      "staleStateDetected": false,
+      "nextAction": "run-audit",
+      "materialHeadSha": "da06036d42a2a8b4fe28eb55e00cd1793b4e6b24",
+      "status": "audit-pending",
+      "outputSha256": "4b29a647462cbe67f4d9544570bd6a5ccf6d3c751c42db1eaf394cdfef466b49"
+    },
+    {
+      "processId": 4239,
+      "staleStateDetected": false,
+      "nextAction": "run-audit",
+      "materialHeadSha": "da06036d42a2a8b4fe28eb55e00cd1793b4e6b24",
+      "status": "audit-pending",
+      "outputSha256": "a0de9c13307cf9fcc44f5e979a3495f9f2c192130ffd9b2235add05f6970d787"
+    }
+  ],
+  "result": "validated",
+  "conclusion": "Two distinct Node processes resumed the same real PR candidate from durable state plus fresh GitHub PR/head identity and independently derived the same next action without conversational reconstruction."
+}
