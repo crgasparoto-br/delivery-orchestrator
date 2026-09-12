@@ -37,7 +37,9 @@
   ],
   "retainedForTraceability": [
     ".audit/entregar-issue/**",
-    "skills/catalog/**"
+    "skills/catalog/**",
+    "docs/delivery-v2/history/v1/trusted-auditors.json",
+    "docs/delivery-v2/history/v1/skills-catalog-sync-manifest.json"
   ],
   "postRetirementHardening": {
     "issueNumber": 59,
@@ -55,10 +57,32 @@
       "persistent delivery queue"
     ]
   },
+  "finalCleanup": {
+    "issueNumber": 61,
+    "removedResidualPaths": [
+      "scripts/generate-auditor-trust.sh",
+      "skills/catalog.sync-manifest.json",
+      "trust/trusted-auditors.json"
+    ],
+    "archivedResidualMetadata": {
+      "trustedAuditors": "docs/delivery-v2/history/v1/trusted-auditors.json",
+      "skillCatalogSyncManifest": "docs/delivery-v2/history/v1/skills-catalog-sync-manifest.json"
+    },
+    "archivedResidualMetadataRuntimeActive": false,
+    "capabilityManifestSchemaVersion": 2,
+    "activeRuntimeMarkerScan": true,
+    "normalPathProof": "structural-entrypoints",
+    "lexicalScannerIsSecurityBoundary": false,
+    "ghAwUsageArtifactContract": true
+  },
   "invariants": [
     "normal delivery no longer accepts delivery-request control issues",
     "normal delivery no longer exposes max_cycles or a recursive implement-audit loop",
     "normal delivery no longer requires nested Skills or .audit/entregar-issue certificates",
+    "all active GitHub workflow, package-command and repository-local action entrypoints are explicitly Delivery V2 and have no concrete dependency on historical V1 roots",
+    "lexical marker checks are regression tripwires for the current candidate, not a security boundary or a universal JavaScript static analyzer",
+    "V1 trust and Skill snapshot verification metadata is retained only under docs/delivery-v2/history/v1 for historical verification",
+    "compiled gh-aw workers retain raw usage artifacts for token and AI-credit observability",
     "Delivery V2 remains bounded by deterministic risk, CI, audit and remediation policy"
   ],
   "validation": {

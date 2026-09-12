@@ -85,6 +85,8 @@ Delivery metrics preserve provider usage when available:
 - CI/audit/end-to-end duration;
 - change size, terminal reason and escalation.
 
+Every compiled implementation worker must retain the native `gh-aw` usage payloads (`/tmp/gh-aw/usage/agent_usage.json` and `.jsonl`) in its generated contract. Those artifacts are the raw provider telemetry source for real token/AI-credit analysis; the repository regression suite checks their presence across all provider/risk workers so a compiler upgrade cannot silently remove cost visibility.
+
 Summaries aggregate usage by repository/risk/provider and by stage when stage telemetry exists. Missing token/credit/cost telemetry remains unknown/null; it is never silently converted to zero. This distinction is required before using the data to tune worker budgets.
 
 The first measured FAST pilot in `controle_calorias` observed approximately 128 seconds versus an earlier approximately 1,255-second full baseline (~89.8% reduction, ~9.8x faster). This is evidence, not a universal SLA.
@@ -97,7 +99,8 @@ Post-completion hardening keeps the following invariants continuously enforced:
 
 - no active `delivery-request`/`max_cycles`/recursive V1 runtime returns;
 - historical `.audit/entregar-issue/**` and `skills/catalog/**` material remains traceability-only;
-- compiled workers stay synchronized with their Markdown sources;
+- active executable surfaces do not depend on those historical snapshot trees;
+- compiled workers stay synchronized with their Markdown sources and retain raw usage telemetry;
 - token/credit telemetry remains explicit and comparable;
 - risk classification remains fail-closed.
 

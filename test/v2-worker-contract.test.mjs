@@ -8,11 +8,25 @@ const policy = {
   critical: { turns: 80, credits: 500 }
 };
 
+function usageArtifactUploadBlock(lockBody) {
+  const usageNameIndex = lockBody.indexOf('\n          name: usage\n');
+  assert.notEqual(usageNameIndex, -1, 'compiled worker must define the usage artifact');
+  const stepStart = lockBody.lastIndexOf('\n      - name:', usageNameIndex);
+  assert.notEqual(stepStart, -1, 'usage artifact must belong to a workflow step');
+  const nextStep = lockBody.indexOf('\n      - name:', usageNameIndex);
+  const block = lockBody.slice(stepStart, nextStep === -1 ? lockBody.length : nextStep);
+  assert.match(block, /uses: actions\/upload-artifact@/);
+  assert.match(block, /with:\s*\n\s+name: usage\s*\n\s+path: \|/);
+  return block;
+}
+
 for (const provider of ['copilot', 'codex', 'claude']) {
   for (const risk of ['fast', 'standard', 'critical']) {
     test(`worker contract ${provider}/${risk}`, async () => {
       const file = `.github/workflows/delivery-v2-worker-${provider}-${risk}.md`;
+      const lockFile = `.github/workflows/delivery-v2-worker-${provider}-${risk}.lock.yml`;
       const body = await readFile(file, 'utf8');
+      const lockBody = await readFile(lockFile, 'utf8');
       assert.match(body, new RegExp(`engine: ${provider}`));
       assert.match(body, new RegExp(`max-turns: ${policy[risk].turns}`));
       assert.match(body, new RegExp(`max-ai-credits: ${policy[risk].credits}`));
@@ -28,6 +42,9 @@ for (const provider of ['copilot', 'codex', 'claude']) {
       assert.match(body, /\.generated\/\*\*/);
       assert.match(body, /compiled `\*\.lock\.yml`/);
       assert.match(body, /issue-relevant source\/test\/docs paths/);
+      const usageUpload = usageArtifactUploadBlock(lockBody);
+      assert.match(usageUpload, /\/tmp\/gh-aw\/usage\/agent_usage\.json(?:\n|$)/);
+      assert.match(usageUpload, /\/tmp\/gh-aw\/usage\/agent_usage\.jsonl(?:\n|$)/);
       if (risk === 'fast') assert.match(body, /allowed-files:/);
       else assert.doesNotMatch(body, /allowed-files:/);
     });
