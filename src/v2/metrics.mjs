@@ -6,6 +6,7 @@ export const DELIVERY_V2_METRICS_SCHEMA_VERSION = 1;
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const COST_KEYS = new Set(['available', 'amount', 'currency']);
+const USAGE_KEYS = new Set(['turns', 'credits', 'inputTokens', 'outputTokens', 'totalTokens']);
 
 function requireObject(value, label) {
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be an object`);
@@ -66,22 +67,38 @@ function normalizeProviderCost(value) {
   });
 }
 
-function normalizeAiUsage(value = {}) {
-  const usage = requireObject(value, 'aiUsage');
-  const inputTokens = requireInteger(usage.inputTokens, 'aiUsage.inputTokens', { nullable: true });
-  const outputTokens = requireInteger(usage.outputTokens, 'aiUsage.outputTokens', { nullable: true });
-  const explicitTotal = requireInteger(usage.totalTokens, 'aiUsage.totalTokens', { nullable: true });
+function normalizeAiUsage(value = {}, label = 'aiUsage') {
+  const usage = requireObject(value, label);
+  for (const key of Object.keys(usage)) {
+    if (!USAGE_KEYS.has(key)) throw new Error(`${label} contains unsupported field: ${key}`);
+  }
+  const inputTokens = requireInteger(usage.inputTokens, `${label}.inputTokens`, { nullable: true });
+  const outputTokens = requireInteger(usage.outputTokens, `${label}.outputTokens`, { nullable: true });
+  const explicitTotal = requireInteger(usage.totalTokens, `${label}.totalTokens`, { nullable: true });
   const derivedTotal = inputTokens == null && outputTokens == null ? null : (inputTokens ?? 0) + (outputTokens ?? 0);
   if (explicitTotal != null && derivedTotal != null && explicitTotal !== derivedTotal) {
-    throw new Error('aiUsage.totalTokens must equal inputTokens + outputTokens when both are available');
+    throw new Error(`${label}.totalTokens must equal inputTokens + outputTokens when both are available`);
   }
   return Object.freeze({
-    turns: requireInteger(usage.turns, 'aiUsage.turns', { nullable: true }),
-    credits: requireNumber(usage.credits, 'aiUsage.credits', { nullable: true }),
+    turns: requireInteger(usage.turns, `${label}.turns`, { nullable: true }),
+    credits: requireNumber(usage.credits, `${label}.credits`, { nullable: true }),
     inputTokens,
     outputTokens,
     totalTokens: explicitTotal ?? derivedTotal
   });
+}
+
+function normalizeAiUsageByStage(value) {
+  if (value == null) return Object.freeze({});
+  const stages = requireObject(value, 'aiUsageByStage');
+  const normalized = {};
+  for (const [rawStage, usage] of Object.entries(stages)) {
+    const stage = requireString(rawStage, 'aiUsageByStage stage').toLowerCase();
+    if (!/^[a-z0-9][a-z0-9._-]*$/.test(stage)) throw new Error(`invalid aiUsageByStage stage: ${rawStage}`);
+    if (Object.hasOwn(normalized, stage)) throw new Error(`duplicate aiUsageByStage stage: ${stage}`);
+    normalized[stage] = normalizeAiUsage(usage, `aiUsageByStage.${stage}`);
+  }
+  return Object.freeze(normalized);
 }
 
 function normalizeDurations(value) {
@@ -145,6 +162,7 @@ export function normalizeDeliveryMetrics(rawMetrics) {
       audit: requireInteger(attempts.audit, 'attempts.audit')
     }),
     aiUsage: normalizeAiUsage(value.aiUsage ?? {}),
+    aiUsageByStage: normalizeAiUsageByStage(value.aiUsageByStage),
     providerCost: normalizeProviderCost(value.providerCost),
     durationsMs: normalizeDurations(value.durationsMs),
     terminalReason: requireString(value.terminalReason, 'terminalReason'),
@@ -156,10 +174,7 @@ export function normalizeDeliveryMetrics(rawMetrics) {
 
 export function createDeliveryMetrics(input) {
   const value = requireObject(input, 'metrics input');
-  return normalizeDeliveryMetrics({
-    schemaVersion: DELIVERY_V2_METRICS_SCHEMA_VERSION,
-    ...value
-  });
+  return normalizeDeliveryMetrics({ schemaVersion: DELIVERY_V2_METRICS_SCHEMA_VERSION, ...value });
 }
 
 function percentile(values, p) {
@@ -172,6 +187,28 @@ function percentile(values, p) {
 function average(values) {
   if (values.length === 0) return null;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function summarizeNullable(values, observations) {
+  const known = values.filter((value) => value != null);
+  return Object.freeze({
+    known: known.length,
+    unknown: observations - known.length,
+    total: known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0),
+    avg: average(known),
+    p50: percentile(known, 50),
+    p95: percentile(known, 95)
+  });
+}
+
+function summarizeAiUsage(usages) {
+  return Object.freeze({
+    turns: summarizeNullable(usages.map((usage) => usage.turns), usages.length),
+    credits: summarizeNullable(usages.map((usage) => usage.credits), usages.length),
+    inputTokens: summarizeNullable(usages.map((usage) => usage.inputTokens), usages.length),
+    outputTokens: summarizeNullable(usages.map((usage) => usage.outputTokens), usages.length),
+    totalTokens: summarizeNullable(usages.map((usage) => usage.totalTokens), usages.length)
+  });
 }
 
 function summarizeGroup(records) {
@@ -188,10 +225,27 @@ function summarizeGroup(records) {
     providerCalls: records.reduce((sum, record) => sum + record.providerCalls, 0),
     implementationAttempts: records.reduce((sum, record) => sum + record.attempts.implementation, 0),
     auditAttempts: records.reduce((sum, record) => sum + record.attempts.audit, 0),
+    aiUsage: summarizeAiUsage(records.map((record) => record.aiUsage)),
     endToEndMs: Object.freeze({ avg: average(endToEnd), p50: percentile(endToEnd, 50), p95: percentile(endToEnd, 95) }),
     ciExecutionMs: Object.freeze({ avg: average(ciExecution), p50: percentile(ciExecution, 50), p95: percentile(ciExecution, 95) }),
     providerCostTotals: Object.freeze(costByCurrency)
   });
+}
+
+function summarizeStageGroups(records) {
+  const groups = new Map();
+  for (const record of records) {
+    for (const [stage, usage] of Object.entries(record.aiUsageByStage)) {
+      const key = `${record.repository}|${record.risk}|${record.provider}|${stage}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(usage);
+    }
+  }
+  const result = {};
+  for (const [key, usages] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    result[key] = Object.freeze({ observations: usages.length, aiUsage: summarizeAiUsage(usages) });
+  }
+  return Object.freeze(result);
 }
 
 export function summarizeDeliveryMetrics(rawRecords) {
@@ -213,7 +267,8 @@ export function summarizeDeliveryMetrics(rawRecords) {
     schemaVersion: DELIVERY_V2_METRICS_SCHEMA_VERSION,
     totalDeliveries: records.length,
     overall: summarizeGroup(records),
-    byRepositoryRiskProvider: Object.freeze(byRepositoryRiskProvider)
+    byRepositoryRiskProvider: Object.freeze(byRepositoryRiskProvider),
+    byRepositoryRiskProviderStage: summarizeStageGroups(records)
   });
 }
 
