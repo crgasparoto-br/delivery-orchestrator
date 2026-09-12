@@ -51,7 +51,8 @@ const forbiddenActiveV1Markers = [
   ['persistent delivery queue', /persistent delivery queue/i]
 ];
 const auditPathPattern = /(?:^|[^A-Za-z0-9_$])\.audit\b/i;
-const workerSurfacePattern = /^\.github\/workflows\/delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)(?:\.md|\.lock\.yml)$/;
+const workerSourcePattern = /^\.github\/workflows\/delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)\.md$/;
+const workerLockPattern = /^\.github\/workflows\/delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)\.lock\.yml$/;
 const workerContextHygieneFragment = 'Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts';
 const declarativeRequirementSummaries = Object.freeze({
   'DV2-008': 'Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.',
@@ -97,8 +98,13 @@ function removeExactDeclarativeFragment(body, fragment, relativePath) {
 }
 
 function sanitizeKnownDeclarativeSurface(relativePath, body) {
-  if (workerSurfacePattern.test(relativePath)) {
+  if (workerSourcePattern.test(relativePath)) {
     return removeExactDeclarativeFragment(body, workerContextHygieneFragment, relativePath);
+  }
+  if (workerLockPattern.test(relativePath)) {
+    const count = countOccurrences(body, workerContextHygieneFragment);
+    assert.ok(count <= 1, `${relativePath} must contain at most one generated declarative fragment, found ${count}`);
+    return count === 1 ? body.replace(workerContextHygieneFragment, '') : body;
   }
   if (relativePath === 'config/delivery-v2-requirements.json') {
     const contract = JSON.parse(body);
@@ -203,12 +209,17 @@ test('declarative exceptions are path-bound, exact and cannot hide equivalent ru
   const contextLine = `${workerContextHygieneFragment} unless needed.`;
   const sanitizedWorker = sanitizeKnownDeclarativeSurface('.github/workflows/delivery-v2-worker-codex-fast.md', contextLine);
   assert.deepEqual(historicalReferences(sanitizedWorker), []);
+  assert.equal(sanitizeKnownDeclarativeSurface('.github/workflows/delivery-v2-worker-codex-fast.lock.yml', 'generated lock without prompt prose'), 'generated lock without prompt prose');
   const arbitraryCode = `const text = ${JSON.stringify(workerContextHygieneFragment)}; const legacy = '.audit/entregar-issue/handoff-ready.json';`;
   assert.equal(sanitizeKnownDeclarativeSurface('scripts/legacy.js', arbitraryCode), arbitraryCode);
   assert.deepEqual(historicalReferences(arbitraryCode), ['skills/catalog', '.audit']);
   assert.throws(
     () => sanitizeKnownDeclarativeSurface('.github/workflows/delivery-v2-worker-codex-fast.md', `${workerContextHygieneFragment}\n${workerContextHygieneFragment}`),
     /exactly one canonical declarative fragment/
+  );
+  assert.throws(
+    () => sanitizeKnownDeclarativeSurface('.github/workflows/delivery-v2-worker-codex-fast.lock.yml', `${workerContextHygieneFragment}\n${workerContextHygieneFragment}`),
+    /at most one generated declarative fragment/
   );
 });
 
