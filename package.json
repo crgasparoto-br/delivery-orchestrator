@@ -19,6 +19,9 @@
     "verify:v2": "node scripts/verify-delivery-v2-completeness.mjs && node scripts/verify-delivery-v2-targets.mjs",
     "verify:v2:complete": "node scripts/verify-delivery-v2-completeness.mjs --require-complete && node scripts/verify-delivery-v2-targets.mjs",
     "run": "node src/cli.mjs plan-v2",
-    "metrics:v2": "node src/cli.mjs metrics-v2"
+    "metrics:v2": "node src/cli.mjs metrics-v2",
+    "controller:v2": "node scripts/run-delivery-v2-controller.mjs",
+    "normalize-usage:v2": "node scripts/normalize-gh-aw-usage.mjs",
+    "dispatch:v2": "node src/cli.mjs dispatch-v2"
   }
 }

@@ -30,7 +30,7 @@ on:
         type: choice
         options: [main, develop]
       changed_paths:
-        description: Optional comma/newline-separated known changed paths
+        description: Optional comma/newline-separated expected changed paths; auto mode performs deterministic issue-path discovery when omitted
         required: false
         type: string
 
@@ -43,31 +43,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  dispatch:
-    name: Plan and dispatch one provider worker
+  deliver:
+    name: Bounded deterministic delivery
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 240
     env:
       TARGET_REPOSITORY: ${{ inputs.target_repository }}
       TARGET_ISSUE: ${{ inputs.target_issue }}
+      BASE_BRANCH: ${{ inputs.base_branch }}
       DELIVERY_AI_PROVIDER: ${{ inputs.ai_provider }}
       DELIVERY_RISK_PROFILE: ${{ inputs.risk_profile }}
       DELIVERY_CHANGED_PATHS: ${{ inputs.changed_paths }}
-      GH_TOKEN: ${{ github.token }}
+      DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
+      DELIVERY_GITHUB_WRITE_TOKEN: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+      ORCHESTRATOR_WORKER_REF: ${{ github.ref_name }}
+      CONTROLLER_RESULT_PATH: ${{ runner.temp }}/delivery-v2-controller-result.json
     steps:
-      - name: Restrict target repository
+      - name: Restrict target repository and base branch
         shell: bash
         run: |
           case "$TARGET_REPOSITORY" in
             crgasparoto-br/*) ;;
             *) echo "Target repository is outside the allowed owner: $TARGET_REPOSITORY" >&2; exit 2 ;;
           esac
-          case "${{ inputs.base_branch }}" in
+          case "$BASE_BRANCH" in
             main|develop) ;;
             *) echo "Unsupported base branch" >&2; exit 2 ;;
           esac
 
-      - name: Checkout control plane
+      - name: Checkout deterministic control plane
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -75,33 +80,32 @@ jobs:
         with:
           node-version: 22
 
-      - name: Build deterministic plan
-        run: node src/cli.mjs plan-v2 | tee delivery-v2-plan.json
+      - name: Build initial deterministic plan
+        run: node src/cli.mjs plan-v2 | tee "${RUNNER_TEMP}/delivery-v2-initial-plan.json"
 
-      - name: Dispatch exact worker
+      - name: Run bounded Delivery V2 controller
+        run: node scripts/run-delivery-v2-controller.mjs
+
+      - name: Publish controller summary
+        if: always()
         shell: bash
         run: |
-          WORKFLOW="$(node -e "const p=require('./delivery-v2-plan.json'); process.stdout.write(p.implementation.workflow)")"
-          PROFILE="$(node -e "const p=require('./delivery-v2-plan.json'); process.stdout.write(p.risk.profile)")"
-          PROVIDER="$(node -e "const p=require('./delivery-v2-plan.json'); process.stdout.write(p.implementation.provider)")"
-          echo "Dispatching provider=$PROVIDER risk=$PROFILE workflow=$WORKFLOW"
-          gh workflow run "$WORKFLOW" --ref main \
-            -f target_repository="$TARGET_REPOSITORY" \
-            -f target_issue="$TARGET_ISSUE" \
-            -f base_branch="${{ inputs.base_branch }}"
-          {
-            echo "## Delivery V2 dispatch"
-            echo "- Provider: \`$PROVIDER\`"
-            echo "- Risk: \`$PROFILE\`"
-            echo "- Worker: \`$WORKFLOW\`"
-            echo "- Target: \`$TARGET_REPOSITORY#$TARGET_ISSUE\`"
-            echo "- Automatic merge: **disabled**"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$CONTROLLER_RESULT_PATH" ]; then
+            {
+              echo '## Delivery V2 controller'
+              echo '```json'
+              cat "$CONTROLLER_RESULT_PATH"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Upload plan
+      - name: Upload delivery evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: delivery-v2-dispatch-plan-${{ github.run_id }}
-          path: delivery-v2-plan.json
-          if-no-files-found: error
-          retention-days: 7
+          name: delivery-v2-controller-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/delivery-v2-initial-plan.json
+            ${{ env.CONTROLLER_RESULT_PATH }}
+          if-no-files-found: warn
+          retention-days: 30

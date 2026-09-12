@@ -1,19 +1,21 @@
 name: Delivery V2 - Compile gh-aw
 
 on:
-  push:
-    branches-ignore:
+  pull_request:
+    branches:
       - main
     paths:
       - '.github/workflows/delivery-v2-worker-*.md'
+      - '.github/workflows/delivery-v2-worker-*.lock.yml'
       - '.github/workflows/delivery-v2-gh-aw-compile.yml'
+      - '.github/aw/actions-lock.json'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: delivery-v2-gh-aw-compile-${{ github.ref }}
+  group: delivery-v2-gh-aw-compile-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,11 +24,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout branch
+      - name: Checkout candidate
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.ref_name }}
 
       - name: Install pinned gh-aw
         uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c

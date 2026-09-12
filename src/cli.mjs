@@ -3,6 +3,7 @@ import path from 'node:path';
 import { access, readFile } from 'node:fs/promises';
 import { loadV2Config } from './v2/config.mjs';
 import { createDeliveryPlan } from './v2/delivery-plan.mjs';
+import { createDispatchDecision } from './v2/dispatch-policy.mjs';
 import { resumePersistentDelivery } from './v2/persistent-state.mjs';
 import { loadDeliveryMetricsStore, summarizeDeliveryMetrics } from './v2/metrics.mjs';
 
@@ -29,26 +30,35 @@ async function validate() {
   const root = path.resolve(new URL('..', import.meta.url).pathname);
   const required = [
     'docs/delivery-v2/MASTER_SPEC.md',
+    'docs/delivery-v2/AUDIT_CONTRACT.md',
     'docs/delivery-v2/ROADMAP.md',
     'config/delivery-v2-requirements.json',
+    'config/delivery-v2-controller-targets.json',
     '.github/workflows/delivery-v2-dispatch.yml',
     '.github/workflows/delivery-v2-ci.yml',
-    '.github/workflows/delivery-v2-independent-audit.yml',
+    '.github/workflows/delivery-v2-audit.yml',
     'src/v2/provider-policy.mjs',
     'src/v2/risk-profile.mjs',
     'src/v2/execution-policy.mjs',
     'src/v2/delivery-plan.mjs',
+    'src/v2/dispatch-policy.mjs',
+    'src/v2/operational-controller.mjs',
+    'src/v2/github-native-audit-runtime.mjs',
     'src/v2/remediation-state-machine.mjs',
     'src/v2/release-gate.mjs',
     'src/v2/persistent-state.mjs',
     'src/v2/metrics.mjs',
+    'src/v2/usage-telemetry.mjs',
+    'scripts/run-delivery-v2-controller.mjs',
+    'scripts/run-delivery-v2-github-audit.mjs',
+    'scripts/normalize-gh-aw-usage.mjs',
     'scripts/verify-delivery-v2-completeness.mjs',
     'scripts/verify-delivery-v2-targets.mjs'
   ];
   for (const rel of required) await access(path.join(root, rel));
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
   if (!pkg.dependencies?.['@openai/codex-sdk']) throw new Error('Missing @openai/codex-sdk dependency');
-  console.log(JSON.stringify({ ok: true, defaultEntrypoint: 'plan-v2', required }, null, 2));
+  console.log(JSON.stringify({ ok: true, defaultEntrypoint: 'plan-v2', operationalEntrypoint: 'delivery-v2-dispatch.yml', required }, null, 2));
 }
 
 const [command = 'plan-v2', ...rest] = process.argv.slice(2);
@@ -56,6 +66,9 @@ if (command === 'validate') await validate();
 else if (command === 'plan-v2') {
   const plan = createDeliveryPlan(loadV2Config(parseArgs(rest)));
   console.log(JSON.stringify(plan, null, 2));
+} else if (command === 'dispatch-v2') {
+  const plan = createDeliveryPlan(loadV2Config(parseArgs(rest)));
+  console.log(JSON.stringify({ plan, decision: createDispatchDecision(plan) }, null, 2));
 } else if (command === 'resume-v2') {
   const args = parseArgs(rest);
   if (!args.stateFile || !args.repository || !args.pullRequestNumber || !args.headRef || !args.remoteHeadSha) {
