@@ -47,10 +47,13 @@ const forbiddenActiveV1Markers = [
   ['delivery-loop', /delivery-loop/i],
   ['persistent delivery queue', /persistent delivery queue/i]
 ];
-const forbiddenHistoricalRuntimeDependencies = [
+const historicalRuntimePaths = [
   ['skills/catalog', /skills\/catalog(?:\/|\b)/i],
-  ['.audit filesystem dependency', /(?:new URL|path\.(?:join|resolve)|readFile|writeFile|access|readdir|mkdir|rm|copyFile)[^\n]{0,200}['\"`][^'\"`\n]*\.audit(?:\/|\\)/i]
+  ['.audit/entregar-issue', /\.audit\/entregar-issue(?:\/|\b)/i]
 ];
+const codeDependencyIntroducer = /(?:\b(?:readFile|writeFile|access|readdir|mkdir|rm|copyFile)\s*\(|\bpath\.(?:join|resolve)\s*\(|\bnew URL\s*\(|\b(?:import|require)\s*\(|\bfrom\s+)/i;
+const shellDependencyIntroducer = /(?:^|run:\s*|[;&|]\s*)(?:if\s+)?(?:sudo\s+)?(?:cat|cp|mv|rm|find|grep|sed|awk|test|ls|head|tail|tar|zip|node|python(?:3)?|bash|sh|source|\.)\s+/i;
+const yamlDependencyIntroducer = /\b(?:path|working-directory)\s*:\s*/i;
 
 async function exists(relativePath) {
   try {
@@ -82,8 +85,23 @@ async function listFiles(relativePath) {
 
 function isExecutableDependencySurface(relativePath) {
   if (relativePath.startsWith('scripts/') || relativePath.startsWith('src/')) return true;
-  if (!relativePath.startsWith('.github/workflows/')) return false;
-  return /\.ya?ml$/i.test(relativePath) && !/\.lock\.ya?ml$/i.test(relativePath);
+  if (relativePath.startsWith('.github/')) return /\.(?:ya?ml|json|mjs|cjs|js|sh)$/i.test(relativePath);
+  if (relativePath.startsWith('skills/')) return /\.(?:py|mjs|cjs|js|sh|ya?ml|json)$/i.test(relativePath);
+  return false;
+}
+
+function historicalDependencies(body) {
+  const lines = body.split(/\r?\n/);
+  const matches = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    for (const [marker, pathPattern] of historicalRuntimePaths) {
+      if (!pathPattern.test(line)) continue;
+      const context = lines.slice(Math.max(0, index - 2), index + 1).join(' ');
+      if (codeDependencyIntroducer.test(context) || shellDependencyIntroducer.test(line.trim()) || yamlDependencyIntroducer.test(line)) matches.push(marker);
+    }
+  }
+  return [...new Set(matches)];
 }
 
 test('DV2-014 removes every active V1 orchestration surface', async () => {
@@ -111,18 +129,19 @@ test('active executable surfaces cannot depend on historical V1 snapshot trees',
     for (const relativePath of await listFiles(runtimeRoot)) {
       if (!isExecutableDependencySurface(relativePath)) continue;
       const body = await readFile(new URL(relativePath, root), 'utf8');
-      for (const [marker, pattern] of forbiddenHistoricalRuntimeDependencies) {
-        if (pattern.test(body)) matches.push(`${relativePath}:${marker}`);
-      }
+      for (const marker of historicalDependencies(body)) matches.push(`${relativePath}:${marker}`);
     }
   }
   assert.deepEqual(matches, []);
 });
 
-test('historical dependency detector distinguishes real filesystem coupling from isolation prose', () => {
-  const auditPattern = forbiddenHistoricalRuntimeDependencies.find(([marker]) => marker === '.audit filesystem dependency')[1];
-  assert.match("await readFile(path.join(root, '.audit/entregar-issue/handoff-ready.json'), 'utf8')", auditPattern);
-  assert.doesNotMatch('Do not use or seek .audit/entregar-issue artifacts.', auditPattern);
+test('historical dependency detector covers JavaScript, workflow shell and generated lock surfaces without matching isolation prose', () => {
+  assert.deepEqual(historicalDependencies("await readFile(path.join(root, '.audit/entregar-issue/handoff-ready.json'), 'utf8')"), ['.audit/entregar-issue']);
+  assert.deepEqual(historicalDependencies('run: cat .audit/entregar-issue/handoff-ready.json'), ['.audit/entregar-issue']);
+  assert.deepEqual(historicalDependencies("const schema = await readFile(path.resolve(root, 'skills/catalog/auditar-issue/schema.json'))"), ['skills/catalog']);
+  assert.deepEqual(historicalDependencies('Do not use or seek implementation history, .audit/entregar-issue artifacts, or any source outside this bundle.'), []);
+  assert.equal(isExecutableDependencySurface('.github/workflows/delivery-v2-worker-codex-fast.lock.yml'), true);
+  assert.equal(isExecutableDependencySurface('.github/actions/delivery-v2-risk/action.yml'), true);
 });
 
 test('capability manifest describes only the active V2 architecture', async () => {
