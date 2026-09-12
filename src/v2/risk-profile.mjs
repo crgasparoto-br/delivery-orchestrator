@@ -1,9 +1,11 @@
+import { normalizeRepositoryRiskPolicy, pathWithinRoot } from './repository-risk-policy.mjs';
+
 export const RISK_PROFILES = Object.freeze(['fast', 'standard', 'critical']);
 export const REQUESTED_RISK_PROFILES = Object.freeze(['auto', ...RISK_PROFILES]);
 const REQUESTED_SET = new Set(REQUESTED_RISK_PROFILES);
 const RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
 
-const CRITICAL_PATTERNS = [
+const CORE_CRITICAL_PATTERNS = [
   /^\.github\/(workflows|actions)\//,
   /(^|\/)(prisma|migrations|auth|authentication|security|permissions|authorization|billing|payments?|finance|database|db)(\/|$)/,
   /(^|\/)(dockerfile|docker-compose(?:\.[^/]+)?|render\.yaml|vercel\.json)$/,
@@ -12,29 +14,45 @@ const CRITICAL_PATTERNS = [
   /(^|\/)packages\/(shared|domain|config)(\/|$)/
 ];
 
-const FAST_PATTERNS = [
-  /^docs\//,
-  /\.md$/,
-  /(^|\/)(styles?|assets?)\//,
-  /\.(css|scss|sass|less|svg|png|jpe?g|webp)$/,
-  /^apps\/web\/src\/(components|views|screens)\//
-];
-
-const STANDARD_PATTERNS = [
-  /^apps\/[a-z0-9_-]+\/src\//,
-  /^src\//,
-  /(^|\/)(test|tests|__tests__)\//,
-  /\.(test|spec)\.[cm]?[jt]sx?$/
+const CORE_SENSITIVE_ENTRYPOINT_PATTERNS = [
+  /(^|\/)(login|logout|signin|sign-in|signout|sign-out)(?:[._-]|$)/,
+  /(^|\/)[^/]*(authstore|authprovider|authcontext|protectedroute|routeguard|sessionstore|identityprovider|permissionadapter|accesscontrol|credential|secret)[^/]*$/
 ];
 
 function normalizePath(value) {
   return String(value || '').trim().replaceAll('\\', '/').replace(/^\.\//, '').toLowerCase();
 }
 
-function classifyPath(path) {
-  if (CRITICAL_PATTERNS.some((pattern) => pattern.test(path))) return { profile: 'critical', reason: `critical-path:${path}` };
-  if (FAST_PATTERNS.some((pattern) => pattern.test(path))) return { profile: 'fast', reason: `fast-path:${path}` };
-  if (STANDARD_PATTERNS.some((pattern) => pattern.test(path))) return { profile: 'standard', reason: `standard-path:${path}` };
+function firstMatchingRoot(path, roots) {
+  return roots.find((root) => pathWithinRoot(path, root)) ?? null;
+}
+
+function classifyPath(path, repositoryPolicy) {
+  if (CORE_CRITICAL_PATTERNS.some((pattern) => pattern.test(path))) {
+    return { profile: 'critical', reason: `core-critical-path:${path}` };
+  }
+  if (CORE_SENSITIVE_ENTRYPOINT_PATTERNS.some((pattern) => pattern.test(path))) {
+    return { profile: 'critical', reason: `core-sensitive-boundary:${path}` };
+  }
+  if (repositoryPolicy.criticalPaths.includes(path)) {
+    return { profile: 'critical', reason: `repository-critical-path:${path}` };
+  }
+
+  const criticalRoot = firstMatchingRoot(path, repositoryPolicy.criticalRoots);
+  if (criticalRoot) {
+    return { profile: 'critical', reason: `repository-critical-root:${criticalRoot}:${path}` };
+  }
+
+  const fastRoot = firstMatchingRoot(path, repositoryPolicy.fastSafeRoots);
+  if (fastRoot) {
+    return { profile: 'fast', reason: `repository-fast-safe-root:${fastRoot}:${path}` };
+  }
+
+  const standardRoot = firstMatchingRoot(path, repositoryPolicy.standardRoots);
+  if (standardRoot) {
+    return { profile: 'standard', reason: `repository-standard-root:${standardRoot}:${path}` };
+  }
+
   return { profile: 'critical', reason: `unknown-path:${path}` };
 }
 
@@ -46,13 +64,23 @@ export function resolveRequestedRiskProfile(value) {
   return resolved;
 }
 
-export function classifyChangedPaths(changedPaths = []) {
+export function classifyChangedPaths(changedPaths = [], { repositoryPolicy = {} } = {}) {
   const paths = [...new Set(changedPaths.map(normalizePath).filter(Boolean))];
+  const normalizedPolicy = normalizeRepositoryRiskPolicy(repositoryPolicy);
   if (paths.length === 0) {
-    return { profile: 'standard', provisional: true, reasons: ['no-changed-paths-yet'], paths: [] };
+    return {
+      profile: 'critical',
+      provisional: true,
+      reasons: ['no-changed-paths-fail-closed'],
+      paths: []
+    };
   }
-  const classified = paths.map(classifyPath);
-  const highest = classified.reduce((best, item) => RANK[item.profile] > RANK[best] ? item.profile : best, 'fast');
+
+  const classified = paths.map((path) => classifyPath(path, normalizedPolicy));
+  const highest = classified.reduce(
+    (best, item) => (RANK[item.profile] > RANK[best] ? item.profile : best),
+    'fast'
+  );
   return {
     profile: highest,
     provisional: false,
@@ -61,30 +89,23 @@ export function classifyChangedPaths(changedPaths = []) {
   };
 }
 
-export function resolveRiskProfile({ requested = 'auto', changedPaths = [] } = {}) {
+export function resolveRiskProfile({ requested = 'auto', changedPaths = [], repositoryPolicy = {} } = {}) {
   const requestedProfile = resolveRequestedRiskProfile(requested);
-  const observed = classifyChangedPaths(changedPaths);
+  const observed = classifyChangedPaths(changedPaths, { repositoryPolicy });
   if (requestedProfile === 'auto') {
     return { requested: requestedProfile, ...observed, promoted: false };
   }
-  if (observed.provisional) {
-    return {
-      requested: requestedProfile,
-      profile: requestedProfile,
-      provisional: true,
-      promoted: false,
-      reasons: [`explicit:${requestedProfile}`, ...observed.reasons],
-      paths: observed.paths
-    };
-  }
+
   const promoted = RANK[observed.profile] > RANK[requestedProfile];
   const profile = promoted ? observed.profile : requestedProfile;
   return {
     requested: requestedProfile,
     profile,
-    provisional: false,
+    provisional: observed.provisional,
     promoted,
-    reasons: promoted ? [`promoted:${requestedProfile}->${profile}`, ...observed.reasons] : [`explicit:${requestedProfile}`, ...observed.reasons],
+    reasons: promoted
+      ? [`promoted:${requestedProfile}->${profile}`, ...observed.reasons]
+      : [`explicit:${requestedProfile}`, ...observed.reasons],
     paths: observed.paths
   };
 }

@@ -5,6 +5,10 @@ inputs:
     description: Requested risk profile. auto, fast, standard, or critical.
     required: false
     default: auto
+  repository-policy-json:
+    description: JSON repository policy with reviewed fast/standard roots and critical paths/roots.
+    required: false
+    default: '{}'
   github-token:
     description: GitHub token with read access to the target pull request.
     required: true

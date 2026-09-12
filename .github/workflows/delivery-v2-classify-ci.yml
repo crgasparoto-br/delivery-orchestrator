@@ -8,6 +8,11 @@ on:
         required: false
         default: auto
         type: string
+      risk_policy_json:
+        description: JSON repository policy with reviewed safe roots and critical paths/roots.
+        required: false
+        default: '{}'
+        type: string
     outputs:
       risk_profile:
         description: Effective risk profile after deterministic promotion.
@@ -62,4 +67,5 @@ jobs:
         uses: crgasparoto-br/delivery-orchestrator/actions/delivery-v2-risk@main
         with:
           requested-risk: ${{ inputs.requested_risk }}
+          repository-policy-json: ${{ inputs.risk_policy_json }}
           github-token: ${{ github.token }}

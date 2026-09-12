@@ -3,7 +3,11 @@ import { resolveImplementationWorkflow } from './provider-dispatch.mjs';
 import { resolveRiskProfile } from './risk-profile.mjs';
 
 export function createDeliveryPlan(config) {
-  const risk = resolveRiskProfile({ requested: config.requestedRisk, changedPaths: config.changedPaths });
+  const risk = resolveRiskProfile({
+    requested: config.requestedRisk,
+    changedPaths: config.changedPaths,
+    repositoryPolicy: config.repositoryPolicy
+  });
   const policy = executionPolicyFor(risk.profile);
   const workflow = resolveImplementationWorkflow(config.providers.implementer.provider, risk.profile);
   return {

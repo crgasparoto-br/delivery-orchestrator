@@ -23,6 +23,20 @@ function currentPullRequestNumber() {
   return Number(event?.pull_request?.number || 0) || null;
 }
 
+function repositoryPolicy() {
+  const raw = input('repository-policy-json') || '{}';
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`repository-policy-json must be valid JSON: ${error.message}`);
+  }
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
+    throw new Error('repository-policy-json must decode to an object');
+  }
+  return parsed;
+}
+
 async function listChangedPaths({ token, repository, pullRequestNumber }) {
   const [owner, repo] = String(repository || '').split('/');
   if (!owner || !repo) throw new Error('GITHUB_REPOSITORY must use owner/name');
@@ -56,6 +70,7 @@ async function main() {
   const repository = process.env.GITHUB_REPOSITORY;
   const pullRequestNumber = currentPullRequestNumber();
   const requested = input('requested-risk') || 'auto';
+  const policy = repositoryPolicy();
 
   if (!token) throw new Error('github-token is required');
   if (!repository) throw new Error('GITHUB_REPOSITORY is required');
@@ -64,7 +79,7 @@ async function main() {
   const changedPaths = await listChangedPaths({ token, repository, pullRequestNumber });
   const moduleUrl = pathToFileURL(path.resolve(__dirname, '../../src/v2/ci-plan.mjs')).href;
   const { buildCiPlan } = await import(moduleUrl);
-  const plan = buildCiPlan({ requested, changedPaths });
+  const plan = buildCiPlan({ requested, changedPaths, repositoryPolicy: policy });
 
   setOutput('risk-profile', plan.riskProfile);
   setOutput('ci-mode', plan.ciMode);
