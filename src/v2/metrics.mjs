@@ -75,7 +75,7 @@ function normalizeAiUsage(value = {}, label = 'aiUsage') {
   const inputTokens = requireInteger(usage.inputTokens, `${label}.inputTokens`, { nullable: true });
   const outputTokens = requireInteger(usage.outputTokens, `${label}.outputTokens`, { nullable: true });
   const explicitTotal = requireInteger(usage.totalTokens, `${label}.totalTokens`, { nullable: true });
-  const derivedTotal = inputTokens == null && outputTokens == null ? null : (inputTokens ?? 0) + (outputTokens ?? 0);
+  const derivedTotal = inputTokens != null && outputTokens != null ? inputTokens + outputTokens : null;
   if (explicitTotal != null && derivedTotal != null && explicitTotal !== derivedTotal) {
     throw new Error(`${label}.totalTokens must equal inputTokens + outputTokens when both are available`);
   }
