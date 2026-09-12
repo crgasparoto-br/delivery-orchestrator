@@ -285,8 +285,12 @@ test('target workflow serializes audit through durable persistence and fails clo
   const workflow = await readFile(new URL('../.github/workflows/delivery-v2-independent-audit.yml', import.meta.url), 'utf8');
   const targetStart = workflow.indexOf('  target_audit:');
   assert.ok(targetStart > 0);
+  const internal = workflow.slice(workflow.indexOf('  audit:'), targetStart);
   const target = workflow.slice(targetStart);
   assert.match(workflow, /github\.workflow_sha/);
+  assert.match(internal, /Enforce independent audit decision/);
+  assert.match(internal, /decision !== 'approved'/);
+  assert.match(internal, /blocking\.length > 0/);
   assert.match(target, /delivery-v2-target-audit-\$\{\{ needs\.resolve\.outputs\.target_audit_id \}\}/);
   assert.match(target, /issues: write/);
   assert.match(target, /AUDIT_RUNTIME_SHA: \$\{\{ needs\.resolve\.outputs\.runtime_sha \}\}/);
