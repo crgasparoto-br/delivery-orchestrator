@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solveritconsultoria.com.br/schemas/delivery-v2-target-policy.schema.json",
+  "title": "Delivery V2 target classifier policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "repository", "baseBranch", "packageDir", "riskPolicy"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    "baseBranch": { "type": "string", "minLength": 1 },
+    "packageDir": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$" },
+    "riskPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fastSafeRoots": { "$ref": "#/$defs/pathList" },
+        "standardRoots": { "$ref": "#/$defs/pathList" },
+        "criticalRoots": { "$ref": "#/$defs/pathList" },
+        "criticalPaths": { "$ref": "#/$defs/pathList" },
+        "criticalPathFragments": { "$ref": "#/$defs/pathList" }
+      }
+    }
+  },
+  "$defs": {
+    "pathList": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

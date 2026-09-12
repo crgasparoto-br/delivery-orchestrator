@@ -14,8 +14,9 @@
     "test": "node --test test/*.test.mjs",
     "validate": "node src/cli.mjs validate",
     "plan:v2": "node src/cli.mjs plan-v2",
-    "verify:v2": "node scripts/verify-delivery-v2-completeness.mjs",
-    "verify:v2:complete": "node scripts/verify-delivery-v2-completeness.mjs --require-complete",
+    "export:v2:classifier": "node scripts/export-delivery-v2-classifier.mjs",
+    "verify:v2": "node scripts/verify-delivery-v2-completeness.mjs && node scripts/verify-delivery-v2-targets.mjs",
+    "verify:v2:complete": "node scripts/verify-delivery-v2-completeness.mjs --require-complete && node scripts/verify-delivery-v2-targets.mjs",
     "run": "node src/cli.mjs run"
   }
 }

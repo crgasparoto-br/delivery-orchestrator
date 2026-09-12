@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "repository": "crgasparoto-br/training-system",
+  "baseBranch": "develop",
+  "packageDir": ".delivery-v2",
+  "riskPolicy": {
+    "fastSafeRoots": [
+      "apps/web/src/components",
+      "apps/web/src/pages",
+      "apps/web/src/styles",
+      "apps/web/src/assets",
+      "apps/web/src/i18n",
+      "apps/web/public",
+      "docs"
+    ],
+    "standardRoots": ["apps/web/src", "apps/api/src", "apps/api/tests"],
+    "criticalRoots": ["packages", "apps/api/prisma", "apps/web/src/access"],
+    "criticalPaths": [
+      "agents.md",
+      "architecture.md",
+      "docs/architecture/deployment.md",
+      "scripts/delivery-v2-ci-classifier.mjs",
+      "scripts/delivery-v2-ci-classifier.test.mjs",
+      "apps/web/src/pages/register.tsx",
+      "apps/web/src/pages/forgotpassword.tsx",
+      "apps/web/src/pages/resetpassword.tsx",
+      "apps/web/src/pages/signup.tsx",
+      "apps/web/src/pages/sign-up.tsx"
+    ],
+    "criticalPathFragments": [
+      "pre-registration",
+      "profile-review",
+      "notification",
+      "sendgrid",
+      "twilio",
+      "upload",
+      "storage",
+      "stripe"
+    ]
+  }
+}

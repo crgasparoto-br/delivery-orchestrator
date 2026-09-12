@@ -1,4 +1,4 @@
-const POLICY_KEYS = new Set(['fastSafeRoots', 'standardRoots', 'criticalRoots', 'criticalPaths']);
+const POLICY_KEYS = new Set(['fastSafeRoots', 'standardRoots', 'criticalRoots', 'criticalPaths', 'criticalPathFragments']);
 
 function normalizePolicyPath(value, field) {
   const normalized = String(value ?? '')
@@ -41,7 +41,8 @@ export function normalizeRepositoryRiskPolicy(policy = {}) {
     fastSafeRoots: Object.freeze(normalizePathList(policy, 'fastSafeRoots')),
     standardRoots: Object.freeze(normalizePathList(policy, 'standardRoots')),
     criticalRoots: Object.freeze(normalizePathList(policy, 'criticalRoots')),
-    criticalPaths: Object.freeze(normalizePathList(policy, 'criticalPaths'))
+    criticalPaths: Object.freeze(normalizePathList(policy, 'criticalPaths')),
+    criticalPathFragments: Object.freeze(normalizePathList(policy, 'criticalPathFragments'))
   });
 }
 

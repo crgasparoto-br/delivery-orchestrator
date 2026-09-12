@@ -1,0 +1,88 @@
+name: Delivery V2 - Sync classifier package
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Target config basename in config/delivery-v2-targets
+        required: true
+        type: choice
+        options:
+          - controle_calorias
+          - training-system
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout orchestrator
+        uses: actions/checkout@v4
+
+      - name: Resolve target config
+        id: target
+        env:
+          TARGET_NAME: ${{ inputs.target }}
+        shell: bash
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs = require('node:fs');
+          const name = process.env.TARGET_NAME;
+          if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error('invalid target name');
+          const configPath = `config/delivery-v2-targets/${name}.json`;
+          const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          console.log(`config_path=${configPath}`);
+          console.log(`repository=${config.repository}`);
+          console.log(`base_branch=${config.baseBranch}`);
+          console.log(`package_dir=${config.packageDir}`);
+          NODE
+
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.target.outputs.repository }}
+          ref: ${{ steps.target.outputs.base_branch }}
+          path: target
+          token: ${{ secrets.DELIVERY_V2_SYNC_TOKEN }}
+
+      - name: Export generated classifier package
+        run: >-
+          node scripts/export-delivery-v2-classifier.mjs
+          --target-config "${{ steps.target.outputs.config_path }}"
+          --source-commit "${GITHUB_SHA}"
+          --out "target/${{ steps.target.outputs.package_dir }}"
+
+      - name: Verify generated package before publication
+        run: node "target/${{ steps.target.outputs.package_dir }}/verify.mjs"
+
+      - name: Open or update target pull request
+        env:
+          GH_TOKEN: ${{ secrets.DELIVERY_V2_SYNC_TOKEN }}
+          TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
+          BASE_BRANCH: ${{ steps.target.outputs.base_branch }}
+          PACKAGE_DIR: ${{ steps.target.outputs.package_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="delivery-v2/classifier-${GITHUB_SHA:0:12}"
+          cd target
+          git config user.name "delivery-v2-bot"
+          git config user.email "delivery-v2-bot@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add "$PACKAGE_DIR"
+          if git diff --cached --quiet; then
+            echo "Generated classifier package is already current."
+            exit 0
+          fi
+          git commit -m "chore(ci): sync Delivery V2 classifier ${GITHUB_SHA:0:12}"
+          git push --force-with-lease origin "$branch"
+          gh pr create \
+            --repo "$TARGET_REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --head "$branch" \
+            --title "chore(ci): sync generated Delivery V2 classifier" \
+            --body "Generated from crgasparoto-br/delivery-orchestrator@${GITHUB_SHA}. Verify with: node ${PACKAGE_DIR}/verify.mjs" \
+            || gh pr view "$branch" --repo "$TARGET_REPOSITORY" --json url
