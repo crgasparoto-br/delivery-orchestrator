@@ -1,3 +1,4 @@
+import { DELIVERY_V2_AUDIT_SCHEMA_VERSION } from './audit-contract.mjs';
 import { executionPolicyFor } from './execution-policy.mjs';
 import { resolveImplementationWorkflow } from './provider-dispatch.mjs';
 import { resolveRiskProfile } from './risk-profile.mjs';
@@ -27,7 +28,11 @@ export function createDeliveryPlan(config) {
       required: policy.auditRequired,
       mode: policy.auditMode,
       ...config.providers.auditor,
-      maxAttempts: policy.maxAuditAttempts
+      maxAttempts: policy.maxAuditAttempts,
+      contractSchemaVersion: DELIVERY_V2_AUDIT_SCHEMA_VERSION,
+      exactMaterialShaRequired: true,
+      independentContextRequired: risk.profile === 'critical',
+      legacyV1HandoffRequired: false
     },
     ci: {
       mode: policy.ciMode,
