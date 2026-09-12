@@ -283,6 +283,8 @@ test('configured training-system audit freezes canonical identity and all observ
 
 test('target workflow serializes audit through durable persistence and fails closed on semantic findings', async () => {
   const workflow = await readFile(new URL('../.github/workflows/delivery-v2-independent-audit.yml', import.meta.url), 'utf8');
+  const publisher = await readFile(new URL('../scripts/persist-delivery-v2-target-audit.mjs', import.meta.url), 'utf8');
+  const lineage = await readFile(new URL('../src/v2/target-audit-lineage.mjs', import.meta.url), 'utf8');
   const targetStart = workflow.indexOf('  target_audit:');
   assert.ok(targetStart > 0);
   const internal = workflow.slice(workflow.indexOf('  audit:'), targetStart);
@@ -294,30 +296,40 @@ test('target workflow serializes audit through durable persistence and fails clo
   assert.match(target, /delivery-v2-target-audit-\$\{\{ needs\.resolve\.outputs\.target_audit_id \}\}/);
   assert.match(target, /issues: write/);
   assert.match(target, /AUDIT_RUNTIME_SHA: \$\{\{ needs\.resolve\.outputs\.runtime_sha \}\}/);
+  assert.match(target, /Evaluate target audit release gate/);
   assert.match(target, /Persist append-only target audit decision/);
-  assert.match(target, /delivery-v2-target-audit-state:/);
-  assert.match(target, /github-token: \$\{\{ github\.token \}\}/);
-  assert.match(target, /decision !== 'approved'/);
-  assert.match(target, /blocking\.length > 0/);
-  assert.match(target, /releaseBlocked !== false/);
+  assert.match(target, /scripts\/persist-delivery-v2-target-audit\.mjs/);
+  assert.match(target, /computeTargetAuditReleaseGate/);
+  assert.match(target, /DURABLE_COMMENT_ID/);
   assert.match(target, /Cleanup isolated target auditor runtime/);
   assert.match(target, /if: always\(\)/);
+  assert.match(publisher, /delivery-v2-target-audit-state:/);
+  assert.match(publisher, /schemaVersion: 3/);
+  assert.match(publisher, /semanticDecision:/);
+  assert.match(publisher, /releaseGatePassed:/);
+  assert.match(lineage, /CONTROL_ENFORCEMENT_STEP_NAME/);
+  assert.match(lineage, /expectedConclusion = state\.releaseGatePassed \? 'success' : 'failure'/);
   assert.doesNotMatch(workflow, /\n  persist_target_audit:/);
   assert.doesNotMatch(workflow, /\n  enforce_target_audit:/);
-  assert.ok(target.indexOf('Run configured target independent audit') < target.indexOf('Persist append-only target audit decision'));
+  assert.ok(target.indexOf('Run configured target independent audit') < target.indexOf('Evaluate target audit release gate'));
+  assert.ok(target.indexOf('Evaluate target audit release gate') < target.indexOf('Persist append-only target audit decision'));
   assert.ok(target.indexOf('Persist append-only target audit decision') < target.indexOf('Enforce target audit decision'));
   assert.equal((workflow.match(/DELIVERY_GITHUB_WRITE_TOKEN/g) || []).length, 1);
 });
 
 test('target runner uses full snapshots and controller-owned durable state without granting model write/network authority', async () => {
   const runner = await readFile(new URL('../scripts/run-delivery-v2-target-independent-audit.mjs', import.meta.url), 'utf8');
-  assert.match(runner, /allSnapshotsPresent: true/);
+  const githubEvidence = await readFile(new URL('../src/v2/target-audit-github-evidence.mjs', import.meta.url), 'utf8');
+  const lineage = await readFile(new URL('../src/v2/target-audit-lineage.mjs', import.meta.url), 'utf8');
+  assert.match(githubEvidence, /allSnapshotsPresent: true/);
   assert.match(runner, /snapshots\/base/);
   assert.match(runner, /snapshots\/head/);
   assert.match(runner, /SOURCE_WORKFLOW_GATES\.json/);
-  assert.match(runner, /github-actions\[bot\]/);
-  assert.match(runner, /CONTROL_WORKFLOW_PATH/);
-  assert.match(runner, /actions\/runs\/\$\{state\.auditWorkflowRunId\}/);
+  assert.match(lineage, /github-actions\[bot\]/);
+  assert.match(lineage, /CONTROL_WORKFLOW_PATH/);
+  assert.match(lineage, /actions\/runs\/\$\{state\.auditWorkflowRunId\}/);
+  assert.match(runner, /fetchControllerOwnedTargetAuditStates/);
+  assert.match(runner, /deriveTargetAuditProgress/);
   assert.match(runner, /networkAccessEnabled: false/);
   assert.match(runner, /sandboxMode: 'read-only'/);
   assert.match(runner, /githubToken: ''/);
