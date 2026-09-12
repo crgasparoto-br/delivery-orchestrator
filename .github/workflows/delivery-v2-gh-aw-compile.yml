@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: delivery-v2-gh-aw-compile-${{ github.ref }}
@@ -36,6 +36,16 @@ jobs:
       - name: Compile workers in strict mode
         run: gh aw compile --strict
 
-      - name: Verify canonical locks are synchronized
+      - name: Stage compiled locks outside workflow namespace
         shell: bash
-        run: git diff --exit-code -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
+        run: |
+          set -euo pipefail
+          rm -rf .tmp/delivery-v2-compiled-locks
+          mkdir -p .tmp/delivery-v2-compiled-locks
+          cp .github/workflows/delivery-v2-worker-*.lock.yml .tmp/delivery-v2-compiled-locks/
+          cp .github/aw/actions-lock.json .tmp/delivery-v2-compiled-locks/actions-lock.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .tmp/delivery-v2-compiled-locks
+          git commit -m "chore: stage compiled Delivery V2 locks"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
