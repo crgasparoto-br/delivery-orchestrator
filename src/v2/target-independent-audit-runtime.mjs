@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { buildAuditRequest } from './audit-contract.mjs';
+import { executionPolicyFor } from './execution-policy.mjs';
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/i;
@@ -48,6 +49,9 @@ function fileEvidence(value, label, expectedPath, expectedRef) {
     blobSha: sha(evidence.blobSha, `${label}.blobSha`),
     content: string(evidence.content, `${label}.content`)
   });
+}
+function sameStringArray(actual, expected) {
+  return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
 }
 
 export function normalizeTargetAuditConfig(raw) {
@@ -108,7 +112,56 @@ export function normalizeTargetSourceBindingEvidence(raw, configInput) {
     pullRequestNumber,
     mergePreviewSha,
     materialHeadSha,
-    logFingerprint: fingerprintValue(value.logFingerprint, 'sourceWorkflowBindingEvidence.logFingerprint')
+    logFingerprint: fingerprintValue(value.logFingerprint, 'sourceWorkflowBindingEvidence.logFingerprint'),
+    refMappingObserved: value.refMappingObserved === true,
+    checkoutObserved: value.checkoutObserved === true
+  });
+}
+
+export function normalizeMergePreviewCommitEvidence(raw, configInput) {
+  const config = normalizeTargetAuditConfig(configInput);
+  const value = object(raw, 'mergePreviewCommitEvidence');
+  const commitSha = sha(value.sha, 'mergePreviewCommitEvidence.sha');
+  if (commitSha !== config.mergePreviewSha) throw new Error('merge preview commit SHA does not match target audit config');
+  if (!Array.isArray(value.parentShas) || value.parentShas.length !== 2) throw new Error('merge preview commit must have exactly two parents');
+  const parentShas = value.parentShas.map((entry, index) => sha(entry, `mergePreviewCommitEvidence.parentShas[${index}]`));
+  const expectedParents = [config.baseSha, config.materialHeadSha];
+  if (!sameStringArray(parentShas, expectedParents)) throw new Error('merge preview commit parents do not match configured base/head identity');
+  const message = string(value.message, 'mergePreviewCommitEvidence.message');
+  const expectedMessage = `Merge ${config.materialHeadSha} into ${config.baseSha}`;
+  if (message !== expectedMessage) throw new Error('merge preview commit message does not match configured base/head identity');
+  if (value.verified !== true || string(value.verificationReason, 'mergePreviewCommitEvidence.verificationReason') !== 'valid') {
+    throw new Error('merge preview commit must have valid GitHub verification');
+  }
+  const committerLogin = string(value.committerLogin, 'mergePreviewCommitEvidence.committerLogin');
+  if (committerLogin !== 'web-flow') throw new Error('merge preview commit must be attributed to GitHub web-flow');
+  return Object.freeze({
+    sha: commitSha,
+    parentShas: Object.freeze(parentShas),
+    treeSha: sha(value.treeSha, 'mergePreviewCommitEvidence.treeSha'),
+    message,
+    verified: true,
+    verificationReason: 'valid',
+    committerLogin,
+    fingerprint: fingerprintValue(value.fingerprint, 'mergePreviewCommitEvidence.fingerprint')
+  });
+}
+
+export function normalizeTargetDiffEvidence(raw, changedPaths) {
+  const value = object(raw, 'diffEvidence');
+  const normalizedPaths = [...new Set((changedPaths ?? []).map((entry) => string(entry, 'changedPaths entry')))];
+  if (normalizedPaths.length === 0) throw new Error('changedPaths must be non-empty before diff evidence can be validated');
+  if (!Array.isArray(value.paths)) throw new Error('diffEvidence.paths must be an array');
+  const evidencePaths = value.paths.map((entry, index) => string(entry, `diffEvidence.paths[${index}]`));
+  if (!sameStringArray(evidencePaths, normalizedPaths)) throw new Error('diff evidence paths do not exactly match changedPaths inventory');
+  if (positiveInt(value.fileCount, 'diffEvidence.fileCount') !== normalizedPaths.length) throw new Error('diff evidence fileCount does not match changedPaths inventory');
+  if (value.allPatchesPresent !== true) throw new Error('diff evidence requires a patch for every changed file');
+  return Object.freeze({
+    fileCount: normalizedPaths.length,
+    paths: Object.freeze(evidencePaths),
+    allPatchesPresent: true,
+    inventoryFingerprint: fingerprintValue(value.inventoryFingerprint, 'diffEvidence.inventoryFingerprint'),
+    diffFingerprint: fingerprintValue(value.diffFingerprint, 'diffEvidence.diffFingerprint')
   });
 }
 
@@ -173,10 +226,15 @@ export function buildTargetCriticalAuditRequest({
   sourceWorkflowRun,
   sourceWorkflowDefinition,
   sourceWorkflowBindingEvidence,
+  mergePreviewCommitEvidence,
+  diffEvidence,
   candidateWorkflowEvidence,
   baseWorkflowEvidence,
   classifierSource,
-  auditRuntimeEvidence
+  auditRuntimeEvidence,
+  auditAttempt = 1,
+  implementationAttempt = 1,
+  priorFindings = []
 } = {}) {
   const { config, pullRequest: pr, run, binding } = assertTargetSourceWorkflow(
     configInput,
@@ -186,8 +244,17 @@ export function buildTargetCriticalAuditRequest({
     sourceWorkflowBindingEvidence
   );
   const runtime = normalizeTargetAuditRuntimeEvidence(auditRuntimeEvidence);
+  const mergePreview = normalizeMergePreviewCommitEvidence(mergePreviewCommitEvidence, config);
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) throw new Error('changedPaths must be a non-empty array');
-  if (!changedPaths.includes(config.sourceWorkflow.path)) throw new Error('target audit expects the source workflow itself in changed paths');
+  const normalizedChangedPaths = [...new Set(changedPaths.map((entry) => string(entry, 'changedPaths entry')))];
+  if (!normalizedChangedPaths.includes(config.sourceWorkflow.path)) throw new Error('target audit expects the source workflow itself in changed paths');
+  const diff = normalizeTargetDiffEvidence(diffEvidence, normalizedChangedPaths);
+  const policy = executionPolicyFor('critical');
+  const normalizedAuditAttempt = positiveInt(auditAttempt, 'auditAttempt');
+  if (normalizedAuditAttempt > policy.maxAuditAttempts + 1) throw new Error('target audit attempt exceeds CRITICAL audit-remediation budget');
+  const normalizedImplementationAttempt = positiveInt(implementationAttempt, 'implementationAttempt');
+  if (normalizedImplementationAttempt > policy.maxImplementationAttempts) throw new Error('target implementation attempt exceeds CRITICAL implementation budget');
+  if (!Array.isArray(priorFindings)) throw new Error('priorFindings must be an array');
 
   const candidateWorkflow = fileEvidence(
     candidateWorkflowEvidence,
@@ -250,14 +317,14 @@ export function buildTargetCriticalAuditRequest({
       workflowRunId: config.sourceWorkflow.runId,
       workflowEvidence
     }],
-    changedPaths,
-    implementationAttempt: 1,
+    changedPaths: normalizedChangedPaths,
+    implementationAttempt: normalizedImplementationAttempt,
     implementer: {
       provider: 'github',
       workerIdentity: `github-pr-author:${string(pr.user?.login, 'pullRequest.user.login')}`,
       runId: config.pullRequestNumber
     },
-    priorFindings: []
+    priorFindings
   });
 
   const { requestFingerprint: _discard, ...baseWithoutFingerprint } = baseRequest;
@@ -267,8 +334,14 @@ export function buildTargetCriticalAuditRequest({
       id: config.id,
       purpose: config.purpose,
       historicalMergedCandidate: true,
+      auditAttempt: normalizedAuditAttempt,
+      maxAuditRemediationCycles: policy.maxAuditAttempts,
+      sameCandidateReauditAllowed: false,
       mergePreviewSha: config.mergePreviewSha,
       mergeCommitSha: config.mergeCommitSha,
+      mergePreviewTrust: 'github-verified-commit-object-with-reviewed-source-job-corroboration',
+      mergePreviewEvidence: mergePreview,
+      diffEvidence: diff,
       sourceCiTrust: 'candidate-workflow-under-independent-review',
       runtime,
       sourceWorkflow: Object.freeze({
@@ -277,7 +350,7 @@ export function buildTargetCriticalAuditRequest({
         name: config.sourceWorkflow.name,
         path: config.sourceWorkflow.path,
         event: config.sourceWorkflow.event,
-        bindingEvidence: binding,
+        corroborationEvidence: binding,
         candidate: Object.freeze({
           ref: candidateWorkflow.ref,
           blobSha: candidateWorkflow.blobSha,
@@ -290,7 +363,7 @@ export function buildTargetCriticalAuditRequest({
         }),
         candidateDiffersFromBase: candidateWorkflow.blobSha !== baseWorkflow.blobSha || candidateWorkflowFingerprint !== baseWorkflowFingerprint,
         pullRequestAssociationsObserved: Array.isArray(run.pull_requests) ? run.pull_requests.length : 0,
-        historicalAssociationPolicy: 'source-job-log-pr-ref-required'
+        historicalAssociationPolicy: 'github-merge-preview-commit-is-authoritative-source-job-log-is-corroboration-only'
       })
     })
   };
