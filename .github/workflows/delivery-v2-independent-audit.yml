@@ -76,7 +76,8 @@ jobs:
               core.setFailed('audit trigger PR must contain at most one DV2-TARGET-AUDIT marker');
               return;
             }
-            if (criticalMarked) core.setOutput('should_audit', 'true');
+            const marked = criticalMarked;
+            if (sameRepository && marked) core.setOutput('should_audit', 'true');
             if (targetMarkers.length === 1) {
               core.setOutput('should_target_audit', 'true');
               core.setOutput('target_audit_id', targetMarkers[0]);
