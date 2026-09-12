@@ -32,6 +32,7 @@ jobs:
           cat .delivery-v2-bootstrap/part-* > /tmp/delivery-v2-bootstrap.b64
           base64 -d /tmp/delivery-v2-bootstrap.b64 > /tmp/delivery-v2-bootstrap.tar.gz
           tar -xzf /tmp/delivery-v2-bootstrap.tar.gz -C .
+          sed -i 's/remain traceability-only/are retained only for historical traceability; they are traceability-only/' README.md
           rm -rf .delivery-v2-bootstrap .github/workflows/delivery-v2-bootstrap.yml
 
       - uses: actions/setup-node@v4
