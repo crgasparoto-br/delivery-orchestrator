@@ -131,7 +131,7 @@ test('reviewer run cannot reuse the implementer/PR run identity', () => {
   }), /independent/);
 });
 
-test('workflow and runtime both enforce isolated trusted audit inputs', async () => {
+test('workflow gives the semantic reviewer isolated inputs and preserves audit evidence before optional artifact upload', async () => {
   const workflow = await readFile(new URL('../.github/workflows/delivery-v2-independent-audit.yml', import.meta.url), 'utf8');
   const runner = await readFile(new URL('../scripts/run-delivery-v2-independent-audit.mjs', import.meta.url), 'utf8');
 
@@ -145,6 +145,12 @@ test('workflow and runtime both enforce isolated trusted audit inputs', async ()
   assert.match(workflow, /sameRepository && marked/);
   assert.doesNotMatch(workflow, /handoff-ready\.json/);
   assert.doesNotMatch(workflow, /\.audit\/entregar-issue/);
+  const publishIndex = workflow.indexOf('- name: Publish audit result to PR');
+  const uploadIndex = workflow.indexOf('- name: Upload machine-readable audit result');
+  assert.ok(publishIndex >= 0 && uploadIndex > publishIndex, 'PR evidence must publish before artifact upload');
+  assert.match(workflow, /- name: Upload machine-readable audit result\n\s+continue-on-error: true\n\s+uses: actions\/upload-artifact@v4/);
+  assert.match(workflow, /Source CI run:/);
+  assert.match(workflow, /Audit workflow run:/);
   assert.match(runner, /assertTrustedCriticalAuditPilot/);
   assert.match(runner, /sandboxMode: 'read-only'/);
   assert.match(runner, /finalizeIndependentAuditResult/);
