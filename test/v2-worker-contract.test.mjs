@@ -34,9 +34,13 @@ for (const provider of ['copilot', 'codex', 'claude']) {
   }
 }
 
-test('gh-aw compiler publishes canonical worker locks without duplicate generated snapshots', async () => {
+test('gh-aw compiler verifies canonical locks without privileged repository writes or duplicate snapshots', async () => {
   const body = await readFile('.github/workflows/delivery-v2-gh-aw-compile.yml', 'utf8');
-  assert.match(body, /git add \.github\/workflows\/delivery-v2-worker-\*\.lock\.yml \.github\/aw\/actions-lock\.json/);
+  assert.match(body, /permissions:\n  contents: read/);
+  assert.match(body, /gh aw compile --strict/);
+  assert.match(body, /actions\/upload-artifact@v4/);
+  assert.match(body, /git diff --exit-code -- \.github\/workflows\/delivery-v2-worker-\*\.lock\.yml \.github\/aw\/actions-lock\.json/);
+  assert.doesNotMatch(body, /git push|contents: write|DELIVERY_GITHUB_WRITE_TOKEN/);
   assert.doesNotMatch(body, /\.generated\/gh-aw/);
 });
 
