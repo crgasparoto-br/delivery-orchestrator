@@ -40,8 +40,8 @@ await edit('scripts/run-delivery-v2-controller.mjs', (body) => {
     "  const persist = async (extra = {}) => {\n    controller = { ...controller, ...extra };\n    return upsertStateComment({ repository: targetRepository, prNumber: pullRequest.number, state, identity: identity(), classifier, workflowChecks: latestCheck && latestSourceRun ? checkEvidence(latestCheck, latestSourceRun, materialHeadSha) : [], evidenceRefs, token: targetWriteToken, extra: controller });\n  };",
     'initial persistent controller envelope');
   out = replaceOnce(out,
-    "  await persist({ nextAction: 'observe-ci', workerRunId: worker.id });",
-    "  await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });\n  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce });",
+    "  await persist({ nextAction: 'observe-ci', workerRunId: worker.id });\n\n  for (let cycle = 0; cycle < 8; cycle += 1) {",
+    "  await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });\n  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce });\n\n  for (let cycle = 0; cycle < 8; cycle += 1) {",
     'initial pending final status');
   out = replaceOnce(out,
     "    if (latestCheck.conclusion !== 'success') {\n      state = applyOperationalEvent(state, {\n        type: 'ci-result',\n        result: {\n          candidateSha: materialHeadSha,\n          conclusion: 'failure',\n          failureClass: 'actionable',",
