@@ -10,6 +10,7 @@ const retiredPaths = [
   'scripts/pump-control-queue.mjs',
   'scripts/resolve-bound-pr.mjs',
   'scripts/finalize-control-request.mjs',
+  'scripts/generate-auditor-trust.sh',
   'src/control-queue.mjs',
   'src/delivery-request.mjs',
   'src/orchestrator.mjs',
@@ -30,11 +31,13 @@ const retiredPaths = [
   'prompts/implementer.md',
   'prompts/auditor.md',
   'skills/orquestrar-entrega',
+  'skills/catalog.sync-manifest.json',
+  'trust/trusted-auditors.json',
   'docs/persistent-delivery-queue.md',
   'docs/delivery-completion-contract.md'
 ];
 
-const activeRuntimeRoots = ['.github/workflows', 'scripts', 'src', 'skills'];
+const activeRuntimeRoots = ['.github', 'scripts', 'src', 'skills', 'trust'];
 const historicalRuntimeExclusions = ['skills/catalog/'];
 const forbiddenActiveV1Markers = [
   ['delivery-request', /delivery-request/i],
@@ -43,6 +46,10 @@ const forbiddenActiveV1Markers = [
   ['orquestrar-entrega', /orquestrar-entrega/i],
   ['delivery-loop', /delivery-loop/i],
   ['persistent delivery queue', /persistent delivery queue/i]
+];
+const forbiddenHistoricalRuntimeDependencies = [
+  ['skills/catalog', /skills\/catalog(?:\/|\b)/i],
+  ['.audit', /(?:^|[^\w])\.audit(?:\/|\b)/im]
 ];
 
 async function exists(relativePath) {
@@ -73,6 +80,12 @@ async function listFiles(relativePath) {
   return files;
 }
 
+function isExecutableDependencySurface(relativePath) {
+  if (relativePath.startsWith('scripts/') || relativePath.startsWith('src/')) return true;
+  if (!relativePath.startsWith('.github/workflows/')) return false;
+  return /\.ya?ml$/i.test(relativePath) && !/\.lock\.ya?ml$/i.test(relativePath);
+}
+
 test('DV2-014 removes every active V1 orchestration surface', async () => {
   const present = [];
   for (const relativePath of retiredPaths) if (await exists(relativePath)) present.push(relativePath);
@@ -90,6 +103,34 @@ test('active runtime trees cannot reintroduce V1 orchestration markers outside h
     }
   }
   assert.deepEqual(matches, []);
+});
+
+test('active executable surfaces cannot depend on historical V1 snapshot trees', async () => {
+  const matches = [];
+  for (const runtimeRoot of activeRuntimeRoots) {
+    for (const relativePath of await listFiles(runtimeRoot)) {
+      if (!isExecutableDependencySurface(relativePath)) continue;
+      const body = await readFile(new URL(relativePath, root), 'utf8');
+      for (const [marker, pattern] of forbiddenHistoricalRuntimeDependencies) {
+        if (pattern.test(body)) matches.push(`${relativePath}:${marker}`);
+      }
+    }
+  }
+  assert.deepEqual(matches, []);
+});
+
+test('capability manifest describes only the active V2 architecture', async () => {
+  const capabilities = JSON.parse(await readFile(new URL('.github/delivery-orchestrator-capabilities.json', root), 'utf8'));
+  assert.equal(capabilities.schema_version, 2);
+  assert.equal(capabilities.delivery_architecture, 'v2');
+  assert.equal(capabilities.persistent_delivery_state, 'enabled');
+  assert.equal(capabilities.canonical_pr_binding, 'enabled');
+  assert.equal(capabilities.legacy_runtime, 'retired');
+  assert.equal(Object.hasOwn(capabilities, 'persistent_control_queue'), false);
+  for (const [key, value] of Object.entries(capabilities)) {
+    if (key === 'gh_aw_compiler') continue;
+    assert.notEqual(value, 'v1', `${key} must not advertise V1 as an active capability`);
+  }
 });
 
 test('V2 is the default CLI and package entrypoint', async () => {
@@ -124,4 +165,14 @@ test('retirement evidence records an empty legacy queue and retained history bou
     'skills/orquestrar-entrega/**'
   ]);
   assert.equal(evidence.postRetirementHardening.runtimeMarkerScan, true);
+  assert.equal(evidence.finalCleanup.issueNumber, 61);
+  assert.deepEqual(evidence.finalCleanup.removedResidualPaths, [
+    'scripts/generate-auditor-trust.sh',
+    'skills/catalog.sync-manifest.json',
+    'trust/trusted-auditors.json'
+  ]);
+  assert.equal(evidence.finalCleanup.capabilityManifestSchemaVersion, 2);
+  assert.equal(evidence.finalCleanup.activeRuntimeMarkerScan, true);
+  assert.equal(evidence.finalCleanup.historicalDependencyScan, true);
+  assert.equal(evidence.finalCleanup.ghAwUsageArtifactContract, true);
 });
