@@ -49,4 +49,6 @@ Work only on **${{ github.event.inputs.target_repository }} issue #${{ github.ev
 
 Risk profile: **fast**. AI provider: **claude**.
 
+Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts unless the issue explicitly targets them or a deterministic check requires them. Prefer targeted search in issue-relevant source/test/docs paths; do not inventory the entire repository before editing.
+
 Read the target issue and local repository instructions. Identify the smallest concrete cause, implement the smallest cohesive fix, add regression coverage when testable, and run only focused checks related to the issue. Do not run the full repository suite. Never weaken workflow security, expose credentials, bypass the FAST file envelope, broaden repository access, merge the PR, or close the issue directly. Create exactly one PR with `Closes #${{ github.event.inputs.target_issue }}` and list only validations actually executed. If broader scope is required, stop and report the blocker.
