@@ -15,25 +15,28 @@ concurrency:
 
 jobs:
   resolve:
-    name: Resolve CRITICAL audit pilot
+    name: Resolve CRITICAL audit request
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     outputs:
       should_audit: ${{ steps.resolve.outputs.should_audit }}
+      should_target_audit: ${{ steps.resolve.outputs.should_target_audit }}
+      target_audit_id: ${{ steps.resolve.outputs.target_audit_id }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
     steps:
-      - name: Resolve exact pilot PR
+      - name: Resolve exact audit trigger PR
         id: resolve
         uses: actions/github-script@v7
         with:
           script: |
             const run = context.payload.workflow_run;
-            if (run.conclusion !== 'success') {
-              core.setOutput('should_audit', 'false');
-              return;
-            }
+            core.setOutput('should_audit', 'false');
+            core.setOutput('should_target_audit', 'false');
+            core.setOutput('target_audit_id', '');
+            if (run.conclusion !== 'success') return;
+
             const pulls = await github.paginate(github.rest.pulls.list, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -42,15 +45,33 @@ jobs:
               per_page: 100,
             });
             const exact = pulls.filter((pr) => pr.head.sha === run.head_sha);
-            if (exact.length !== 1) {
-              core.setOutput('should_audit', 'false');
+            if (exact.length !== 1) return;
+
+            const pr = exact[0];
+            const sameRepository = pr.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`;
+            if (!sameRepository) return;
+            core.setOutput('pr_number', String(pr.number));
+
+            const lines = String(pr.body || '').split(/\r?\n/).map((line) => line.trim());
+            const criticalMarked = lines.includes('DV2-AUDIT-PILOT: critical');
+            const targetMarkers = lines
+              .map((line) => line.match(/^DV2-TARGET-AUDIT:\s*([a-z0-9][a-z0-9._-]*)$/))
+              .filter(Boolean)
+              .map((match) => match[1]);
+
+            if (criticalMarked && targetMarkers.length > 0) {
+              core.setFailed('audit trigger PR cannot request both internal and target audit modes');
               return;
             }
-            const marker = 'DV2-AUDIT-PILOT: critical';
-            const sameRepository = exact[0].head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`;
-            const marked = String(exact[0].body || '').split(/\r?\n/).some((line) => line.trim() === marker);
-            core.setOutput('should_audit', sameRepository && marked ? 'true' : 'false');
-            core.setOutput('pr_number', String(exact[0].number));
+            if (targetMarkers.length > 1) {
+              core.setFailed('audit trigger PR must contain at most one DV2-TARGET-AUDIT marker');
+              return;
+            }
+            if (criticalMarked) core.setOutput('should_audit', 'true');
+            if (targetMarkers.length === 1) {
+              core.setOutput('should_target_audit', 'true');
+              core.setOutput('target_audit_id', targetMarkers[0]);
+            }
 
   audit:
     name: Independent CRITICAL semantic audit
@@ -180,6 +201,93 @@ jobs:
           retention-days: 30
 
       - name: Cleanup isolated auditor runtime
+        if: always()
+        shell: bash
+        run: |
+          sudo -n rm -rf "$DELIVERY_ROLE_RUNTIME_ROOT"
+          rm -f "$AUDIT_RESULT_PATH"
+
+  target_audit:
+    name: Independent target CRITICAL semantic audit
+    needs: resolve
+    if: needs.resolve.outputs.should_target_audit == 'true'
+    runs-on: [self-hosted, linux, delivery-orchestrator]
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    env:
+      TARGET_AUDIT_ID: ${{ needs.resolve.outputs.target_audit_id }}
+      AUDIT_RESULT_PATH: /tmp/delivery-v2-target-independent-audit-result-${{ github.run_id }}.json
+      DELIVERY_ROLE_RUNTIME_ROOT: /tmp/delivery-v2-target-role-runtime-${{ github.run_id }}
+      DELIVERY_ROLE_RUNTIME_WORKER: /tmp/delivery-v2-target-role-runtime-${{ github.run_id }}/role-runtime-worker.mjs
+      CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'chatgpt' }}
+      CODEX_AUDITOR_HOME: ${{ vars.CODEX_AUDITOR_HOME }}
+      DELIVERY_IMPLEMENTER_USER: ${{ vars.DELIVERY_IMPLEMENTER_USER || 'delivery-implementer' }}
+      DELIVERY_AUDITOR_USER: ${{ vars.DELIVERY_AUDITOR_USER || 'delivery-auditor' }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.6-sol' }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
+    steps:
+      - name: Checkout trusted target-audit runtime
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate isolated target auditor runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin=/usr/local/bin/node
+          npm_bin=/usr/local/bin/npm
+          test -x "$node_bin"
+          test -x "$npm_bin"
+          test "$("$node_bin" -p 'Number(process.versions.node.split(".")[0])')" -ge 22
+          test "$DELIVERY_IMPLEMENTER_USER" != "$DELIVERY_AUDITOR_USER"
+          id "$DELIVERY_AUDITOR_USER" >/dev/null
+          auditor_home="${CODEX_AUDITOR_HOME:-$(getent passwd "$DELIVERY_AUDITOR_USER" | cut -d: -f6)/.codex-delivery/auditor}"
+          if [ "$CODEX_AUTH_MODE" = "chatgpt" ]; then
+            sudo -n -u "$DELIVERY_AUDITOR_USER" -H -- test -r "$auditor_home/auth.json"
+          elif [ "$CODEX_AUTH_MODE" = "api-key" ]; then
+            test -n "$OPENAI_API_KEY"
+          else
+            echo "::error::CODEX_AUTH_MODE must be chatgpt or api-key."
+            exit 1
+          fi
+          test -n "$DELIVERY_GITHUB_READ_TOKEN"
+
+      - name: Install trusted target-audit dependencies
+        run: /usr/local/bin/npm ci --no-audit --no-fund
+
+      - name: Prepare isolated target auditor role runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -n rm -rf "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n mkdir -p "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n cp src/role-runtime-worker.mjs src/files.mjs "$DELIVERY_ROLE_RUNTIME_ROOT/"
+          sudo -n cp -a node_modules "$DELIVERY_ROLE_RUNTIME_ROOT/node_modules"
+          sudo -n chown -R "$DELIVERY_AUDITOR_USER:$DELIVERY_AUDITOR_USER" "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n chmod -R u+rwX,go-rwx "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n -u "$DELIVERY_AUDITOR_USER" -H -- test -r "$DELIVERY_ROLE_RUNTIME_WORKER"
+
+      - name: Run configured target independent audit
+        run: /usr/local/bin/node scripts/run-delivery-v2-target-independent-audit.mjs
+
+      - name: Print target audit decision
+        shell: bash
+        run: |
+          /usr/local/bin/node -e 'const p=require(process.env.AUDIT_RESULT_PATH); console.log(JSON.stringify({targetAuditId:p.targetAuditId,target:p.target,result:p.result,outcome:p.outcome},null,2))'
+
+      - name: Upload machine-readable target audit result
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-v2-target-independent-audit-${{ needs.resolve.outputs.target_audit_id }}-${{ github.run_id }}
+          path: ${{ env.AUDIT_RESULT_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Cleanup isolated target auditor runtime
         if: always()
         shell: bash
         run: |
