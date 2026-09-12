@@ -26,16 +26,8 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "GitHub owns delivery identity, deterministic planning, risk and execution policy; AI is a bounded worker, not the orchestrator.",
-      "implementationRefs": [
-        "file:src/v2/delivery-plan.mjs",
-        "file:src/v2/execution-policy.mjs",
-        "file:src/v2/risk-profile.mjs"
-      ],
-      "validationRefs": [
-        "file:test/v2-delivery-plan.test.mjs",
-        "file:test/v2-risk-profile.test.mjs",
-        "github:delivery-orchestrator#21"
-      ],
+      "implementationRefs": ["file:src/v2/delivery-plan.mjs", "file:src/v2/execution-policy.mjs", "file:src/v2/risk-profile.mjs"],
+      "validationRefs": ["file:test/v2-delivery-plan.test.mjs", "file:test/v2-risk-profile.test.mjs", "github:delivery-orchestrator#21"],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -45,15 +37,8 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "Provider+risk resolves to one pinned worker; missing auth or dispatch failure fails closed and never substitutes another provider.",
-      "implementationRefs": [
-        "file:src/v2/provider-dispatch.mjs",
-        "file:src/v2/provider-policy.mjs"
-      ],
-      "validationRefs": [
-        "file:test/v2-provider-dispatch.test.mjs",
-        "file:test/v2-provider-policy.test.mjs",
-        "github:delivery-orchestrator#23"
-      ],
+      "implementationRefs": ["file:src/v2/provider-dispatch.mjs", "file:src/v2/provider-policy.mjs"],
+      "validationRefs": ["file:test/v2-provider-dispatch.test.mjs", "file:test/v2-provider-policy.test.mjs", "github:delivery-orchestrator#23"],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -63,15 +48,8 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "AI workers receive read capability and bounded safe outputs; write credentials are not exposed to agent shell execution.",
-      "implementationRefs": [
-        "file:.github/workflows/delivery-v2-worker-codex-fast.md",
-        "file:.github/workflows/delivery-v2-worker-claude-fast.md",
-        "file:.github/workflows/delivery-v2-worker-copilot-fast.md"
-      ],
-      "validationRefs": [
-        "file:test/v2-worker-contract.test.mjs",
-        "github:delivery-orchestrator#23"
-      ],
+      "implementationRefs": ["file:.github/workflows/delivery-v2-worker-codex-fast.md", "file:.github/workflows/delivery-v2-worker-claude-fast.md", "file:.github/workflows/delivery-v2-worker-copilot-fast.md"],
+      "validationRefs": ["file:test/v2-worker-contract.test.mjs", "github:delivery-orchestrator#23"],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -81,15 +59,8 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "FAST/STANDARD/CRITICAL define CI depth, audit policy, implementation attempts, turns and AI-credit ceilings.",
-      "implementationRefs": [
-        "file:src/v2/execution-policy.mjs",
-        "file:src/v2/provider-policy.mjs"
-      ],
-      "validationRefs": [
-        "file:test/v2-delivery-plan.test.mjs",
-        "file:test/v2-provider-policy.test.mjs",
-        "github:delivery-orchestrator#21"
-      ],
+      "implementationRefs": ["file:src/v2/execution-policy.mjs", "file:src/v2/provider-policy.mjs"],
+      "validationRefs": ["file:test/v2-delivery-plan.test.mjs", "file:test/v2-provider-policy.test.mjs", "github:delivery-orchestrator#21"],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -99,15 +70,8 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "A deterministic classifier selects focused, affected or full CI while caller repositories retain their concrete build/test commands.",
-      "implementationRefs": [
-        "file:src/v2/ci-plan.mjs",
-        "file:actions/delivery-v2-risk/action.yml",
-        "file:.github/workflows/delivery-v2-classify-ci.yml"
-      ],
-      "validationRefs": [
-        "file:test/v2-adaptive-ci.test.mjs",
-        "github:delivery-orchestrator#26"
-      ],
+      "implementationRefs": ["file:src/v2/ci-plan.mjs", "file:actions/delivery-v2-risk/action.yml", "file:.github/workflows/delivery-v2-classify-ci.yml"],
+      "validationRefs": ["file:test/v2-adaptive-ci.test.mjs", "github:delivery-orchestrator#26"],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -183,17 +147,9 @@
       "status": "rolled-out",
       "requiredForV2Default": true,
       "summary": "Adaptive CI is merged and a real FAST change proved related-test routing and material runtime reduction.",
-      "implementationRefs": [
-        "github:controle_calorias#1065",
-        "github:controle_calorias#1067"
-      ],
-      "validationRefs": [
-        "github:controle_calorias#1067",
-        "benchmark:FAST=128s;baseline=1255s;reduction=89.8%"
-      ],
-      "rolloutRefs": [
-        "github:controle_calorias@develop"
-      ],
+      "implementationRefs": ["github:controle_calorias#1065", "github:controle_calorias#1067"],
+      "validationRefs": ["github:controle_calorias#1067", "benchmark:FAST=128s;baseline=1255s;reduction=89.8%"],
+      "rolloutRefs": ["github:controle_calorias@develop"],
       "trackingIssue": 27
     },
     {
@@ -202,10 +158,7 @@
       "status": "implemented",
       "requiredForV2Default": true,
       "summary": "Adaptive routing exists in PR #435 but must close independent-audit findings, merge, and prove a real FAST change before rollout is complete.",
-      "implementationRefs": [
-        "github:training-system#431",
-        "github:training-system#435"
-      ],
+      "implementationRefs": ["github:training-system#431", "github:training-system#435"],
       "validationRefs": [],
       "rolloutRefs": [],
       "trackingIssue": 27
@@ -224,18 +177,11 @@
     {
       "id": "DV2-015",
       "title": "Canonical master specification and executable completeness gate",
-      "status": "implemented",
+      "status": "validated",
       "requiredForV2Default": true,
       "summary": "The repository, not a chat transcript, is the durable source of truth for architecture, requirement status and completion.",
-      "implementationRefs": [
-        "file:docs/delivery-v2/MASTER_SPEC.md",
-        "file:docs/delivery-v2/ROADMAP.md",
-        "file:config/delivery-v2-requirements.json",
-        "file:scripts/verify-delivery-v2-completeness.mjs"
-      ],
-      "validationRefs": [
-        "file:test/v2-completeness.test.mjs"
-      ],
+      "implementationRefs": ["file:docs/delivery-v2/MASTER_SPEC.md", "file:docs/delivery-v2/ROADMAP.md", "file:config/delivery-v2-requirements.json", "file:scripts/verify-delivery-v2-completeness.mjs"],
+      "validationRefs": ["file:test/v2-completeness.test.mjs", "github:delivery-orchestrator#28", "commit:2809d680f89622480a90a3196e6acab888a85131"],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
