@@ -100,7 +100,7 @@ async function prepareBundle({ request, contractText, diffText, pullRequest }) {
 
 function auditPrompt(request) {
   return `You are the independent semantic reviewer for a Delivery V2 CRITICAL candidate.\n\n` +
-    `Your entire allowed context is the sanitized Git repository bundle in the current working directory. It contains AUDIT_REQUEST.json, MASTER_SPEC.md, CANDIDATE.diff, and PULL_REQUEST.json. Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle. Do not modify files or Git state.\n\n` +
+    `Your entire allowed context is the sanitized Git repository bundle in the current working directory. It contains AUDIT_REQUEST.json, MASTER_SPEC.md, CANDIDATE.diff, and PULL_REQUEST.json. Do not use or seek implementation conversation history, legacy V1 handoff artifacts, hidden implementer reasoning, or any source outside this bundle. Do not modify files or Git state.\n\n` +
     `Audit exactly candidate ${request.candidate.materialHeadSha}. Treat the GitHub identity/check evidence in AUDIT_REQUEST.json as authoritative. Review the candidate diff against the canonical Delivery V2 contract. Return all cheap blocking findings in one pass. Finding IDs must be stable and start with DV2-. Use decision=approved only when there is no release-blocking finding; use decision=rejected when at least one blocksRelease=true finding exists. Evidence must identify a concrete path/hunk/contract mismatch, not private chain-of-thought.\n\n` +
     `Return only the requested JSON object with decision and findings.`;
 }
