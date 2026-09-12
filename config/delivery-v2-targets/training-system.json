@@ -21,6 +21,7 @@
       "docs/architecture/deployment.md",
       "scripts/delivery-v2-ci-classifier.mjs",
       "scripts/delivery-v2-ci-classifier.test.mjs",
+      "apps/web/src/components/roleguard.tsx",
       "apps/web/src/pages/register.tsx",
       "apps/web/src/pages/forgotpassword.tsx",
       "apps/web/src/pages/resetpassword.tsx",
