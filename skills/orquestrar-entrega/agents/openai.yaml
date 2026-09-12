@@ -1,4 +1,0 @@
-interface:
-  display_name: "Orquestrar Entrega"
-  short_description: "Entrega issues em loop com auditoria independente"
-  default_prompt: "Orquestre esta issue ate a auditoria independente aprovar, sem merge automatico."
