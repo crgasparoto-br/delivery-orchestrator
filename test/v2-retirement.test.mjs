@@ -57,7 +57,9 @@ const historicalRuntimeReferences = [
 ];
 const referenceOnlyFragments = [
   'Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts',
-  'Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'
+  'Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.',
+  'Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.',
+  'Delivery V2 is the only active normal-path entrypoint; the legacy delivery-request queue, recursive max-cycle controller, nested-Skill orchestration and mandatory V1 handoff/certificate path are retired, while historical evidence/catalog snapshots remain traceability-only.'
 ];
 const activeTextSurfaceExtension = /\.(?:md|txt|ya?ml|json|mjs|cjs|js|jsx|ts|tsx|py|sh|toml)$/i;
 
@@ -99,6 +101,10 @@ function stripReferenceOnlyProse(line) {
   let candidate = line;
   for (const fragment of referenceOnlyFragments) candidate = candidate.replaceAll(fragment, '');
   return candidate;
+}
+
+function stripReferenceOnlyProseFromBody(body) {
+  return body.split(/\r?\n/).map(stripReferenceOnlyProse).join('\n');
 }
 
 function collapseSourceComposition(source) {
@@ -146,10 +152,11 @@ test('active runtime trees cannot reintroduce V1 orchestration markers or nested
   const matches = [];
   for (const relativePath of await activeExecutableFiles()) {
     const body = await readFile(new URL(relativePath, root), 'utf8');
+    const executableBody = stripReferenceOnlyProseFromBody(body);
     for (const [marker, pattern] of forbiddenActiveV1Markers) {
-      if (pattern.test(body)) matches.push(`${relativePath}:${marker}`);
+      if (pattern.test(executableBody)) matches.push(`${relativePath}:${marker}`);
     }
-    if (nestedSkillInvocation(body)) matches.push(`${relativePath}:nested-skill-invocation`);
+    if (nestedSkillInvocation(executableBody)) matches.push(`${relativePath}:nested-skill-invocation`);
   }
   assert.deepEqual(matches, []);
 });
@@ -176,6 +183,7 @@ test('historical reference gate is fail-closed across new runtime roots, manifes
   assert.deepEqual(historicalReferences("'durationsMs.audit'"), []);
   assert.deepEqual(historicalReferences('Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts unless needed.'), []);
   assert.deepEqual(historicalReferences('Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'), []);
+  assert.deepEqual(historicalReferences('Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.'), []);
   assert.deepEqual(historicalReferences('run: cat .audit/entregar-issue/handoff-ready.json # Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'), ['.audit']);
   assert.equal(nestedSkillInvocation("invokeSkill('auditar-issue')"), true);
   assert.equal(nestedSkillInvocation("invokeSkill(['auditar', '-', 'issue'].join(''))"), true);
@@ -190,6 +198,19 @@ test('historical reference gate is fail-closed across new runtime roots, manifes
   assert.ok(activeFiles.some((path) => path.startsWith('config/')), 'config must be inside the fail-closed active scan');
   assert.ok(activeFiles.some((path) => path.startsWith('actions/')), 'actions must be inside the fail-closed active scan');
   assert.ok(activeFiles.some((path) => path.startsWith('schemas/')), 'schemas must be inside the fail-closed active scan');
+});
+
+test('canonical requirements may describe retired V1 surfaces without making them executable dependencies', async () => {
+  const body = await readFile(new URL('config/delivery-v2-requirements.json', root), 'utf8');
+  const contract = JSON.parse(body);
+  const retirement = contract.requirements.find((requirement) => requirement.id === 'DV2-014');
+  assert.equal(retirement.status, 'validated');
+  assert.match(retirement.summary, /only active normal-path entrypoint/);
+  assert.match(retirement.summary, /are retired/);
+  assert.deepEqual(historicalReferences(body), []);
+  const executableBody = stripReferenceOnlyProseFromBody(body);
+  assert.doesNotMatch(executableBody, /delivery-request/i);
+  assert.doesNotMatch(executableBody, /(?:^|[^A-Za-z0-9_$])\.audit\b/i);
 });
 
 test('capability manifest describes only the active V2 architecture', async () => {
