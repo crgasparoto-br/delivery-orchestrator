@@ -43,6 +43,8 @@ Exit condition: the core policy and target-repository policy contract make the a
 
 ### DV2-007 — Versioned classifier distribution
 
+Status: **implemented; rollout pending target merges**.
+
 Depends on DV2-006.
 
 Official direction: generated vendoring from the private orchestrator.
@@ -57,6 +59,14 @@ Required work:
 - verifier that detects drift;
 - orchestrator-driven update PR flow;
 - migrate `controle_calorias` and `training-system` away from hand-maintained classifier copies.
+
+Current rollout evidence:
+
+- orchestrator generator/distribution merged by PR #31;
+- target-specific `RoleGuard` promotion preserved by PR #32;
+- `controle_calorias` migration: PR #1069, generated package pinned to orchestrator commit `1d6185de16e3a30378a810132bb4e3cf9483f98c`;
+- `training-system` migration: PR #435, generated package pinned to the same orchestrator commit;
+- do not promote DV2-007 to `validated` until both target repositories actually consume the generated package after merge.
 
 Exit condition: public and private target repositories consume traceable generated policy without directly requiring private reusable actions.
 
@@ -156,7 +166,7 @@ Existing evidence:
 - real FAST accessibility change executed related tests instead of the full 24-shard suite;
 - observed FAST runtime ~128 seconds versus ~1,255-second historical full baseline.
 
-Follow-up after DV2-007: replace the manually localized classifier with the generated versioned package.
+Follow-up after DV2-007: replace the manually localized classifier with the generated versioned package. PR #1069 carries that migration and DV2-007 remains non-terminal until it is merged.
 
 ### DV2-013 — `training-system`
 
@@ -171,7 +181,7 @@ Required closure:
 - merge manually/human-authorized;
 - run one real low-risk UI FAST PR;
 - record duration and skipped/executed gates;
-- migrate to generated classifier package after DV2-007.
+- migrate to generated classifier package after DV2-007; this migration is included in PR #435.
 
 Do not mark rolled-out based only on a CRITICAL migration PR.
 
@@ -238,7 +248,7 @@ That means every required item below is terminal:
 
 Unless a production incident changes priority, continue in this order:
 
-1. DV2-007
+1. complete DV2-007 rollout by merging the generated packages in both target repositories and recording terminal evidence;
 2. DV2-008
 3. DV2-009
 4. DV2-010
