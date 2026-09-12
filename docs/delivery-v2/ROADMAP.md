@@ -111,6 +111,8 @@ Exit condition: every loop either reaches a terminal state or deterministic esca
 
 ### DV2-010 — Exact-head release gate
 
+Status: **implemented; validation pending live exact-head release exercise**.
+
 Depends on DV2-008 and DV2-009.
 
 Required work:
@@ -250,11 +252,11 @@ That means every required item below is terminal:
 
 Unless a production incident changes priority, continue in this order:
 
-1. DV2-010
-2. DV2-016
-3. DV2-011
-4. validate DV2-008 with a real CRITICAL pilot
-5. validate DV2-009 with bounded CI/audit remediation evidence
+1. DV2-016
+2. DV2-011
+3. validate DV2-008 with a real CRITICAL pilot
+4. validate DV2-009 with bounded CI/audit remediation evidence
+5. validate DV2-010 with a live exact-head release exercise
 6. close DV2-013
 7. DV2-014
 

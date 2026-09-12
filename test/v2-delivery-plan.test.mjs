@@ -19,6 +19,11 @@ test('builds deterministic plan with explicit provider, risk and repository safe
   assert.equal(plan.controls.noAutomaticMerge, true);
   assert.equal(plan.audit.contractSchemaVersion, 1);
   assert.equal(plan.audit.legacyV1HandoffRequired, false);
+  assert.equal(plan.release.contractSchemaVersion, 1);
+  assert.equal(plan.release.requiredStatusName, 'Delivery V2 Release');
+  assert.equal(plan.release.exactRemoteHeadRequired, true);
+  assert.equal(plan.release.createsResultOnlyCommit, false);
+  assert.equal(plan.release.automaticMergeAllowed, false);
 });
 
 test('unconfigured repository path fails closed in the delivery planner', () => {
