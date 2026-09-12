@@ -22,8 +22,8 @@ const STAGES = Object.freeze({
   })
 });
 
-export function buildCiPlan({ requested = 'auto', changedPaths = [] } = {}) {
-  const risk = resolveRiskProfile({ requested, changedPaths });
+export function buildCiPlan({ requested = 'auto', changedPaths = [], repositoryPolicy = {} } = {}) {
+  const risk = resolveRiskProfile({ requested, changedPaths, repositoryPolicy });
   const policy = executionPolicyFor(risk.profile);
   return {
     schemaVersion: 1,

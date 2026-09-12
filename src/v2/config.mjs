@@ -1,9 +1,22 @@
 import { resolveProviderSelection } from './provider-policy.mjs';
 import { resolveRequestedRiskProfile } from './risk-profile.mjs';
+import { normalizeRepositoryRiskPolicy } from './repository-risk-policy.mjs';
 
 function splitPaths(value) {
   if (!value) return [];
   return String(value).split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function parseRepositoryRiskPolicy(value) {
+  if (!value) return normalizeRepositoryRiskPolicy({});
+  if (typeof value === 'object') return normalizeRepositoryRiskPolicy(value);
+  let parsed;
+  try {
+    parsed = JSON.parse(String(value));
+  } catch (error) {
+    throw new Error(`DELIVERY_RISK_POLICY_JSON must be valid JSON: ${error.message}`);
+  }
+  return normalizeRepositoryRiskPolicy(parsed);
 }
 
 export function loadV2Config(args = {}, env = process.env) {
@@ -15,11 +28,13 @@ export function loadV2Config(args = {}, env = process.env) {
   const auditorModel = args.auditorModel ?? env.DELIVERY_AUDITOR_MODEL;
   const requestedRisk = resolveRequestedRiskProfile(args.risk ?? env.DELIVERY_RISK_PROFILE ?? 'auto');
   const changedPaths = args.changedPaths?.length ? args.changedPaths : splitPaths(env.DELIVERY_CHANGED_PATHS);
+  const repositoryPolicy = parseRepositoryRiskPolicy(args.riskPolicyJson ?? env.DELIVERY_RISK_POLICY_JSON);
   return {
     architecture: 'github-native-v2',
     providers: resolveProviderSelection({ provider, implementerProvider, auditorProvider, model, implementerModel, auditorModel }),
     requestedRisk,
     changedPaths,
+    repositoryPolicy,
     repository: args.repository ?? env.TARGET_REPOSITORY ?? null,
     issueNumber: Number.parseInt(args.issueNumber ?? env.TARGET_ISSUE ?? '', 10) || null
   };

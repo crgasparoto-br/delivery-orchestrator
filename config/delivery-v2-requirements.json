@@ -78,11 +78,11 @@
     {
       "id": "DV2-006",
       "title": "Fail-closed classifier hardening for sensitive boundaries",
-      "status": "planned",
+      "status": "validated",
       "requiredForV2Default": true,
       "summary": "FAST is a strict safe allowlist; authentication, authorization, session, identity, permissions, sensitive boundaries and unknown paths cannot be downgraded by convenient filenames or extensions.",
-      "implementationRefs": [],
-      "validationRefs": [],
+      "implementationRefs": ["file:src/v2/risk-profile.mjs", "file:src/v2/repository-risk-policy.mjs", "file:src/v2/ci-plan.mjs", "file:actions/delivery-v2-risk/index.cjs", "file:.github/workflows/delivery-v2-classify-ci.yml"],
+      "validationRefs": ["file:test/v2-risk-profile.test.mjs", "file:test/v2-adaptive-ci.test.mjs", "file:test/v2-delivery-plan.test.mjs"],
       "rolloutRefs": [],
       "trackingIssue": 27
     },

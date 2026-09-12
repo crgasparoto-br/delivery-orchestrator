@@ -27,7 +27,7 @@ No Phase A work should be reopened unless a later finding proves a systemic defe
 
 ### DV2-006 — Fail-closed classifier hardening
 
-Priority: **highest active architecture item**.
+Status: **validated**.
 
 Required work:
 
@@ -198,7 +198,7 @@ Exit condition: no normal delivery path needs V1 to complete safely.
 
 ### DV2-015 — Canonical master specification and executable completeness gate
 
-Status: **implemented by the master-contract change; validation requires CI/merge evidence**.
+Status: **validated**.
 
 Required work:
 
@@ -238,15 +238,13 @@ That means every required item below is terminal:
 
 Unless a production incident changes priority, continue in this order:
 
-1. DV2-006
-2. DV2-007
-3. DV2-008
-4. DV2-009
-5. DV2-010
-6. DV2-016
-7. DV2-011
-8. close DV2-013
-9. DV2-014
-10. promote DV2-015 from implemented to validated once the completeness gate is green on `main`.
+1. DV2-007
+2. DV2-008
+3. DV2-009
+4. DV2-010
+5. DV2-016
+6. DV2-011
+7. close DV2-013
+8. DV2-014
 
 Every PR should name the `DV2-*` IDs it advances and update the manifest only when the evidence justifies the new status.
