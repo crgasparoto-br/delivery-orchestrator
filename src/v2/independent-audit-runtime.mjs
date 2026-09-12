@@ -43,6 +43,12 @@ function assertSameSha(actual, expected, label) {
   }
 }
 
+function assertSameRepositoryId(actual, expected, label) {
+  if (requiredPositiveInteger(actual, label) !== requiredPositiveInteger(expected, `expected ${label}`)) {
+    throw new Error(`${label} does not match the audited pull request repository`);
+  }
+}
+
 function workflowFileEvidence(value, label) {
   const evidence = requiredObject(value, label);
   const path = requiredString(evidence.path, `${label}.path`);
@@ -67,8 +73,9 @@ export function assertTrustedCriticalAuditPilot(pullRequest, repository) {
   if (!pullRequest || typeof pullRequest !== 'object') throw new Error('pullRequest is required');
   const expectedRepository = requiredString(repository, 'repository');
   const headRepository = requiredString(pullRequest.head?.repo?.full_name, 'pullRequest.head.repo.full_name');
-  if (headRepository !== expectedRepository) {
-    throw new Error(`CRITICAL audit pilot must originate from the trusted repository: expected ${expectedRepository}, got ${headRepository}`);
+  const baseRepository = requiredString(pullRequest.base?.repo?.full_name, 'pullRequest.base.repo.full_name');
+  if (headRepository !== expectedRepository || baseRepository !== expectedRepository) {
+    throw new Error(`CRITICAL audit pilot must originate from and target the trusted repository: expected ${expectedRepository}`);
   }
   if (!isCriticalAuditPilot(pullRequest)) throw new Error('PR is not marked as a DV2 CRITICAL audit pilot');
   return pullRequest;
@@ -125,8 +132,10 @@ export function assertTrustedSourceWorkflowRun(sourceWorkflowRun, repository, pu
   }
   assertSameString(binding.head?.ref, pr.head?.ref, 'source workflow PR head ref');
   assertSameSha(binding.head?.sha, pr.head?.sha, 'source workflow PR head SHA');
+  assertSameRepositoryId(binding.head?.repo?.id, pr.head?.repo?.id, 'source workflow PR head repository id');
   assertSameString(binding.base?.ref, pr.base?.ref, 'source workflow PR base ref');
   assertSameSha(binding.base?.sha, pr.base?.sha, 'source workflow PR base SHA');
+  assertSameRepositoryId(binding.base?.repo?.id, pr.base?.repo?.id, 'source workflow PR base repository id');
 
   const candidateWorkflow = workflowFileEvidence(evidence.candidate, 'sourceWorkflowEvidence.candidate');
   const trustedBaseWorkflow = workflowFileEvidence(evidence.trustedBase, 'sourceWorkflowEvidence.trustedBase');

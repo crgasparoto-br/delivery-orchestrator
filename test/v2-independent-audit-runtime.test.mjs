@@ -30,7 +30,7 @@ function pilotPr(overrides = {}) {
     title: 'security(v2): bind audit evidence to trusted CI workflow',
     body: 'Exercises the GitHub-native auditor.\n\nDV2-AUDIT-PILOT: critical\n',
     user: { login: 'implementer-user' },
-    base: { ref: 'main', sha: B, repo: { id: REPOSITORY_ID } },
+    base: { ref: 'main', sha: B, repo: { id: REPOSITORY_ID, full_name: REPOSITORY } },
     head: { ref: 'test/dv2-audit-pilot', sha: A, repo: { id: REPOSITORY_ID, full_name: REPOSITORY } },
     merge_commit_sha: M,
     ...overrides
@@ -99,7 +99,11 @@ test('CRITICAL pilot marker is explicit and line-bound', () => {
 test('runtime independently enforces trusted repository origin for CRITICAL pilots', () => {
   assert.equal(assertTrustedCriticalAuditPilot(pilotPr(), REPOSITORY).number, 48);
   assert.throws(
-    () => assertTrustedCriticalAuditPilot(pilotPr({ head: { ref: 'fork', sha: A, repo: { full_name: 'attacker/fork' } } }), REPOSITORY),
+    () => assertTrustedCriticalAuditPilot(pilotPr({ head: { ref: 'fork', sha: A, repo: { id: 9, full_name: 'attacker/fork' } } }), REPOSITORY),
+    /trusted repository/
+  );
+  assert.throws(
+    () => assertTrustedCriticalAuditPilot(pilotPr({ base: { ref: 'main', sha: B, repo: { id: 9, full_name: 'attacker/base' } } }), REPOSITORY),
     /trusted repository/
   );
   assert.throws(
@@ -171,7 +175,7 @@ test('source audit evidence must come from the trusted exact-head Delivery V2 CI
   assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ conclusion: 'failure' }), REPOSITORY, pilotPr(), definition, evidence), /terminal green/);
 });
 
-test('source workflow is fail-closed unless it is bound to exactly the audited PR/base/head identity', () => {
+test('source workflow is fail-closed unless it is bound to exactly the audited PR/base/head/repositories identity', () => {
   const definition = workflowDefinition();
   const evidence = workflowEvidence();
   assert.throws(
@@ -191,7 +195,15 @@ test('source workflow is fail-closed unless it is bound to exactly the audited P
     /head_branch/
   );
   assert.throws(
-    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [{ ...greenRun().pull_requests[0], base: { ref: 'main', sha: A } }] }), REPOSITORY, pilotPr(), definition, evidence),
+    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [{ ...greenRun().pull_requests[0], head: { ...greenRun().pull_requests[0].head, repo: { id: REPOSITORY_ID + 1 } } }] }), REPOSITORY, pilotPr(), definition, evidence),
+    /head repository id/
+  );
+  assert.throws(
+    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [{ ...greenRun().pull_requests[0], base: { ...greenRun().pull_requests[0].base, repo: { id: REPOSITORY_ID + 1 } } }] }), REPOSITORY, pilotPr(), definition, evidence),
+    /base repository id/
+  );
+  assert.throws(
+    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [{ ...greenRun().pull_requests[0], base: { ref: 'main', sha: A, repo: { id: REPOSITORY_ID } } }] }), REPOSITORY, pilotPr(), definition, evidence),
     /base SHA/
   );
 });

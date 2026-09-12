@@ -43,7 +43,7 @@
     "check": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "scope", "subjectSha", "status", "workflowRunId"],
+      "required": ["name", "scope", "subjectSha", "status", "workflowRunId", "workflowEvidence"],
       "properties": {
         "name": {"type": "string", "minLength": 1},
         "required": {"type": "boolean"},
@@ -52,7 +52,7 @@
         "status": {"type": "string", "minLength": 1},
         "conclusion": {"type": ["string", "null"]},
         "workflowRunId": {"type": "integer", "minimum": 1},
-        "workflowEvidence": {"anyOf": [{"$ref": "#/$defs/workflowEvidence"}, {"type": "null"}]}
+        "workflowEvidence": {"$ref": "#/$defs/workflowEvidence"}
       }
     }
   }
