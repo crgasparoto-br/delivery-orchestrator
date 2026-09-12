@@ -8,6 +8,7 @@
   "baseSha": "b2952652539998708e3ae5fc74cadd7fa68e98fe",
   "headRef": "ci/431-delivery-v2-adaptive-gate",
   "materialHeadSha": "ae0fade7be03c6c66f00fbd605bd85d9259aa622",
+  "mergePreviewSha": "7dbf31c8fc2b1d700da3ef54e78a947f4811243b",
   "mergeCommitSha": "0fba4d2870e087775433b844e22f04c0daa84bcf",
   "classifierPath": ".delivery-v2/risk-profile.mjs",
   "sourceWorkflow": {
@@ -15,7 +16,8 @@
     "workflowId": 277560379,
     "name": "Validate PR",
     "path": ".github/workflows/validate-pr.yml",
-    "event": "pull_request"
+    "event": "pull_request",
+    "bindingJobName": "Merge preview compatibility"
   },
   "purpose": "Canonical DV2-013 independent audit of the exact CRITICAL migration candidate after historical approval evidence was found to be missing."
 }
