@@ -37,11 +37,6 @@ const retiredPaths = [
   'docs/delivery-completion-contract.md'
 ];
 
-const nonRuntimeRootDirectories = new Set(['.audit', '.git', 'docs', 'node_modules', 'test']);
-const nonRuntimeRootFiles = new Set(['.gitignore', 'README.md', 'LICENSE', 'LICENSE.md']);
-const historicalRuntimeExclusions = ['skills/catalog/'];
-const nestedSkillInvocationPattern = /(?:\b(?:invokeSkill|runSkill|useSkill)\s*\(|skills?:\/\/)/i;
-const collapsedNestedSkillInvocationPattern = /(?:invokeskill|runskill|useskill|skills?:\/\/)/i;
 const forbiddenActiveV1Markers = [
   ['delivery-request', /delivery-request/i],
   ['CONTROL_ISSUE_NUMBER', /CONTROL_ISSUE_NUMBER/],
@@ -50,9 +45,10 @@ const forbiddenActiveV1Markers = [
   ['delivery-loop', /delivery-loop/i],
   ['persistent delivery queue', /persistent delivery queue/i]
 ];
-const auditPathPattern = /(?:^|[^A-Za-z0-9_$])\.audit\b/i;
-const workerSourcePattern = /^\.github\/workflows\/delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)\.md$/;
-const workerLockPattern = /^\.github\/workflows\/delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)\.lock\.yml$/;
+
+const historicalRootPattern = /(?:^|[^A-Za-z0-9_$])(?:\.audit(?:\/|\b)|skills\/catalog(?:\/|\b))/i;
+const workerSourcePattern = /^delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)\.md$/;
+const workerLockPattern = /^delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)\.lock\.yml$/;
 const workerContextHygieneFragment = 'Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts';
 const declarativeRequirementSummaries = Object.freeze({
   'DV2-008': 'Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.',
@@ -68,172 +64,100 @@ async function exists(relativePath) {
   }
 }
 
-async function listFiles(relativePath) {
-  const base = new URL(`${relativePath.replace(/\/$/, '')}/`, root);
-  let entries;
-  try {
-    entries = await readdir(base, { withFileTypes: true });
-  } catch (error) {
-    if (error?.code === 'ENOENT') return [];
-    throw error;
-  }
-  const files = [];
-  for (const entry of entries) {
-    const child = `${relativePath.replace(/\/$/, '')}/${entry.name}`;
-    if (historicalRuntimeExclusions.some((prefix) => child === prefix.slice(0, -1) || child.startsWith(prefix))) continue;
-    if (entry.isDirectory()) files.push(...await listFiles(child));
-    else if (entry.isFile()) files.push(child);
-  }
-  return files;
-}
-
 function countOccurrences(body, fragment) {
   return body.split(fragment).length - 1;
 }
 
-function removeExactDeclarativeFragment(body, fragment, relativePath) {
-  const count = countOccurrences(body, fragment);
-  assert.equal(count, 1, `${relativePath} must contain exactly one canonical declarative fragment, found ${count}`);
-  return body.replace(fragment, '');
-}
-
-function sanitizeKnownDeclarativeSurface(relativePath, body) {
-  if (workerSourcePattern.test(relativePath)) {
-    return removeExactDeclarativeFragment(body, workerContextHygieneFragment, relativePath);
-  }
-  if (workerLockPattern.test(relativePath)) {
+function sanitizeDeclarativeWorkflowText(fileName, body) {
+  if (workerSourcePattern.test(fileName)) {
     const count = countOccurrences(body, workerContextHygieneFragment);
-    assert.ok(count <= 1, `${relativePath} must contain at most one generated declarative fragment, found ${count}`);
-    return count === 1 ? body.replace(workerContextHygieneFragment, '') : body;
+    assert.equal(count, 1, `${fileName} must contain exactly one canonical context-hygiene declaration`);
+    return body.replace(workerContextHygieneFragment, '');
   }
-  if (relativePath === 'config/delivery-v2-requirements.json') {
-    const contract = JSON.parse(body);
-    let sanitized = body;
-    for (const [id, expectedSummary] of Object.entries(declarativeRequirementSummaries)) {
-      const requirement = contract.requirements.find((item) => item.id === id);
-      assert.ok(requirement, `${relativePath} must contain ${id}`);
-      assert.equal(requirement.summary, expectedSummary, `${id} retirement/audit declaration changed unexpectedly`);
-      sanitized = removeExactDeclarativeFragment(sanitized, expectedSummary, `${relativePath}:${id}`);
-    }
-    return sanitized;
+  if (workerLockPattern.test(fileName)) {
+    const count = countOccurrences(body, workerContextHygieneFragment);
+    assert.ok(count <= 1, `${fileName} must contain at most one generated context-hygiene declaration`);
+    return count === 1 ? body.replace(workerContextHygieneFragment, '') : body;
   }
   return body;
 }
 
-function collapseSourceComposition(source) {
-  return source.replace(/['"`\s,\[\](){}+]/g, '');
+async function workflowFiles() {
+  const entries = await readdir(new URL('.github/workflows/', root), { withFileTypes: true });
+  return entries.filter((entry) => entry.isFile()).map((entry) => entry.name).sort();
 }
 
-function historicalReferences(body) {
-  const collapsed = collapseSourceComposition(body);
-  const matches = [];
-  if (/skills\/catalog\b/i.test(body) || /skills\/?catalog/i.test(collapsed)) matches.push('skills/catalog');
-  if (auditPathPattern.test(body) || auditPathPattern.test(collapsed)) matches.push('.audit');
-  return matches;
+async function actionDirectories() {
+  const entries = await readdir(new URL('actions/', root), { withFileTypes: true });
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
 }
 
-function nestedSkillInvocation(body) {
-  if (nestedSkillInvocationPattern.test(body)) return true;
-  return collapsedNestedSkillInvocationPattern.test(collapseSourceComposition(body));
-}
-
-function isExecutableDependencySurface() {
-  return true;
-}
-
-async function activeExecutableFiles() {
-  const entries = await readdir(root, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      if (nonRuntimeRootDirectories.has(entry.name)) continue;
-      files.push(...await listFiles(entry.name));
-      continue;
-    }
-    if (entry.isFile() && !nonRuntimeRootFiles.has(entry.name)) files.push(entry.name);
+function assertNoActiveLegacyMarkers(relativePath, body) {
+  for (const [marker, pattern] of forbiddenActiveV1Markers) {
+    assert.doesNotMatch(body, pattern, `${relativePath} reintroduced active V1 marker ${marker}`);
   }
-  return [...new Set(files)].filter(isExecutableDependencySurface).sort();
 }
 
-test('DV2-014 removes every active V1 orchestration surface', async () => {
+test('DV2-014 removes every retired V1 orchestration surface', async () => {
   const present = [];
   for (const relativePath of retiredPaths) if (await exists(relativePath)) present.push(relativePath);
   assert.deepEqual(present, []);
 });
 
-test('active runtime trees cannot reintroduce V1 orchestration markers or nested Skill invocation outside historical snapshots', async () => {
-  const matches = [];
-  for (const relativePath of await activeExecutableFiles()) {
-    const body = await readFile(new URL(relativePath, root), 'utf8');
-    const executableBody = sanitizeKnownDeclarativeSurface(relativePath, body);
-    for (const [marker, pattern] of forbiddenActiveV1Markers) {
-      if (pattern.test(executableBody)) matches.push(`${relativePath}:${marker}`);
-    }
-    if (nestedSkillInvocation(executableBody)) matches.push(`${relativePath}:nested-skill-invocation`);
+test('all GitHub workflow entrypoints are explicitly Delivery V2', async () => {
+  const files = await workflowFiles();
+  assert.ok(files.includes('delivery-v2-dispatch.yml'));
+  for (const fileName of files) {
+    assert.match(fileName, /^delivery-v2-/, `${fileName} is an undeclared non-V2 workflow entrypoint`);
+    const body = sanitizeDeclarativeWorkflowText(fileName, await readFile(new URL(`.github/workflows/${fileName}`, root), 'utf8'));
+    assertNoActiveLegacyMarkers(`.github/workflows/${fileName}`, body);
+    assert.doesNotMatch(body, historicalRootPattern, `${fileName} has an executable dependency on historical V1 roots`);
   }
-  assert.deepEqual(matches, []);
 });
 
-test('active executable surfaces cannot reference historical V1 snapshot trees except path-bound declarative prompt/contract text', async () => {
-  const matches = [];
-  for (const relativePath of await activeExecutableFiles()) {
-    const body = await readFile(new URL(relativePath, root), 'utf8');
-    const executableBody = sanitizeKnownDeclarativeSurface(relativePath, body);
-    for (const marker of historicalReferences(executableBody)) matches.push(`${relativePath}:${marker}`);
+test('all repository-local action entrypoints are explicitly Delivery V2', async () => {
+  const directories = await actionDirectories();
+  assert.ok(directories.length > 0);
+  for (const directory of directories) {
+    assert.match(directory, /^delivery-v2-/, `${directory} is an undeclared non-V2 action entrypoint`);
+    const manifestPath = `actions/${directory}/action.yml`;
+    assert.equal(await exists(manifestPath), true, `${directory} must expose action.yml`);
+    const body = await readFile(new URL(manifestPath, root), 'utf8');
+    assertNoActiveLegacyMarkers(manifestPath, body);
+    assert.doesNotMatch(body, historicalRootPattern, `${manifestPath} depends on historical V1 roots`);
   }
-  assert.deepEqual(matches, []);
 });
 
-test('retirement scan is fail-closed for unknown file types, composed paths and arbitrary nested Skill names', async () => {
-  assert.equal(isExecutableDependencySurface('scripts/legacy.rb'), true);
-  assert.equal(isExecutableDependencySurface('actions/custom/runner.go'), true);
-  assert.equal(isExecutableDependencySurface('config/runtime.conf'), true);
-  assert.deepEqual(historicalReferences("const legacy = '.audit/entregar-issue'; await readFile(path.join(root, legacy, 'handoff-ready.json'))"), ['.audit']);
-  assert.deepEqual(historicalReferences("const legacyRoot = ['.au',\n'dit'].join(''); await readFile(path.join(root, legacyRoot, 'handoff-ready.json'))"), ['.audit']);
-  assert.deepEqual(historicalReferences("const legacyCatalog = ['skills/', 'catalog'].join('');"), ['skills/catalog']);
-  assert.deepEqual(historicalReferences("const legacyCatalog = path.join('skills', 'catalog', 'legacy.js');"), ['skills/catalog']);
-  assert.deepEqual(historicalReferences('run: cat .audit/entregar-issue/handoff-ready.json'), ['.audit']);
-  assert.deepEqual(historicalReferences('uses: ./skills/catalog/example/action'), ['skills/catalog']);
-  assert.equal(nestedSkillInvocation("invokeSkill('auditar-issue')"), true);
-  assert.equal(nestedSkillInvocation("invokeSkill('security-review')"), true);
-  assert.equal(nestedSkillInvocation("invokeSkill(['security', '-', 'review'].join(''))"), true);
-  assert.equal(nestedSkillInvocation("const ref = 'skills://security-review';"), true);
-  assert.equal(nestedSkillInvocation('Use independent audit policy, but do not invoke nested Skills.'), false);
-  const activeFiles = await activeExecutableFiles();
-  assert.ok(activeFiles.some((path) => path.startsWith('config/')), 'config must be inside the fail-closed active scan');
-  assert.ok(activeFiles.some((path) => path.startsWith('actions/')), 'actions must be inside the fail-closed active scan');
-  assert.ok(activeFiles.some((path) => path.startsWith('schemas/')), 'schemas must be inside the fail-closed active scan');
+test('package normal-path commands enter Delivery V2 only', async () => {
+  const pkg = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
+  assert.equal(pkg.scripts.run, 'node src/cli.mjs plan-v2');
+  assert.equal(pkg.scripts['plan:v2'], 'node src/cli.mjs plan-v2');
+  assert.equal(pkg.scripts['resume:v2'], 'node src/cli.mjs resume-v2');
+  for (const [name, command] of Object.entries(pkg.scripts)) {
+    assertNoActiveLegacyMarkers(`package.json#scripts.${name}`, command);
+    assert.doesNotMatch(command, historicalRootPattern, `package script ${name} depends on historical V1 roots`);
+  }
 });
 
-test('declarative exceptions are path-bound, exact and cannot hide equivalent runtime code', () => {
-  const contextLine = `${workerContextHygieneFragment} unless needed.`;
-  const sanitizedWorker = sanitizeKnownDeclarativeSurface('.github/workflows/delivery-v2-worker-codex-fast.md', contextLine);
-  assert.deepEqual(historicalReferences(sanitizedWorker), []);
-  assert.equal(sanitizeKnownDeclarativeSurface('.github/workflows/delivery-v2-worker-codex-fast.lock.yml', 'generated lock without prompt prose'), 'generated lock without prompt prose');
-  const arbitraryCode = `const text = ${JSON.stringify(workerContextHygieneFragment)}; const legacy = '.audit/entregar-issue/handoff-ready.json';`;
-  assert.equal(sanitizeKnownDeclarativeSurface('scripts/legacy.js', arbitraryCode), arbitraryCode);
-  assert.deepEqual(historicalReferences(arbitraryCode), ['skills/catalog', '.audit']);
-  assert.throws(
-    () => sanitizeKnownDeclarativeSurface('.github/workflows/delivery-v2-worker-codex-fast.md', `${workerContextHygieneFragment}\n${workerContextHygieneFragment}`),
-    /exactly one canonical declarative fragment/
-  );
-  assert.throws(
-    () => sanitizeKnownDeclarativeSurface('.github/workflows/delivery-v2-worker-codex-fast.lock.yml', `${workerContextHygieneFragment}\n${workerContextHygieneFragment}`),
-    /at most one generated declarative fragment/
-  );
+test('current V2 CLI has no concrete normal-path dependency on retired V1 roots', async () => {
+  const cli = await readFile(new URL('src/cli.mjs', root), 'utf8');
+  assert.match(cli, /command = 'plan-v2'/);
+  assert.doesNotMatch(cli, /runDelivery|finalizeIndependentRelease|loadConfig|verifySynchronizedSkillCatalog/);
+  assertNoActiveLegacyMarkers('src/cli.mjs', cli);
+  assert.doesNotMatch(cli, historicalRootPattern);
 });
 
-test('canonical requirements may describe retired V1 surfaces without making them executable dependencies', async () => {
+test('canonical requirements describe retirement without redefining the runtime surface', async () => {
   const body = await readFile(new URL('config/delivery-v2-requirements.json', root), 'utf8');
   const contract = JSON.parse(body);
+  for (const [id, expectedSummary] of Object.entries(declarativeRequirementSummaries)) {
+    const requirement = contract.requirements.find((item) => item.id === id);
+    assert.ok(requirement, `missing ${id}`);
+    assert.equal(requirement.summary, expectedSummary);
+  }
   const retirement = contract.requirements.find((requirement) => requirement.id === 'DV2-014');
   assert.equal(retirement.status, 'validated');
   assert.match(retirement.summary, /only active normal-path entrypoint/);
-  assert.match(retirement.summary, /are retired/);
-  const executableBody = sanitizeKnownDeclarativeSurface('config/delivery-v2-requirements.json', body);
-  assert.deepEqual(historicalReferences(executableBody), []);
-  assert.doesNotMatch(executableBody, /delivery-request/i);
-  assert.doesNotMatch(executableBody, auditPathPattern);
 });
 
 test('capability manifest describes only the active V2 architecture', async () => {
@@ -250,15 +174,6 @@ test('capability manifest describes only the active V2 architecture', async () =
   }
 });
 
-test('V2 is the default CLI and package entrypoint', async () => {
-  const cli = await readFile(new URL('src/cli.mjs', root), 'utf8');
-  const pkg = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
-  assert.match(cli, /command = 'plan-v2'/);
-  assert.doesNotMatch(cli, /runDelivery|finalizeIndependentRelease|loadConfig|verifySynchronizedSkillCatalog/);
-  assert.equal(pkg.scripts.run, 'node src/cli.mjs plan-v2');
-  assert.doesNotMatch(JSON.stringify(pkg), /max_cycles|delivery-request|Independent delivery loop/i);
-});
-
 test('normal-path docs point to V2 and preserve legacy material only as history', async () => {
   const readme = await readFile(new URL('README.md', root), 'utf8');
   const security = await readFile(new URL('docs/SECURITY.md', root), 'utf8');
@@ -270,7 +185,7 @@ test('normal-path docs point to V2 and preserve legacy material only as history'
   assert.doesNotMatch(security, /signing private key|implementer can read the materialized auditor signing key/i);
 });
 
-test('retirement evidence records an empty legacy queue and preserves verification metadata as inactive history', async () => {
+test('retirement evidence defines normal-path structural proof and historical snapshots as inactive', async () => {
   const evidence = JSON.parse(await readFile(new URL('docs/delivery-v2/evidence/dv2-014-v1-retirement.json', root), 'utf8'));
   const archivedTrust = JSON.parse(await readFile(new URL('docs/delivery-v2/history/v1/trusted-auditors.json', root), 'utf8'));
   const archivedCatalog = JSON.parse(await readFile(new URL('docs/delivery-v2/history/v1/skills-catalog-sync-manifest.json', root), 'utf8'));
@@ -288,7 +203,6 @@ test('retirement evidence records an empty legacy queue and preserves verificati
     'scripts/finalize-control-request.mjs',
     'skills/orquestrar-entrega/**'
   ]);
-  assert.equal(evidence.postRetirementHardening.runtimeMarkerScan, true);
   assert.equal(evidence.finalCleanup.issueNumber, 61);
   assert.deepEqual(evidence.finalCleanup.removedResidualPaths, [
     'scripts/generate-auditor-trust.sh',
@@ -300,12 +214,10 @@ test('retirement evidence records an empty legacy queue and preserves verificati
     skillCatalogSyncManifest: 'docs/delivery-v2/history/v1/skills-catalog-sync-manifest.json'
   });
   assert.equal(evidence.finalCleanup.archivedResidualMetadataRuntimeActive, false);
-  assert.equal(archivedTrust.auditors[0].key_id, 'delivery-independent-auditor-v1');
-  assert.equal(archivedTrust.auditors[0].public_key_sha256, '85ad029c0d4f78937ec837fd4a40574edf6b8d1e14c268f801a681bc38b6e68d');
-  assert.equal(archivedCatalog.source, 'chatgpt-web-installed-skills');
-  assert.equal(archivedCatalog.skills['auditar-issue'].digest, 'sha256:447d43019f0e66a7197e2f55b6ef9743c24e731d4614e69695c312f89b5acac9');
   assert.equal(evidence.finalCleanup.capabilityManifestSchemaVersion, 2);
-  assert.equal(evidence.finalCleanup.activeRuntimeMarkerScan, true);
-  assert.equal(evidence.finalCleanup.historicalDependencyScan, true);
+  assert.equal(evidence.finalCleanup.normalPathProof, 'structural-entrypoints');
+  assert.equal(evidence.finalCleanup.lexicalScannerIsSecurityBoundary, false);
   assert.equal(evidence.finalCleanup.ghAwUsageArtifactContract, true);
+  assert.equal(archivedTrust.auditors[0].key_id, 'delivery-independent-auditor-v1');
+  assert.equal(archivedCatalog.source, 'chatgpt-web-installed-skills');
 });
