@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "delivery-v2-requirements.schema.json",
+  "title": "Delivery V2 requirements manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "contract",
+    "canonicalSpec",
+    "roadmap",
+    "umbrellaIssue",
+    "statusModel",
+    "completionPolicy",
+    "requirements"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "contract": {
+      "const": "delivery-v2"
+    },
+    "canonicalSpec": {
+      "type": "string",
+      "minLength": 1
+    },
+    "roadmap": {
+      "type": "string",
+      "minLength": 1
+    },
+    "umbrellaIssue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "statusModel": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "planned",
+          "implemented",
+          "validated",
+          "rolled-out"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "completionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "terminalStatuses",
+        "allRequiredRequirementsMustBeTerminal",
+        "v1RetirementRequirement"
+      ],
+      "properties": {
+        "terminalStatuses": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "validated",
+              "rolled-out"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "allRequiredRequirementsMustBeTerminal": {
+          "const": true
+        },
+        "v1RetirementRequirement": {
+          "type": "string",
+          "pattern": "^DV2-[0-9]{3}$"
+        }
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "status",
+          "requiredForV2Default",
+          "summary",
+          "implementationRefs",
+          "validationRefs",
+          "rolloutRefs",
+          "trackingIssue"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^DV2-[0-9]{3}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "planned",
+              "implemented",
+              "validated",
+              "rolled-out"
+            ]
+          },
+          "requiredForV2Default": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "implementationRefs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "validationRefs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "rolloutRefs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "trackingIssue": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,254 @@
+{
+  "$schema": "../schemas/delivery-v2-requirements.schema.json",
+  "schemaVersion": 1,
+  "contract": "delivery-v2",
+  "canonicalSpec": "docs/delivery-v2/MASTER_SPEC.md",
+  "roadmap": "docs/delivery-v2/ROADMAP.md",
+  "umbrellaIssue": 27,
+  "statusModel": [
+    "planned",
+    "implemented",
+    "validated",
+    "rolled-out"
+  ],
+  "completionPolicy": {
+    "terminalStatuses": [
+      "validated",
+      "rolled-out"
+    ],
+    "allRequiredRequirementsMustBeTerminal": true,
+    "v1RetirementRequirement": "DV2-014"
+  },
+  "requirements": [
+    {
+      "id": "DV2-001",
+      "title": "Deterministic GitHub-native control plane",
+      "status": "validated",
+      "requiredForV2Default": true,
+      "summary": "GitHub owns delivery identity, deterministic planning, risk and execution policy; AI is a bounded worker, not the orchestrator.",
+      "implementationRefs": [
+        "file:src/v2/delivery-plan.mjs",
+        "file:src/v2/execution-policy.mjs",
+        "file:src/v2/risk-profile.mjs"
+      ],
+      "validationRefs": [
+        "file:test/v2-delivery-plan.test.mjs",
+        "file:test/v2-risk-profile.test.mjs",
+        "github:delivery-orchestrator#21"
+      ],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-002",
+      "title": "Deterministic provider dispatch with no silent fallback",
+      "status": "validated",
+      "requiredForV2Default": true,
+      "summary": "Provider+risk resolves to one pinned worker; missing auth or dispatch failure fails closed and never substitutes another provider.",
+      "implementationRefs": [
+        "file:src/v2/provider-dispatch.mjs",
+        "file:src/v2/provider-policy.mjs"
+      ],
+      "validationRefs": [
+        "file:test/v2-provider-dispatch.test.mjs",
+        "file:test/v2-provider-policy.test.mjs",
+        "github:delivery-orchestrator#23"
+      ],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-003",
+      "title": "Safe-output AI workers and credential isolation",
+      "status": "validated",
+      "requiredForV2Default": true,
+      "summary": "AI workers receive read capability and bounded safe outputs; write credentials are not exposed to agent shell execution.",
+      "implementationRefs": [
+        "file:.github/workflows/delivery-v2-worker-codex-fast.md",
+        "file:.github/workflows/delivery-v2-worker-claude-fast.md",
+        "file:.github/workflows/delivery-v2-worker-copilot-fast.md"
+      ],
+      "validationRefs": [
+        "file:test/v2-worker-contract.test.mjs",
+        "github:delivery-orchestrator#23"
+      ],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-004",
+      "title": "Risk profiles, hard budgets and bounded provider work",
+      "status": "validated",
+      "requiredForV2Default": true,
+      "summary": "FAST/STANDARD/CRITICAL define CI depth, audit policy, implementation attempts, turns and AI-credit ceilings.",
+      "implementationRefs": [
+        "file:src/v2/execution-policy.mjs",
+        "file:src/v2/provider-policy.mjs"
+      ],
+      "validationRefs": [
+        "file:test/v2-delivery-plan.test.mjs",
+        "file:test/v2-provider-policy.test.mjs",
+        "github:delivery-orchestrator#21"
+      ],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-005",
+      "title": "Adaptive CI core and reusable risk output contract",
+      "status": "validated",
+      "requiredForV2Default": true,
+      "summary": "A deterministic classifier selects focused, affected or full CI while caller repositories retain their concrete build/test commands.",
+      "implementationRefs": [
+        "file:src/v2/ci-plan.mjs",
+        "file:actions/delivery-v2-risk/action.yml",
+        "file:.github/workflows/delivery-v2-classify-ci.yml"
+      ],
+      "validationRefs": [
+        "file:test/v2-adaptive-ci.test.mjs",
+        "github:delivery-orchestrator#26"
+      ],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-006",
+      "title": "Fail-closed classifier hardening for sensitive boundaries",
+      "status": "planned",
+      "requiredForV2Default": true,
+      "summary": "FAST is a strict safe allowlist; authentication, authorization, session, identity, permissions, sensitive boundaries and unknown paths cannot be downgraded by convenient filenames or extensions.",
+      "implementationRefs": [],
+      "validationRefs": [],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-007",
+      "title": "Versioned classifier distribution and repository-specific promotion policy",
+      "status": "planned",
+      "requiredForV2Default": true,
+      "summary": "Public/private target repositories consume a generated, fingerprinted policy snapshot from the private orchestrator; overrides may promote risk or add reviewed safe roots but cannot weaken core invariants.",
+      "implementationRefs": [],
+      "validationRefs": [],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-008",
+      "title": "GitHub-native independent audit contract",
+      "status": "planned",
+      "requiredForV2Default": true,
+      "summary": "Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.",
+      "implementationRefs": [],
+      "validationRefs": [],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-009",
+      "title": "Bounded remediation state machine",
+      "status": "planned",
+      "requiredForV2Default": true,
+      "summary": "Actionable CI/audit findings re-enter a deterministic, attempt-bounded remediation loop; exhausted budgets escalate to humans instead of creating open-ended AI-on-AI loops.",
+      "implementationRefs": [],
+      "validationRefs": [],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-010",
+      "title": "Exact-head release gate",
+      "status": "planned",
+      "requiredForV2Default": true,
+      "summary": "Release readiness is computed from the current PR head, required checks, risk profile and required independent review; material SHA drift invalidates prior approval.",
+      "implementationRefs": [],
+      "validationRefs": [],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-011",
+      "title": "Observability, token/cost accounting and performance SLO evidence",
+      "status": "planned",
+      "requiredForV2Default": true,
+      "summary": "Every delivery records provider calls, turns/credits, attempts, CI duration, audit duration, end-to-end duration and terminal reason so V2 can be optimized from evidence.",
+      "implementationRefs": [],
+      "validationRefs": [],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-012",
+      "title": "controle_calorias production pilot",
+      "status": "rolled-out",
+      "requiredForV2Default": true,
+      "summary": "Adaptive CI is merged and a real FAST change proved related-test routing and material runtime reduction.",
+      "implementationRefs": [
+        "github:controle_calorias#1065",
+        "github:controle_calorias#1067"
+      ],
+      "validationRefs": [
+        "github:controle_calorias#1067",
+        "benchmark:FAST=128s;baseline=1255s;reduction=89.8%"
+      ],
+      "rolloutRefs": [
+        "github:controle_calorias@develop"
+      ],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-013",
+      "title": "training-system pilot and FAST benchmark",
+      "status": "implemented",
+      "requiredForV2Default": true,
+      "summary": "Adaptive routing exists in PR #435 but must close independent-audit findings, merge, and prove a real FAST change before rollout is complete.",
+      "implementationRefs": [
+        "github:training-system#431",
+        "github:training-system#435"
+      ],
+      "validationRefs": [],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-014",
+      "title": "V1 and nested-Skill retirement",
+      "status": "planned",
+      "requiredForV2Default": true,
+      "summary": "Disable legacy delivery-request loops and remove normal-path dependence on nested Skills only after V2 audit, release, observability and both pilots are validated.",
+      "implementationRefs": [],
+      "validationRefs": [],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-015",
+      "title": "Canonical master specification and executable completeness gate",
+      "status": "implemented",
+      "requiredForV2Default": true,
+      "summary": "The repository, not a chat transcript, is the durable source of truth for architecture, requirement status and completion.",
+      "implementationRefs": [
+        "file:docs/delivery-v2/MASTER_SPEC.md",
+        "file:docs/delivery-v2/ROADMAP.md",
+        "file:config/delivery-v2-requirements.json",
+        "file:scripts/verify-delivery-v2-completeness.mjs"
+      ],
+      "validationRefs": [
+        "file:test/v2-completeness.test.mjs"
+      ],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    },
+    {
+      "id": "DV2-016",
+      "title": "Persistent resumable delivery state",
+      "status": "planned",
+      "requiredForV2Default": true,
+      "summary": "The deterministic controller persists candidate identity, state transitions, attempt counters and evidence pointers so a new process/chat resumes without reconstructing orchestration history from prose.",
+      "implementationRefs": [],
+      "validationRefs": [],
+      "rolloutRefs": [],
+      "trackingIssue": 27
+    }
+  ]
+}

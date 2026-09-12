@@ -4,6 +4,8 @@
   "delivery_v2_foundation": "v1",
   "delivery_v2_provider_execution": "v1",
   "delivery_v2_adaptive_ci": "v1",
+  "delivery_v2_master_contract": "v1",
+  "delivery_v2_completeness_gate": "v1",
   "ai_provider_selection": "codex|claude|copilot",
   "risk_profiles": "auto|fast|standard|critical",
   "gh_aw_compiler": "v0.88.7"
