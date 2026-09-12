@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { CodexExecutor } from '../src/codex-executor.mjs';
 import {
+  DELIVERY_V2_SOURCE_WORKFLOW_PATH,
   assertTrustedCriticalAuditPilot,
   buildGithubNativeCriticalAuditRequest,
   finalizeIndependentAuditResult,
@@ -58,12 +59,18 @@ async function fetchChangedPaths(repository, pullRequestNumber, token) {
   return paths;
 }
 
-async function fetchFileAtRef(repository, filePath, ref, token) {
+async function fetchFileEvidenceAtRef(repository, filePath, ref, token) {
   const encoded = filePath.split('/').map(encodeURIComponent).join('/');
   const query = new URLSearchParams({ ref });
   const payload = await fetchJson(`https://api.github.com/repos/${repository}/contents/${encoded}?${query}`, token);
   if (payload.type !== 'file' || payload.encoding !== 'base64') throw new Error(`expected base64 file for ${filePath}@${ref}`);
-  return Buffer.from(payload.content, 'base64').toString('utf8');
+  if (payload.path !== filePath) throw new Error(`GitHub content path mismatch for ${filePath}@${ref}`);
+  return Object.freeze({
+    ref: String(ref).toLowerCase(),
+    path: filePath,
+    blobSha: String(payload.sha ?? '').toLowerCase(),
+    content: Buffer.from(payload.content, 'base64').toString('utf8')
+  });
 }
 
 function linuxHome(user) {
@@ -116,8 +123,12 @@ async function main() {
   const sourceWorkflowRun = await fetchJson(`https://api.github.com/repos/${repository}/actions/runs/${sourceWorkflowRunId}`, githubToken);
   if (String(sourceWorkflowRun.head_sha).toLowerCase() !== headSha) throw new Error('source workflow head does not match requested audit head');
   const sourceWorkflowDefinition = await fetchJson(`https://api.github.com/repos/${repository}/actions/workflows/${sourceWorkflowRun.workflow_id}`, githubToken);
+  const sourceWorkflowEvidence = {
+    candidate: await fetchFileEvidenceAtRef(repository, DELIVERY_V2_SOURCE_WORKFLOW_PATH, headSha, githubToken),
+    trustedBase: await fetchFileEvidenceAtRef(repository, DELIVERY_V2_SOURCE_WORKFLOW_PATH, pullRequest.base.sha, githubToken)
+  };
   const changedPaths = await fetchChangedPaths(repository, pullRequest.number, githubToken);
-  const classifierSource = await fetchFileAtRef(repository, 'src/v2/risk-profile.mjs', headSha, githubToken);
+  const classifierSource = (await fetchFileEvidenceAtRef(repository, 'src/v2/risk-profile.mjs', headSha, githubToken)).content;
   const diffText = await fetchText(`https://api.github.com/repos/${repository}/pulls/${pullRequest.number}`, githubToken, 'application/vnd.github.v3.diff');
   const contractText = await readFile(new URL('../docs/delivery-v2/MASTER_SPEC.md', import.meta.url), 'utf8');
   const request = buildGithubNativeCriticalAuditRequest({
@@ -127,6 +138,7 @@ async function main() {
     changedPaths,
     sourceWorkflowRun,
     sourceWorkflowDefinition,
+    sourceWorkflowEvidence,
     classifierSource
   });
 

@@ -9,7 +9,7 @@ const C = 'c'.repeat(40);
 function input(profile = 'critical') {
   return {
     schemaVersion: 1,
-    repository: 'crgasparoto-br/training-system',
+    repository: 'example-org/training-system',
     issueNumber: 431,
     pullRequestNumber: 435,
     baseRef: 'develop',
@@ -68,6 +68,29 @@ test('rejects stale required check evidence before audit can start', () => {
   const candidate = input();
   candidate.checks[0].subjectSha = B;
   assert.throws(() => normalizeAuditInput(candidate), /stale/);
+});
+
+test('workflow check evidence is durable, active and fingerprint-validated', () => {
+  const candidate = input();
+  candidate.checks[0].workflowEvidence = {
+    workflowId: 123,
+    path: '.github/workflows/canonical-ci.yml',
+    state: 'active',
+    trustedBaseSha: B,
+    blobSha: 'd'.repeat(40),
+    fingerprint: 'e'.repeat(64)
+  };
+  const normalized = normalizeAuditInput(candidate);
+  assert.equal(normalized.checks[0].workflowEvidence.workflowId, 123);
+  assert.equal(normalized.checks[0].workflowEvidence.trustedBaseSha, B);
+
+  const malformed = input();
+  malformed.checks[0].workflowEvidence = { ...candidate.checks[0].workflowEvidence, fingerprint: 'not-a-sha256' };
+  assert.throws(() => normalizeAuditInput(malformed), /64-character SHA-256/);
+
+  const missingState = input();
+  missingState.checks[0].workflowEvidence = { ...candidate.checks[0].workflowEvidence, state: undefined };
+  assert.throws(() => normalizeAuditInput(missingState), /workflowEvidence.state is required/);
 });
 
 test('rejects CRITICAL approval produced by the implementation worker or run', () => {

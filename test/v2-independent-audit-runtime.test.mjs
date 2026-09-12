@@ -9,14 +9,20 @@ import {
   buildGithubNativeCriticalAuditRequest,
   finalizeIndependentAuditResult,
   fingerprintClassifierSource,
+  fingerprintWorkflowSource,
   isCriticalAuditPilot
 } from '../src/v2/independent-audit-runtime.mjs';
 
-const A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-const M = 'cccccccccccccccccccccccccccccccccccccccc';
-const REPOSITORY = 'crgasparoto-br/delivery-orchestrator';
+const A = 'a'.repeat(40);
+const B = 'b'.repeat(40);
+const M = 'c'.repeat(40);
+const WORKFLOW_BLOB = 'd'.repeat(40);
+const OTHER_BLOB = 'e'.repeat(40);
+const REPOSITORY = 'example-org/delivery-orchestrator';
+const REPOSITORY_ID = 424242;
 const WORKFLOW_ID = 355818772;
+const WORKFLOW_PATH = '.github/workflows/delivery-v2-ci.yml';
+const WORKFLOW_SOURCE = 'name: Delivery V2 CI\non:\n  pull_request:\n';
 
 function pilotPr(overrides = {}) {
   return {
@@ -24,8 +30,8 @@ function pilotPr(overrides = {}) {
     title: 'security(v2): bind audit evidence to trusted CI workflow',
     body: 'Exercises the GitHub-native auditor.\n\nDV2-AUDIT-PILOT: critical\n',
     user: { login: 'implementer-user' },
-    base: { ref: 'main', sha: B, repo: { id: 1335971917 } },
-    head: { ref: 'test/dv2-audit-pilot', sha: A, repo: { id: 1335971917, full_name: REPOSITORY } },
+    base: { ref: 'main', sha: B, repo: { id: REPOSITORY_ID } },
+    head: { ref: 'test/dv2-audit-pilot', sha: A, repo: { id: REPOSITORY_ID, full_name: REPOSITORY } },
     merge_commit_sha: M,
     ...overrides
   };
@@ -36,7 +42,7 @@ function greenRun(overrides = {}) {
     id: 9001,
     name: 'Delivery V2 CI',
     workflow_id: WORKFLOW_ID,
-    path: '.github/workflows/delivery-v2-ci.yml',
+    path: WORKFLOW_PATH,
     event: 'pull_request',
     repository: { full_name: REPOSITORY },
     head_branch: 'test/dv2-audit-pilot',
@@ -45,8 +51,8 @@ function greenRun(overrides = {}) {
     conclusion: 'success',
     pull_requests: [{
       number: 48,
-      head: { ref: 'test/dv2-audit-pilot', sha: A, repo: { id: 1335971917 } },
-      base: { ref: 'main', sha: B, repo: { id: 1335971917 } }
+      head: { ref: 'test/dv2-audit-pilot', sha: A, repo: { id: REPOSITORY_ID } },
+      base: { ref: 'main', sha: B, repo: { id: REPOSITORY_ID } }
     }],
     ...overrides
   };
@@ -56,8 +62,16 @@ function workflowDefinition(overrides = {}) {
   return {
     id: WORKFLOW_ID,
     name: 'Delivery V2 CI',
-    path: '.github/workflows/delivery-v2-ci.yml',
+    path: WORKFLOW_PATH,
     state: 'active',
+    ...overrides
+  };
+}
+
+function workflowEvidence(overrides = {}) {
+  return {
+    candidate: { ref: A, path: WORKFLOW_PATH, blobSha: WORKFLOW_BLOB, content: WORKFLOW_SOURCE },
+    trustedBase: { ref: B, path: WORKFLOW_PATH, blobSha: WORKFLOW_BLOB, content: WORKFLOW_SOURCE },
     ...overrides
   };
 }
@@ -67,9 +81,10 @@ function buildRequest(overrides = {}) {
     repository: REPOSITORY,
     issueNumber: 27,
     pullRequest: pilotPr(),
-    changedPaths: ['src/v2/audit-contract.mjs'],
+    changedPaths: ['src/example-sensitive.mjs'],
     sourceWorkflowRun: greenRun(),
     sourceWorkflowDefinition: workflowDefinition(),
+    sourceWorkflowEvidence: workflowEvidence(),
     classifierSource: 'classifier',
     ...overrides
   });
@@ -93,66 +108,103 @@ test('runtime independently enforces trusted repository origin for CRITICAL pilo
   );
 });
 
-test('source audit evidence binds immutable workflow id to the canonical workflow path', () => {
-  assert.equal(assertTrustedSourceWorkflowRun(greenRun(), REPOSITORY, pilotPr(), workflowDefinition()).id, 9001);
+test('source audit evidence binds immutable workflow id, active state and canonical path', () => {
+  assert.equal(assertTrustedSourceWorkflowRun(greenRun(), REPOSITORY, pilotPr(), workflowDefinition(), workflowEvidence()).run.id, 9001);
   assert.throws(
-    () => assertTrustedSourceWorkflowRun(greenRun({ workflow_id: WORKFLOW_ID + 1 }), REPOSITORY, pilotPr(), workflowDefinition()),
+    () => assertTrustedSourceWorkflowRun(greenRun({ workflow_id: WORKFLOW_ID + 1 }), REPOSITORY, pilotPr(), workflowDefinition(), workflowEvidence()),
     /workflow_id/
   );
   assert.throws(
-    () => assertTrustedSourceWorkflowRun(greenRun({ path: '.github/workflows/lookalike.yml' }), REPOSITORY, pilotPr(), workflowDefinition()),
+    () => assertTrustedSourceWorkflowRun(greenRun({ path: '.github/workflows/lookalike.yml' }), REPOSITORY, pilotPr(), workflowDefinition(), workflowEvidence()),
     /source workflow run must use/
   );
   assert.throws(
-    () => assertTrustedSourceWorkflowRun(greenRun(), REPOSITORY, pilotPr(), workflowDefinition({ path: '.github/workflows/lookalike.yml' })),
+    () => assertTrustedSourceWorkflowRun(greenRun(), REPOSITORY, pilotPr(), workflowDefinition({ path: '.github/workflows/lookalike.yml' }), workflowEvidence()),
     /resolved workflow definition must use/
+  );
+  assert.throws(
+    () => assertTrustedSourceWorkflowRun(greenRun(), REPOSITORY, pilotPr(), workflowDefinition({ state: undefined }), workflowEvidence()),
+    /sourceWorkflowDefinition.state is required/
+  );
+  assert.throws(
+    () => assertTrustedSourceWorkflowRun(greenRun(), REPOSITORY, pilotPr(), workflowDefinition({ state: 'disabled_manually' }), workflowEvidence()),
+    /must be active/
+  );
+});
+
+test('source workflow content must equal the trusted base workflow bytes for the audited base SHA', () => {
+  const tamperedCandidate = workflowEvidence({
+    candidate: { ref: A, path: WORKFLOW_PATH, blobSha: OTHER_BLOB, content: `${WORKFLOW_SOURCE}jobs: {}\n` }
+  });
+  assert.throws(
+    () => assertTrustedSourceWorkflowRun(greenRun(), REPOSITORY, pilotPr(), workflowDefinition(), tamperedCandidate),
+    /does not match the trusted base workflow blob/
+  );
+
+  const impossibleSameBlobDifferentBytes = workflowEvidence({
+    candidate: { ref: A, path: WORKFLOW_PATH, blobSha: WORKFLOW_BLOB, content: `${WORKFLOW_SOURCE}jobs: {}\n` }
+  });
+  assert.throws(
+    () => assertTrustedSourceWorkflowRun(greenRun(), REPOSITORY, pilotPr(), workflowDefinition(), impossibleSameBlobDifferentBytes),
+    /fingerprint does not match/
+  );
+
+  const wrongBaseRef = workflowEvidence({
+    trustedBase: { ref: A, path: WORKFLOW_PATH, blobSha: WORKFLOW_BLOB, content: WORKFLOW_SOURCE }
+  });
+  assert.throws(
+    () => assertTrustedSourceWorkflowRun(greenRun(), REPOSITORY, pilotPr(), workflowDefinition(), wrongBaseRef),
+    /trusted workflow ref does not match/
   );
 });
 
 test('source audit evidence must come from the trusted exact-head Delivery V2 CI pull-request run', () => {
   const definition = workflowDefinition();
-  assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ name: 'Unrelated CI' }), REPOSITORY, pilotPr(), definition), /source workflow must be Delivery V2 CI/);
-  assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ event: 'push' }), REPOSITORY, pilotPr(), definition), /source workflow event must be pull_request/);
+  const evidence = workflowEvidence();
+  assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ name: 'Unrelated CI' }), REPOSITORY, pilotPr(), definition, evidence), /source workflow must be Delivery V2 CI/);
+  assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ event: 'push' }), REPOSITORY, pilotPr(), definition, evidence), /source workflow event must be pull_request/);
   assert.throws(
-    () => assertTrustedSourceWorkflowRun(greenRun({ repository: { full_name: 'attacker/fork' } }), REPOSITORY, pilotPr(), definition),
+    () => assertTrustedSourceWorkflowRun(greenRun({ repository: { full_name: 'attacker/fork' } }), REPOSITORY, pilotPr(), definition, evidence),
     /source workflow repository must be/
   );
-  assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ head_sha: B }), REPOSITORY, pilotPr(), definition), /stale/);
-  assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ conclusion: 'failure' }), REPOSITORY, pilotPr(), definition), /terminal green/);
+  assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ head_sha: B }), REPOSITORY, pilotPr(), definition, evidence), /stale/);
+  assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ conclusion: 'failure' }), REPOSITORY, pilotPr(), definition, evidence), /terminal green/);
 });
 
 test('source workflow is fail-closed unless it is bound to exactly the audited PR/base/head identity', () => {
   const definition = workflowDefinition();
+  const evidence = workflowEvidence();
   assert.throws(
-    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [] }), REPOSITORY, pilotPr(), definition),
+    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [] }), REPOSITORY, pilotPr(), definition, evidence),
     /exactly one pull request/
   );
   assert.throws(
-    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [greenRun().pull_requests[0], { ...greenRun().pull_requests[0], number: 49 }] }), REPOSITORY, pilotPr(), definition),
+    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [greenRun().pull_requests[0], { ...greenRun().pull_requests[0], number: 49 }] }), REPOSITORY, pilotPr(), definition, evidence),
     /exactly one pull request/
   );
   assert.throws(
-    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [{ ...greenRun().pull_requests[0], number: 49 }] }), REPOSITORY, pilotPr(), definition),
+    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [{ ...greenRun().pull_requests[0], number: 49 }] }), REPOSITORY, pilotPr(), definition, evidence),
     /pull request number/
   );
   assert.throws(
-    () => assertTrustedSourceWorkflowRun(greenRun({ head_branch: 'other-branch' }), REPOSITORY, pilotPr(), definition),
+    () => assertTrustedSourceWorkflowRun(greenRun({ head_branch: 'other-branch' }), REPOSITORY, pilotPr(), definition, evidence),
     /head_branch/
   );
   assert.throws(
-    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [{ ...greenRun().pull_requests[0], base: { ref: 'main', sha: A } }] }), REPOSITORY, pilotPr(), definition),
+    () => assertTrustedSourceWorkflowRun(greenRun({ pull_requests: [{ ...greenRun().pull_requests[0], base: { ref: 'main', sha: A } }] }), REPOSITORY, pilotPr(), definition, evidence),
     /base SHA/
   );
 });
 
-test('GitHub-native CRITICAL request binds exact head, CI and classifier without legacy handoff', () => {
+test('GitHub-native CRITICAL request persists exact workflow content evidence without legacy handoff', () => {
   const request = buildGithubNativeCriticalAuditRequest({
     repository: REPOSITORY,
     issueNumber: 27,
     pullRequest: pilotPr(),
-    changedPaths: ['src/v2/audit-contract.mjs'],
+    changedPaths: ['src/example-sensitive.mjs'],
     sourceWorkflowRun: greenRun(),
     sourceWorkflowDefinition: workflowDefinition(),
+    sourceWorkflowEvidence: workflowEvidence(),
     classifierSource: 'export const classifier = true;\n'
   });
 
@@ -163,6 +215,11 @@ test('GitHub-native CRITICAL request binds exact head, CI and classifier without
   assert.equal(request.applicability.mode, 'independent');
   assert.equal(request.candidate.checks[0].workflowRunId, 9001);
   assert.equal(request.candidate.checks[0].name, 'Delivery V2 CI');
+  assert.equal(request.candidate.checks[0].workflowEvidence.workflowId, WORKFLOW_ID);
+  assert.equal(request.candidate.checks[0].workflowEvidence.path, WORKFLOW_PATH);
+  assert.equal(request.candidate.checks[0].workflowEvidence.trustedBaseSha, B);
+  assert.equal(request.candidate.checks[0].workflowEvidence.blobSha, WORKFLOW_BLOB);
+  assert.equal(request.candidate.checks[0].workflowEvidence.fingerprint, fingerprintWorkflowSource(WORKFLOW_SOURCE));
   assert.equal(request.candidate.legacyV1HandoffObserved, false);
   assert.equal(request.candidate.classifier.fingerprint, fingerprintClassifierSource('export const classifier = true;\n'));
   assert.equal(request.reviewerContextPolicy.includeImplementerHiddenReasoning, false);
@@ -194,7 +251,7 @@ test('reviewer run cannot reuse the implementer/PR run identity', () => {
   }), /independent/);
 });
 
-test('workflow and runtime enforce isolated inputs and controller-only durable write output', async () => {
+test('workflow and runtime enforce isolated inputs, base-bound workflow bytes and controller-only durable output', async () => {
   const workflow = await readFile(new URL('../.github/workflows/delivery-v2-independent-audit.yml', import.meta.url), 'utf8');
   const runner = await readFile(new URL('../scripts/run-delivery-v2-independent-audit.mjs', import.meta.url), 'utf8');
 
@@ -218,6 +275,9 @@ test('workflow and runtime enforce isolated inputs and controller-only durable w
   assert.match(workflow, /Audit workflow run:/);
   assert.match(runner, /assertTrustedCriticalAuditPilot/);
   assert.match(runner, /actions\/workflows\/\$\{sourceWorkflowRun\.workflow_id\}/);
+  assert.match(runner, /fetchFileEvidenceAtRef\(repository, DELIVERY_V2_SOURCE_WORKFLOW_PATH, headSha/);
+  assert.match(runner, /fetchFileEvidenceAtRef\(repository, DELIVERY_V2_SOURCE_WORKFLOW_PATH, pullRequest\.base\.sha/);
+  assert.match(runner, /sourceWorkflowEvidence/);
   assert.match(runner, /sandboxMode: 'read-only'/);
   assert.match(runner, /networkAccessEnabled: false/);
   assert.match(runner, /finalizeIndependentAuditResult/);

@@ -43,6 +43,22 @@ function assertSameSha(actual, expected, label) {
   }
 }
 
+function workflowFileEvidence(value, label) {
+  const evidence = requiredObject(value, label);
+  const path = requiredString(evidence.path, `${label}.path`);
+  if (path !== DELIVERY_V2_SOURCE_WORKFLOW_PATH) throw new Error(`${label}.path must be ${DELIVERY_V2_SOURCE_WORKFLOW_PATH}`);
+  return Object.freeze({
+    ref: requiredSha(evidence.ref, `${label}.ref`),
+    path,
+    blobSha: requiredSha(evidence.blobSha, `${label}.blobSha`),
+    content: requiredString(evidence.content, `${label}.content`)
+  });
+}
+
+export function fingerprintWorkflowSource(source) {
+  return createHash('sha256').update(requiredString(source, 'workflow source')).digest('hex');
+}
+
 export function isCriticalAuditPilot(pullRequest) {
   return String(pullRequest?.body ?? '').split(/\r?\n/).some((line) => line.trim() === DELIVERY_V2_CRITICAL_AUDIT_PILOT_MARKER);
 }
@@ -58,12 +74,14 @@ export function assertTrustedCriticalAuditPilot(pullRequest, repository) {
   return pullRequest;
 }
 
-export function assertTrustedSourceWorkflowRun(sourceWorkflowRun, repository, pullRequest, sourceWorkflowDefinition) {
+export function assertTrustedSourceWorkflowRun(sourceWorkflowRun, repository, pullRequest, sourceWorkflowDefinition, sourceWorkflowEvidence) {
   const run = requiredObject(sourceWorkflowRun, 'sourceWorkflowRun');
   const pr = requiredObject(pullRequest, 'pullRequest');
   const definition = requiredObject(sourceWorkflowDefinition, 'sourceWorkflowDefinition');
+  const evidence = requiredObject(sourceWorkflowEvidence, 'sourceWorkflowEvidence');
   const expectedRepository = requiredString(repository, 'repository');
   const materialHeadSha = requiredSha(pr.head?.sha, 'pullRequest.head.sha');
+  const baseSha = requiredSha(pr.base?.sha, 'pullRequest.base.sha');
 
   if (requiredString(run.name, 'sourceWorkflowRun.name') !== DELIVERY_V2_SOURCE_WORKFLOW_NAME) {
     throw new Error(`source workflow must be ${DELIVERY_V2_SOURCE_WORKFLOW_NAME}`);
@@ -93,7 +111,7 @@ export function assertTrustedSourceWorkflowRun(sourceWorkflowRun, repository, pu
   if (requiredString(run.path, 'sourceWorkflowRun.path') !== DELIVERY_V2_SOURCE_WORKFLOW_PATH) {
     throw new Error(`source workflow run must use ${DELIVERY_V2_SOURCE_WORKFLOW_PATH}`);
   }
-  if (definition.state != null && requiredString(definition.state, 'sourceWorkflowDefinition.state').toLowerCase() !== 'active') {
+  if (requiredString(definition.state, 'sourceWorkflowDefinition.state').toLowerCase() !== 'active') {
     throw new Error('source workflow definition must be active');
   }
 
@@ -110,7 +128,30 @@ export function assertTrustedSourceWorkflowRun(sourceWorkflowRun, repository, pu
   assertSameString(binding.base?.ref, pr.base?.ref, 'source workflow PR base ref');
   assertSameSha(binding.base?.sha, pr.base?.sha, 'source workflow PR base SHA');
 
-  return run;
+  const candidateWorkflow = workflowFileEvidence(evidence.candidate, 'sourceWorkflowEvidence.candidate');
+  const trustedBaseWorkflow = workflowFileEvidence(evidence.trustedBase, 'sourceWorkflowEvidence.trustedBase');
+  if (candidateWorkflow.ref !== materialHeadSha) throw new Error('candidate workflow ref does not match the audited material head');
+  if (trustedBaseWorkflow.ref !== baseSha) throw new Error('trusted workflow ref does not match the audited base SHA');
+  if (candidateWorkflow.blobSha !== trustedBaseWorkflow.blobSha) {
+    throw new Error('source workflow content does not match the trusted base workflow blob');
+  }
+  const candidateFingerprint = fingerprintWorkflowSource(candidateWorkflow.content);
+  const trustedBaseFingerprint = fingerprintWorkflowSource(trustedBaseWorkflow.content);
+  if (candidateFingerprint !== trustedBaseFingerprint) {
+    throw new Error('source workflow content fingerprint does not match the trusted base workflow');
+  }
+
+  return Object.freeze({
+    run,
+    workflowEvidence: Object.freeze({
+      workflowId: runWorkflowId,
+      path: DELIVERY_V2_SOURCE_WORKFLOW_PATH,
+      state: 'active',
+      trustedBaseSha: baseSha,
+      blobSha: candidateWorkflow.blobSha,
+      fingerprint: candidateFingerprint
+    })
+  });
 }
 
 export function fingerprintClassifierSource(source) {
@@ -124,6 +165,7 @@ export function buildGithubNativeCriticalAuditRequest({
   changedPaths,
   sourceWorkflowRun,
   sourceWorkflowDefinition,
+  sourceWorkflowEvidence,
   classifierSource,
   implementationAttempt = 1
 } = {}) {
@@ -131,7 +173,13 @@ export function buildGithubNativeCriticalAuditRequest({
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) throw new Error('changedPaths must be a non-empty array');
 
   const materialHeadSha = requiredSha(pullRequest.head?.sha, 'pullRequest.head.sha');
-  assertTrustedSourceWorkflowRun(sourceWorkflowRun, repository, pullRequest, sourceWorkflowDefinition);
+  const trustedSource = assertTrustedSourceWorkflowRun(
+    sourceWorkflowRun,
+    repository,
+    pullRequest,
+    sourceWorkflowDefinition,
+    sourceWorkflowEvidence
+  );
 
   const mergePreviewSha = SHA_RE.test(String(pullRequest.merge_commit_sha ?? ''))
     ? String(pullRequest.merge_commit_sha).toLowerCase()
@@ -160,9 +208,10 @@ export function buildGithubNativeCriticalAuditRequest({
       required: true,
       scope: 'material-head',
       subjectSha: materialHeadSha,
-      status: sourceWorkflowRun.status,
-      conclusion: sourceWorkflowRun.conclusion,
-      workflowRunId: requiredPositiveInteger(sourceWorkflowRun.id, 'sourceWorkflowRun.id')
+      status: trustedSource.run.status,
+      conclusion: trustedSource.run.conclusion,
+      workflowRunId: requiredPositiveInteger(trustedSource.run.id, 'sourceWorkflowRun.id'),
+      workflowEvidence: trustedSource.workflowEvidence
     }],
     changedPaths,
     implementationAttempt: requiredPositiveInteger(implementationAttempt, 'implementationAttempt'),

@@ -3,6 +3,7 @@ import { executionPolicyFor } from './execution-policy.mjs';
 
 export const DELIVERY_V2_AUDIT_SCHEMA_VERSION = 1;
 const SHA_RE = /^[0-9a-f]{40}$/i;
+const FINGERPRINT_RE = /^[0-9a-f]{64}$/i;
 const FINDING_ID_RE = /^DV2-[A-Z0-9][A-Z0-9._-]*$/;
 const TERMINAL_CHECK_CONCLUSIONS = new Set(['success', 'failure', 'cancelled', 'skipped', 'neutral', 'timed_out', 'action_required', 'stale']);
 const SEVERITIES = new Set(['info', 'low', 'medium', 'high', 'critical']);
@@ -35,6 +36,21 @@ function normalizePaths(paths) {
   if (!Array.isArray(paths) || paths.length === 0) throw new Error('changedPaths must be a non-empty array');
   return [...new Set(paths.map((value) => requireString(value, 'changedPaths entry').replaceAll('\\', '/').replace(/^\.\//, '')))];
 }
+function normalizeWorkflowEvidence(evidence, index) {
+  const value = requireObject(evidence, `checks[${index}].workflowEvidence`);
+  const state = requireString(value.state, `checks[${index}].workflowEvidence.state`).toLowerCase();
+  if (state !== 'active') throw new Error(`checks[${index}].workflowEvidence.state must be active`);
+  const fingerprint = requireString(value.fingerprint, `checks[${index}].workflowEvidence.fingerprint`).toLowerCase();
+  if (!FINGERPRINT_RE.test(fingerprint)) throw new Error(`checks[${index}].workflowEvidence.fingerprint must be a 64-character SHA-256 fingerprint`);
+  return Object.freeze({
+    workflowId: requirePositiveInteger(value.workflowId, `checks[${index}].workflowEvidence.workflowId`),
+    path: requireString(value.path, `checks[${index}].workflowEvidence.path`),
+    state,
+    trustedBaseSha: requireSha(value.trustedBaseSha, `checks[${index}].workflowEvidence.trustedBaseSha`),
+    blobSha: requireSha(value.blobSha, `checks[${index}].workflowEvidence.blobSha`),
+    fingerprint
+  });
+}
 function normalizeCheck(check, index, materialHeadSha, mergePreviewSha) {
   const value = requireObject(check, `checks[${index}]`);
   const scope = requireString(value.scope, `checks[${index}].scope`).toLowerCase();
@@ -48,6 +64,7 @@ function normalizeCheck(check, index, materialHeadSha, mergePreviewSha) {
   if (status === 'completed' && (!conclusion || !TERMINAL_CHECK_CONCLUSIONS.has(conclusion))) {
     throw new Error(`checks[${index}] completed status requires a supported conclusion`);
   }
+  const workflowEvidence = value.workflowEvidence == null ? null : normalizeWorkflowEvidence(value.workflowEvidence, index);
   return Object.freeze({
     name: requireString(value.name, `checks[${index}].name`),
     required: value.required !== false,
@@ -55,7 +72,8 @@ function normalizeCheck(check, index, materialHeadSha, mergePreviewSha) {
     subjectSha,
     status,
     conclusion,
-    workflowRunId: requirePositiveInteger(value.workflowRunId, `checks[${index}].workflowRunId`)
+    workflowRunId: requirePositiveInteger(value.workflowRunId, `checks[${index}].workflowRunId`),
+    workflowEvidence
   });
 }
 function normalizePriorFinding(finding, index, materialHeadSha) {
