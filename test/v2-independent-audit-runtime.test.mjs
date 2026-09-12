@@ -127,6 +127,8 @@ test('workflow gives the semantic reviewer read-only isolated inputs and publish
   assert.match(workflow, /DELIVERY_GITHUB_READ_TOKEN/);
   assert.doesNotMatch(workflow, /DELIVERY_GITHUB_WRITE_TOKEN/);
   assert.match(workflow, /DV2-AUDIT-PILOT: critical/);
+  assert.match(workflow, /head\.repo\?\.full_name/);
+  assert.match(workflow, /sameRepository && marked/);
   assert.doesNotMatch(workflow, /handoff-ready\.json/);
   assert.doesNotMatch(workflow, /\.audit\/entregar-issue/);
   assert.match(runner, /sandboxMode: 'read-only'/);

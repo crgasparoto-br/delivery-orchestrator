@@ -47,8 +47,9 @@ jobs:
               return;
             }
             const marker = 'DV2-AUDIT-PILOT: critical';
+            const sameRepository = exact[0].head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`;
             const marked = String(exact[0].body || '').split(/\r?\n/).some((line) => line.trim() === marker);
-            core.setOutput('should_audit', marked ? 'true' : 'false');
+            core.setOutput('should_audit', sameRepository && marked ? 'true' : 'false');
             core.setOutput('pr_number', String(exact[0].number));
 
   audit:
