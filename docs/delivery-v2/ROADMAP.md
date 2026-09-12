@@ -237,17 +237,22 @@ Follow-up after DV2-007: completed. PR #1069 is merged in `develop` with the gen
 
 ### DV2-013 — `training-system`
 
-Status: **implemented, not rolled out**.
+Status: **validated, not rolled out**.
 
-Required closure:
+Validation evidence:
 
-- record the disposition of any remaining independent-audit findings from PR #435 against the merged candidate;
-- run one real low-risk UI FAST PR;
-- record duration and skipped/executed gates.
+- the generated classifier package migration is merged in PR #435 as `0fba4d2870e087775433b844e22f04c0daa84bcf`;
+- no machine-verifiable independent finding object for PR #435 is persisted in its conversation, reviews, issue #431 comments, recovered prior context or repository code search; this absence is recorded without relabeling the unavailable audit as approved/resolved;
+- real low-risk UI pilot PR #436 changed only `apps/web/src/components/AppErrorBoundary.tsx` and was classified `FAST` on exact head `ed59660e0a5cbe8b202491b105e36614770dfac6`;
+- workflow run `34693145142` completed green in 164 seconds end-to-end; `FAST validation` executed for 74 seconds, while `STANDARD validation` and `CRITICAL validation` were skipped;
+- FAST executed exact-head evidence, classifier self-test, web type-check, lint, related tests, build, architecture checks and artifact upload; Prisma generation and STANDARD/CRITICAL type compatibility were skipped in merge-preview;
+- exact-head artifact `10298051005` has digest `sha256:bc7c2382e4a941a86b271ff6c56ae12db0cfc550a2c1ec736b4b8dadd074298a` and binds `headSha == checkoutSha == ed59660e0a5cbe8b202491b105e36614770dfac6`;
+- compared with the 993-second CRITICAL migration run `34664164768`, the observed FAST workflow was ~83.5% shorter / ~6.05x faster; this is explicitly a profile benchmark rather than an apples-to-apples diff comparison;
+- machine-readable evidence is versioned at `docs/delivery-v2/evidence/dv2-013-training-system-fast.json` and exercised by `test/v2-training-system-fast-evidence.test.mjs`.
 
-Generated classifier package migration is complete in merged PR #435.
+PR #436 remains intentionally unmerged because automatic merge authorization is scoped to `delivery-orchestrator`, not `training-system`; therefore DV2-013 is not labeled `rolled-out` on the basis of that pilot.
 
-Do not mark rolled-out based only on a CRITICAL migration PR.
+Exit condition: a real low-risk UI candidate proves FAST routing, exact-head evidence, focused validation, skipped STANDARD/CRITICAL gates and material runtime reduction. **Satisfied.**
 
 ## Phase F — retire the old model
 
@@ -310,9 +315,8 @@ That means every required item below is terminal:
 
 ## Next implementation order
 
-Unless a production incident changes priority, continue in this order:
+Unless a production incident changes priority, the remaining implementation order is:
 
-1. close DV2-013
-2. DV2-014
+1. DV2-014
 
 Every PR should name the `DV2-*` IDs it advances and update the manifest only when the evidence justifies the new status.
