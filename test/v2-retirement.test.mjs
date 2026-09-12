@@ -38,6 +38,7 @@ const retiredPaths = [
 ];
 
 const activeRuntimeRoots = ['.github', 'scripts', 'src', 'skills', 'trust'];
+const activeRootFiles = ['package.json', 'package-lock.json'];
 const historicalRuntimeExclusions = ['skills/catalog/'];
 const forbiddenActiveV1Markers = [
   ['delivery-request', /delivery-request/i],
@@ -47,13 +48,14 @@ const forbiddenActiveV1Markers = [
   ['delivery-loop', /delivery-loop/i],
   ['persistent delivery queue', /persistent delivery queue/i]
 ];
-const historicalRuntimePaths = [
+const historicalRuntimeReferences = [
   ['skills/catalog', /skills\/catalog(?:\/|\b)/i],
-  ['.audit/entregar-issue', /\.audit\/entregar-issue(?:\/|\b)/i]
+  ['.audit', /\.audit(?:\/|\\|\b)/i]
 ];
-const codeDependencyIntroducer = /(?:\b(?:readFile|writeFile|access|readdir|mkdir|rm|copyFile)\s*\(|\bpath\.(?:join|resolve)\s*\(|\bnew URL\s*\(|\b(?:import|require)\s*\(|\bfrom\s+)/i;
-const shellDependencyIntroducer = /(?:^|run:\s*|[;&|]\s*)(?:if\s+)?(?:sudo\s+)?(?:cat|cp|mv|rm|find|grep|sed|awk|test|ls|head|tail|tar|zip|node|python(?:3)?|bash|sh|source|\.)\s+/i;
-const yamlDependencyIntroducer = /\b(?:path|working-directory)\s*:\s*/i;
+const referenceOnlyAllowlist = [
+  /Context hygiene: do not inspect or summarize .*\.audit\/\*\*.*skills\/catalog\/\*\*/i,
+  /Do not use or seek implementation conversation history, \.audit\/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle/i
+];
 
 async function exists(relativePath) {
   try {
@@ -84,24 +86,34 @@ async function listFiles(relativePath) {
 }
 
 function isExecutableDependencySurface(relativePath) {
-  if (relativePath.startsWith('scripts/') || relativePath.startsWith('src/')) return true;
+  if (activeRootFiles.includes(relativePath)) return true;
+  if (relativePath.startsWith('scripts/') || relativePath.startsWith('src/')) return /\.(?:mjs|cjs|js|json|sh)$/i.test(relativePath);
   if (relativePath.startsWith('.github/')) return /\.(?:ya?ml|json|mjs|cjs|js|sh)$/i.test(relativePath);
   if (relativePath.startsWith('skills/')) return /\.(?:py|mjs|cjs|js|sh|ya?ml|json)$/i.test(relativePath);
+  if (relativePath.startsWith('trust/')) return /\.(?:json|ya?ml|mjs|cjs|js|sh)$/i.test(relativePath);
   return false;
 }
 
-function historicalDependencies(body) {
-  const lines = body.split(/\r?\n/);
+function isReferenceOnlyLine(line) {
+  return referenceOnlyAllowlist.some((pattern) => pattern.test(line));
+}
+
+function historicalReferences(body) {
   const matches = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    for (const [marker, pathPattern] of historicalRuntimePaths) {
-      if (!pathPattern.test(line)) continue;
-      const context = lines.slice(Math.max(0, index - 2), index + 1).join(' ');
-      if (codeDependencyIntroducer.test(context) || shellDependencyIntroducer.test(line.trim()) || yamlDependencyIntroducer.test(line)) matches.push(marker);
+  for (const line of body.split(/\r?\n/)) {
+    if (isReferenceOnlyLine(line)) continue;
+    for (const [marker, pattern] of historicalRuntimeReferences) {
+      if (pattern.test(line)) matches.push(marker);
     }
   }
   return [...new Set(matches)];
+}
+
+async function activeExecutableFiles() {
+  const files = [];
+  for (const runtimeRoot of activeRuntimeRoots) files.push(...await listFiles(runtimeRoot));
+  for (const rootFile of activeRootFiles) if (await exists(rootFile)) files.push(rootFile);
+  return [...new Set(files)].filter(isExecutableDependencySurface).sort();
 }
 
 test('DV2-014 removes every active V1 orchestration surface', async () => {
@@ -112,34 +124,32 @@ test('DV2-014 removes every active V1 orchestration surface', async () => {
 
 test('active runtime trees cannot reintroduce V1 orchestration markers outside historical snapshots', async () => {
   const matches = [];
-  for (const runtimeRoot of activeRuntimeRoots) {
-    for (const relativePath of await listFiles(runtimeRoot)) {
-      const body = await readFile(new URL(relativePath, root), 'utf8');
-      for (const [marker, pattern] of forbiddenActiveV1Markers) {
-        if (pattern.test(body)) matches.push(`${relativePath}:${marker}`);
-      }
+  for (const relativePath of await activeExecutableFiles()) {
+    const body = await readFile(new URL(relativePath, root), 'utf8');
+    for (const [marker, pattern] of forbiddenActiveV1Markers) {
+      if (pattern.test(body)) matches.push(`${relativePath}:${marker}`);
     }
   }
   assert.deepEqual(matches, []);
 });
 
-test('active executable surfaces cannot depend on historical V1 snapshot trees', async () => {
+test('active executable surfaces cannot reference historical V1 snapshot trees except explicit negative isolation prose', async () => {
   const matches = [];
-  for (const runtimeRoot of activeRuntimeRoots) {
-    for (const relativePath of await listFiles(runtimeRoot)) {
-      if (!isExecutableDependencySurface(relativePath)) continue;
-      const body = await readFile(new URL(relativePath, root), 'utf8');
-      for (const marker of historicalDependencies(body)) matches.push(`${relativePath}:${marker}`);
-    }
+  for (const relativePath of await activeExecutableFiles()) {
+    const body = await readFile(new URL(relativePath, root), 'utf8');
+    for (const marker of historicalReferences(body)) matches.push(`${relativePath}:${marker}`);
   }
   assert.deepEqual(matches, []);
 });
 
-test('historical dependency detector covers JavaScript, workflow shell and generated lock surfaces without matching isolation prose', () => {
-  assert.deepEqual(historicalDependencies("await readFile(path.join(root, '.audit/entregar-issue/handoff-ready.json'), 'utf8')"), ['.audit/entregar-issue']);
-  assert.deepEqual(historicalDependencies('run: cat .audit/entregar-issue/handoff-ready.json'), ['.audit/entregar-issue']);
-  assert.deepEqual(historicalDependencies("const schema = await readFile(path.resolve(root, 'skills/catalog/auditar-issue/schema.json'))"), ['skills/catalog']);
-  assert.deepEqual(historicalDependencies('Do not use or seek implementation history, .audit/entregar-issue artifacts, or any source outside this bundle.'), []);
+test('historical reference gate is fail-closed across manifests, workflow uses, shell and variable-built code paths', () => {
+  assert.deepEqual(historicalReferences("const legacy = '.audit/entregar-issue'; await readFile(path.join(root, legacy, 'handoff-ready.json'))"), ['.audit']);
+  assert.deepEqual(historicalReferences('run: cat .audit/entregar-issue/handoff-ready.json'), ['.audit']);
+  assert.deepEqual(historicalReferences('uses: ./skills/catalog/example/action'), ['skills/catalog']);
+  assert.deepEqual(historicalReferences('{"scripts":{"legacy":"node skills/catalog/legacy.js"}}'), ['skills/catalog']);
+  assert.deepEqual(historicalReferences('Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts unless needed.'), []);
+  assert.deepEqual(historicalReferences('Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'), []);
+  assert.equal(isExecutableDependencySurface('package.json'), true);
   assert.equal(isExecutableDependencySurface('.github/workflows/delivery-v2-worker-codex-fast.lock.yml'), true);
   assert.equal(isExecutableDependencySurface('.github/actions/delivery-v2-risk/action.yml'), true);
 });
