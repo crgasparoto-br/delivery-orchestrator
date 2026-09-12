@@ -16,6 +16,7 @@ on:
       - 'schemas/delivery-v2-requirements.schema.json'
       - 'schemas/delivery-v2-target-policy.schema.json'
       - 'scripts/export-delivery-v2-classifier.mjs'
+      - 'scripts/run-delivery-v2-independent-audit.mjs'
       - 'scripts/verify-delivery-v2-completeness.mjs'
       - 'scripts/verify-delivery-v2-targets.mjs'
       - '.github/delivery-orchestrator-capabilities.json'
@@ -67,6 +68,7 @@ jobs:
           done
           node --check actions/delivery-v2-risk/index.cjs
           node --check scripts/export-delivery-v2-classifier.mjs
+          node --check scripts/run-delivery-v2-independent-audit.mjs
           node --check scripts/verify-delivery-v2-completeness.mjs
           node --check scripts/verify-delivery-v2-targets.mjs
 
