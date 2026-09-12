@@ -222,6 +222,9 @@ jobs:
     name: Independent target CRITICAL semantic audit
     needs: resolve
     if: needs.resolve.outputs.should_target_audit == 'true'
+    concurrency:
+      group: delivery-v2-target-audit-${{ needs.resolve.outputs.target_audit_id }}
+      cancel-in-progress: false
     runs-on: [self-hosted, linux, delivery-orchestrator]
     timeout-minutes: 60
     permissions:
@@ -292,7 +295,7 @@ jobs:
       - name: Print target audit decision
         shell: bash
         run: |
-          /usr/local/bin/node -e 'const p=require(process.env.AUDIT_RESULT_PATH); console.log(JSON.stringify({targetAuditId:p.targetAuditId,target:p.target,result:p.result,outcome:p.outcome,auditRuntime:p.auditRuntime,sourceWorkflowBinding:p.sourceWorkflowBinding},null,2))'
+          /usr/local/bin/node -e 'const p=require(process.env.AUDIT_RESULT_PATH); console.log(JSON.stringify({targetAuditId:p.targetAuditId,target:p.target,auditAttempt:p.auditAttempt,result:p.result,outcome:p.outcome,auditRuntime:p.auditRuntime,mergePreviewCommitEvidence:p.mergePreviewCommitEvidence,diffEvidence:p.diffEvidence},null,2))'
 
       - name: Upload machine-readable target audit result
         uses: actions/upload-artifact@v4
@@ -326,7 +329,7 @@ jobs:
           name: delivery-v2-target-independent-audit-${{ needs.resolve.outputs.target_audit_id }}-${{ github.run_id }}
           path: /tmp/delivery-v2-target-audit-state
 
-      - name: Persist target audit decision on umbrella issue
+      - name: Persist append-only target audit decision on umbrella issue
         id: persist
         uses: actions/github-script@v7
         env:
@@ -343,23 +346,41 @@ jobs:
             }
             const result = payload.result;
             const blocking = result.findings.filter((finding) => finding.blocksRelease);
-            const marker = `<!-- delivery-v2-target-independent-audit:${payload.targetAuditId}:${result.candidateSha} -->`;
+            const state = {
+              schemaVersion: 1,
+              targetAuditId: payload.targetAuditId,
+              candidateSha: result.candidateSha,
+              auditWorkflowRunId: payload.auditWorkflowRunId,
+              sourceWorkflowRunId: payload.sourceWorkflowRunId,
+              decision: result.decision,
+              requestFingerprint: result.requestFingerprint,
+              runtimeSha: payload.auditRuntime.runtimeSha,
+              findings: result.findings,
+            };
+            const encodedState = Buffer.from(JSON.stringify(state), 'utf8').toString('base64url');
+            const stateMarker = `<!-- delivery-v2-target-audit-state:${encodedState} -->`;
+            const marker = `<!-- delivery-v2-target-independent-audit:${payload.targetAuditId}:${result.candidateSha}:${payload.auditWorkflowRunId} -->`;
+            const candidateMarkerPrefix = `<!-- delivery-v2-target-independent-audit:${payload.targetAuditId}:${result.candidateSha}:`;
             const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const sourceRunUrl = `https://github.com/${payload.target.repository}/actions/runs/${payload.sourceWorkflowRunId}`;
             const body = [
               marker,
+              stateMarker,
               '## Delivery V2 target independent audit',
               '',
               `- Target: \`${payload.target.repository}#${payload.target.pullRequestNumber}\``,
               `- Candidate: \`${result.candidateSha}\``,
               `- Merge preview: \`${payload.target.mergePreviewSha}\``,
               `- Merge commit: \`${payload.target.mergeCommitSha}\``,
+              `- Audit attempt: ${payload.auditAttempt}`,
               `- Decision: **${result.decision}**`,
               `- Reviewer: \`${result.reviewer.workerIdentity}\` (run ${result.reviewer.runId})`,
               `- Context isolation: \`${result.reviewer.contextIsolation}\``,
               `- Source CI run: ${payload.sourceWorkflowRunId} (${sourceRunUrl})`,
-              `- Source binding job: ${payload.sourceWorkflowBinding.jobId} / \`${payload.sourceWorkflowBinding.jobName}\``,
-              `- Source log fingerprint: \`${payload.sourceWorkflowBinding.logFingerprint}\``,
+              `- Source corroboration job: ${payload.sourceWorkflowCorroboration.jobId} / \`${payload.sourceWorkflowCorroboration.jobName}\``,
+              `- Source log fingerprint: \`${payload.sourceWorkflowCorroboration.logFingerprint}\``,
+              `- GitHub merge-preview evidence: \`${payload.mergePreviewCommitEvidence.fingerprint}\``,
+              `- Diff evidence: \`${payload.diffEvidence.diffFingerprint}\` (${payload.diffEvidence.fileCount} files)`,
               `- Audit workflow run: ${payload.auditWorkflowRunId} (${runUrl})`,
               `- Audit runtime SHA: \`${payload.auditRuntime.runtimeSha}\``,
               `- Request fingerprint: \`${result.requestFingerprint}\``,
@@ -382,20 +403,31 @@ jobs:
               issue_number: 27,
               per_page: 100,
             });
-            const existing = comments.find((comment) => String(comment.body || '').includes(marker));
-            const saved = existing
-              ? await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: existing.id,
-                  body,
-                })
-              : await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: 27,
-                  body,
-                });
+            const exact = comments.filter((comment) => String(comment.body || '').includes(marker));
+            if (exact.length > 1) {
+              core.setFailed('multiple durable comments already exist for the same target audit workflow run');
+              return;
+            }
+            if (exact.length === 1) {
+              const existingBody = String(exact[0].body || '');
+              if (!existingBody.includes(stateMarker)) {
+                core.setFailed('existing idempotent target audit comment disagrees with the current machine-readable state');
+                return;
+              }
+              core.setOutput('comment_id', String(exact[0].id));
+              return;
+            }
+            const conflictingCandidate = comments.filter((comment) => String(comment.body || '').includes(candidateMarkerPrefix));
+            if (conflictingCandidate.length > 0) {
+              core.setFailed('durable state already exists for this exact target candidate; append-only policy forbids overwrite or re-audit');
+              return;
+            }
+            const saved = await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 27,
+              body,
+            });
             core.setOutput('comment_id', String(saved.data.id));
 
   enforce_target_audit:
@@ -430,7 +462,7 @@ jobs:
           DURABLE_COMMENT_ID: ${{ needs.persist_target_audit.outputs.comment_id }}
         shell: bash
         run: |
-          /usr/local/bin/node - <<'NODE'
+          node - <<'NODE'
           const payload = require(process.env.AUDIT_RESULT_PATH);
           const decision = payload?.result?.decision;
           const releaseBlocked = payload?.outcome?.releaseBlocked;
