@@ -107,7 +107,7 @@ function historicalReferences(body) {
   const candidate = stripReferenceOnlyProse(body);
   const collapsed = collapseSourceComposition(candidate);
   const matches = [];
-  if (/skills\/catalog\b/i.test(candidate) || /skillscatalog/i.test(collapsed)) matches.push('skills/catalog');
+  if (/skills\/catalog\b/i.test(candidate) || /skills\/?catalog/i.test(collapsed)) matches.push('skills/catalog');
   if (auditPathPattern.test(candidate) || auditPathPattern.test(collapsed)) matches.push('.audit');
   return matches;
 }
