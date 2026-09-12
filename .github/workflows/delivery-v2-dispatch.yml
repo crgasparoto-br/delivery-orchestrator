@@ -80,10 +80,16 @@ jobs:
         with:
           node-version: 22
 
+      - name: Guard idempotent re-entry
+        id: reentry
+        run: node scripts/guard-delivery-v2-reentry.mjs
+
       - name: Build initial deterministic plan
+        if: steps.reentry.outputs.run_controller == 'true'
         run: node src/cli.mjs plan-v2 | tee "${RUNNER_TEMP}/delivery-v2-initial-plan.json"
 
       - name: Run bounded Delivery V2 controller
+        if: steps.reentry.outputs.run_controller == 'true'
         run: node scripts/run-delivery-v2-controller.mjs
 
       - name: Publish controller summary
