@@ -58,7 +58,7 @@ jobs:
       DELIVERY_GITHUB_WRITE_TOKEN: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
       GITHUB_TOKEN: ${{ github.token }}
       ORCHESTRATOR_WORKER_REF: ${{ github.ref_name }}
-      CONTROLLER_RESULT_PATH: ${{ runner.temp }}/delivery-v2-controller-result.json
+      CONTROLLER_RESULT_PATH: /tmp/delivery-v2-controller-${{ github.run_id }}.json
     steps:
       - name: Restrict target repository and base branch
         shell: bash

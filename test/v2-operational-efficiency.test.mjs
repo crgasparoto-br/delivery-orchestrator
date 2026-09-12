@@ -6,6 +6,8 @@ test('normal dispatch enters the bounded deterministic controller instead of dis
   const body = await readFile('.github/workflows/delivery-v2-dispatch.yml', 'utf8');
   assert.match(body, /node scripts\/run-delivery-v2-controller\.mjs/);
   assert.match(body, /CONTROLLER_RESULT_PATH/);
+  assert.match(body, /CONTROLLER_RESULT_PATH: \/tmp\/delivery-v2-controller-\$\{\{ github\.run_id \}\}\.json/);
+  assert.doesNotMatch(body, /CONTROLLER_RESULT_PATH:[^\n]*runner\./);
   assert.doesNotMatch(body, /gh workflow run/);
   assert.match(body, /cancel-in-progress: false/);
 });
