@@ -22,12 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout branch with delivery write token
+      - name: Checkout branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
-          token: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
 
       - name: Install pinned gh-aw
         uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
@@ -37,21 +36,6 @@ jobs:
       - name: Compile workers in strict mode
         run: gh aw compile --strict
 
-      - name: Stage generated locks for controlled publication
+      - name: Verify canonical locks are synchronized
         shell: bash
-        run: |
-          rm -rf .generated/gh-aw
-          mkdir -p .generated/gh-aw
-          for file in .github/workflows/delivery-v2-worker-*.lock.yml; do
-            cp "$file" ".generated/gh-aw/$(basename "$file").txt"
-          done
-          cp .github/aw/actions-lock.json .generated/gh-aw/actions-lock.json
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .generated/gh-aw
-          if git diff --cached --quiet; then
-            echo "Staged compiler artifacts already current."
-            exit 0
-          fi
-          git commit -m "chore: stage compiled Delivery V2 workers"
-          git push origin "HEAD:${{ github.ref_name }}"
+        run: git diff --exit-code -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json

@@ -44,6 +44,7 @@ test('normalizes all required delivery metrics and derives safe totals', () => {
   assert.equal(record.providerCost.currency, 'USD');
   assert.equal(record.change.linesChanged, 14);
   assert.equal(record.durationsMs.endToEnd, 45000);
+  assert.deepEqual(record.aiUsageByStage, {});
 });
 
 test('provider cost contract rejects extra fields that could carry provider-sensitive secrets', () => {
@@ -58,6 +59,24 @@ test('metrics allow unavailable token and cost values without inventing zeros', 
   assert.equal(record.aiUsage.turns, null);
   assert.equal(record.providerCost.available, false);
   assert.equal(record.providerCost.amount, null);
+
+  const summary = summarizeDeliveryMetrics([record]);
+  assert.equal(summary.overall.aiUsage.totalTokens.known, 0);
+  assert.equal(summary.overall.aiUsage.totalTokens.unknown, 1);
+  assert.equal(summary.overall.aiUsage.totalTokens.total, null);
+  assert.equal(summary.overall.aiUsage.credits.total, null);
+});
+
+test('partial token telemetry remains unknown unless a provider supplies totalTokens', () => {
+  const partial = createDeliveryMetrics(metricsInput({ aiUsage: { inputTokens: 100 } }));
+  assert.equal(partial.aiUsage.inputTokens, 100);
+  assert.equal(partial.aiUsage.outputTokens, null);
+  assert.equal(partial.aiUsage.totalTokens, null);
+
+  const explicit = createDeliveryMetrics(metricsInput({ aiUsage: { inputTokens: 100, totalTokens: 175 } }));
+  assert.equal(explicit.aiUsage.inputTokens, 100);
+  assert.equal(explicit.aiUsage.outputTokens, null);
+  assert.equal(explicit.aiUsage.totalTokens, 175);
 });
 
 test('explicit token total must reconcile with input plus output tokens', () => {
@@ -66,11 +85,12 @@ test('explicit token total must reconcile with input plus output tokens', () => 
   })), /must equal inputTokens \+ outputTokens/);
 });
 
-test('summary produces comparable repository/risk/provider groups with percentiles and cost totals', () => {
+test('summary produces comparable repository/risk/provider groups with token and credit distributions', () => {
   const first = createDeliveryMetrics(metricsInput());
   const second = createDeliveryMetrics(metricsInput({
     pullRequestNumber: 43,
     materialHeadSha: SHA_B,
+    aiUsage: { turns: 3, credits: 2.5, inputTokens: 200, outputTokens: 100 },
     durationsMs: { ciQueue: 500, ciExecution: 10000, audit: 0, endToEnd: 15000 },
     providerCost: { amount: 0.08, currency: 'USD' }
   }));
@@ -83,6 +103,44 @@ test('summary produces comparable repository/risk/provider groups with percentil
   assert.equal(group.endToEndMs.p50, 15000);
   assert.equal(group.endToEndMs.p95, 45000);
   assert.equal(group.providerCostTotals.USD, 0.2);
+  assert.equal(group.aiUsage.totalTokens.known, 2);
+  assert.equal(group.aiUsage.totalTokens.unknown, 0);
+  assert.equal(group.aiUsage.totalTokens.total, 450);
+  assert.equal(group.aiUsage.totalTokens.avg, 225);
+  assert.equal(group.aiUsage.totalTokens.p50, 150);
+  assert.equal(group.aiUsage.totalTokens.p95, 300);
+  assert.equal(group.aiUsage.credits.total, 4);
+});
+
+test('stage telemetry is optional and aggregates only observations that actually exist', () => {
+  const first = createDeliveryMetrics(metricsInput({
+    aiUsageByStage: {
+      implementation: { turns: 2, credits: 1, inputTokens: 80, outputTokens: 40 },
+      audit: { turns: 1, credits: 0.5, inputTokens: 30, outputTokens: 20 }
+    }
+  }));
+  const second = createDeliveryMetrics(metricsInput({
+    pullRequestNumber: 43,
+    materialHeadSha: SHA_B,
+    aiUsageByStage: {
+      implementation: { turns: 3, credits: 2, inputTokens: 120, outputTokens: 60 }
+    }
+  }));
+  const summary = summarizeDeliveryMetrics([first, second]);
+  const implementation = summary.byRepositoryRiskProviderStage['acme/example|fast|codex|implementation'];
+  const audit = summary.byRepositoryRiskProviderStage['acme/example|fast|codex|audit'];
+
+  assert.equal(implementation.observations, 2);
+  assert.equal(implementation.aiUsage.totalTokens.total, 300);
+  assert.equal(implementation.aiUsage.credits.total, 3);
+  assert.equal(audit.observations, 1);
+  assert.equal(audit.aiUsage.totalTokens.total, 50);
+});
+
+test('stage telemetry rejects unsupported usage fields instead of accepting opaque provider data', () => {
+  assert.throws(() => createDeliveryMetrics(metricsInput({
+    aiUsageByStage: { implementation: { inputTokens: 10, cacheKey: 'secret-ish' } }
+  })), /unsupported field/);
 });
 
 test('baseline comparison derives reduction and speedup from measured end-to-end time', () => {

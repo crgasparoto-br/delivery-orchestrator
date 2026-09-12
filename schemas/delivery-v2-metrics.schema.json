@@ -4,6 +4,19 @@
   "title": "Delivery V2 Metrics Record",
   "type": "object",
   "additionalProperties": false,
+  "$defs": {
+    "aiUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "turns": { "type": ["integer", "null"], "minimum": 0 },
+        "credits": { "type": ["number", "null"], "minimum": 0 },
+        "inputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "outputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "totalTokens": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    }
+  },
   "required": [
     "schemaVersion", "deliveryId", "repository", "pullRequestNumber", "materialHeadSha",
     "risk", "provider", "classifier", "providerCalls", "attempts", "aiUsage", "providerCost",
@@ -21,7 +34,12 @@
     "classifier": { "type": "object" },
     "providerCalls": { "type": "integer", "minimum": 0 },
     "attempts": { "type": "object" },
-    "aiUsage": { "type": "object" },
+    "aiUsage": { "$ref": "#/$defs/aiUsage" },
+    "aiUsageByStage": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+      "additionalProperties": { "$ref": "#/$defs/aiUsage" }
+    },
     "providerCost": { "type": "object" },
     "durationsMs": { "type": "object" },
     "terminalReason": { "type": "string", "minLength": 1 },

@@ -1,322 +1,94 @@
 # Delivery V2 — Roadmap
 
-This roadmap is the implementation sequence for the canonical contract in `MASTER_SPEC.md`. Requirement status is authoritative in `config/delivery-v2-requirements.json`; this document explains ordering, dependencies, and exit criteria. Operational tracking lives in GitHub issue #27.
+This roadmap records the Delivery V2 implementation sequence and current terminal state. `docs/delivery-v2/MASTER_SPEC.md` is the normative architecture; `config/delivery-v2-requirements.json` is authoritative for requirement status and evidence pointers; issue #27 is the completed rollout history.
 
-## Status legend
+The roadmap is intentionally concise. Detailed PR/run/SHA evidence belongs in the requirements manifest and `docs/delivery-v2/evidence/**`, so a new AI context does not need to reread duplicated rollout prose.
+
+## Status model
 
 - `planned` — contract exists; implementation is not complete.
 - `implemented` — material implementation exists, but validation/rollout is not terminal.
-- `validated` — implementation passed its required deterministic/semantic validation.
+- `validated` — required validation completed.
 - `rolled-out` — validated and active in the intended real repository/environment.
 
-A requirement marked `requiredForV2Default` is complete only in `validated` or `rolled-out`.
+For `requiredForV2Default` requirements, `validated` and `rolled-out` are terminal.
 
-## Phase A — deterministic foundation
+## Completed sequence
 
-| ID | Requirement | Current status | Exit condition |
+| Phase | ID | Requirement | Status |
 | --- | --- | --- | --- |
-| DV2-001 | Deterministic GitHub-native control plane | validated | Planner/risk/execution policy are deterministic and tested. |
-| DV2-002 | Provider dispatch with no silent fallback | validated | Provider+risk maps to one worker; auth/dispatch failures fail closed. |
-| DV2-003 | Safe-output workers and credential isolation | validated | Agent shell lacks privileged write token and writes are constrained. |
-| DV2-004 | Risk profiles, budgets and bounded provider work | validated | FAST/STANDARD/CRITICAL budgets are executable and tested. |
-| DV2-005 | Adaptive CI core | validated | Core classifier/CI plan is deterministic and produces reusable outputs. |
+| A | DV2-001 | Deterministic GitHub-native control plane | validated |
+| A | DV2-002 | Provider dispatch with no silent fallback | validated |
+| A | DV2-003 | Safe-output workers and credential isolation | validated |
+| A | DV2-004 | Risk profiles, budgets and bounded provider work | validated |
+| A | DV2-005 | Adaptive CI core | validated |
+| B | DV2-006 | Fail-closed classifier hardening | validated |
+| B | DV2-007 | Versioned classifier distribution | validated |
+| C | DV2-008 | GitHub-native independent audit | validated |
+| C | DV2-009 | Bounded remediation state machine | validated |
+| C | DV2-010 | Exact-head release gate | validated |
+| D | DV2-011 | Observability and cost/token accounting | validated |
+| E | DV2-012 | `controle_calorias` pilot | rolled-out |
+| E | DV2-013 | `training-system` pilot and FAST benchmark | validated |
+| F | DV2-014 | V1 and nested-Skill retirement | validated |
+| G | DV2-015 | Executable completeness contract | validated |
+| D | DV2-016 | Persistent resumable delivery state | validated |
 
-No Phase A work should be reopened unless a later finding proves a systemic defect.
+All required DV2-001..DV2-016 requirements are terminal. `npm run verify:v2:complete` is therefore a regression gate, not a pending-rollout signal.
 
-## Phase B — make classification safe and distributable
+## Sequencing rationale
 
-### DV2-006 — Fail-closed classifier hardening
+### Phase A — deterministic foundation
 
-Status: **validated**.
+DV2-001 through DV2-005 moved identity, risk, budgets, provider routing and CI-depth decisions out of language-model orchestration and into deterministic code.
 
-Required work:
+### Phase B — safe classification and distribution
 
-- model FAST as a strict safe allowlist;
-- evaluate always-CRITICAL/sensitive boundaries before FAST;
-- support real auth/access/session/identity/permission entrypoints whose filenames may not contain obvious keywords;
-- remove any global extension rule that can grant FAST outside trusted roots;
-- preserve unknown-path => CRITICAL;
-- prove requested risk can promote but never downgrade;
-- add adversarial tests based on real and sibling cases from the `training-system` audit.
+DV2-006 made FAST a strict allowlist and preserved unknown/incomplete evidence => CRITICAL. DV2-007 made the classifier distributable to public/private targets through generated, fingerprinted policy packages.
 
-Exit condition: the core policy and target-repository policy contract make the audit cases impossible by construction.
+### Phase C — replace V1 audit/remediation ceremony
 
-### DV2-007 — Versioned classifier distribution
+DV2-008 through DV2-010 replaced nested-Skill handoffs with exact-candidate GitHub evidence, bounded remediation and a deterministic exact-head release gate.
 
-Status: **validated**.
+### Phase D — resume and measure
 
-Depends on DV2-006.
+DV2-016 made controller state resumable without chat history. DV2-011 made latency, attempts, provider calls and AI usage measurable. Token/credit data remains explicitly unknown when providers do not expose it; unknown values must never be reconstructed as zero.
 
-Official direction: generated vendoring from the private orchestrator.
+### Phase E — real-repository proof
 
-Required work:
+DV2-012 and DV2-013 proved adaptive routing in `controle_calorias` and `training-system`, including materially faster FAST paths while preserving fail-closed CRITICAL handling for sensitive/uncertain changes.
 
-- target policy schema;
-- generator/export command;
-- generated runtime/policy lock;
-- source version + fingerprint;
-- repository-specific promotion/safe-root config;
-- verifier that detects drift;
-- orchestrator-driven update PR flow;
-- migrate `controle_calorias` and `training-system` away from hand-maintained classifier copies.
+### Phase F — V1 retirement
 
-Terminal validation evidence:
+DV2-014 made V2 the only active normal delivery architecture. Active `delivery-request`, recursive `max_cycles`, nested orchestration Skill and mandatory V1 handoff/certificate paths are retired. Only `.audit/entregar-issue/**` and `skills/catalog/**` are retained as historical traceability and are excluded from normal AI context unless explicitly needed.
 
-- orchestrator generator/distribution merged by PR #31;
-- target-specific `RoleGuard` promotion preserved by PR #32;
-- `controle_calorias` PR #1069 merged into `develop` as `6507bdc0dc14ebc744de75393e5dc0c6bda8b112`;
-- `training-system` PR #435 merged into `develop` as `0fba4d2870e087775433b844e22f04c0daa84bcf`;
-- both merged packages are pinned to orchestrator commit `1d6185de16e3a30378a810132bb4e3cf9483f98c`;
-- both locks carry canonical classifier fingerprint `35914f89844e0a6c35a436af1a1856e6a2b37ab7f5e0f3d3c1749e7a89d3ad24`.
+### Phase G — program governance
 
-Exit condition: public and private target repositories consume traceable generated policy without directly requiring private reusable actions. **Satisfied.**
+DV2-015 keeps the architecture reconstructable from repository state. The executable completeness gate ensures every manifest ID exists in both the master specification and this roadmap and that terminal requirements have versioned evidence.
 
-## Phase C — replace V1 audit/remediation ceremony
+## Post-completion hardening
 
-### DV2-008 — GitHub-native independent audit
+There is no remaining V2 rollout item in the original roadmap. New work is tracked through dedicated issues and must preserve the non-negotiable invariants in `MASTER_SPEC.md`.
 
-Status: **validated**.
+Issue #59 is post-completion hardening, not a new architecture phase. It tightens:
 
-Depends on DV2-006 and the exact evidence contract.
+- V1-residue detection so retired runtime cannot silently return;
+- AI context hygiene so historical/generated artifacts are not explored by default;
+- token/credit observability and aggregation;
+- canonical `gh-aw` lock publication without duplicate `.generated/gh-aw` snapshots;
+- documentation so future sessions consume current state rather than stale rollout instructions.
 
-Required work:
+Hardening does **not** infer a cheaper risk profile from issue prose. If changed-file evidence is missing or uncertain, the classifier remains fail-closed and CRITICAL.
 
-- define V2 audit input schema from GitHub identity/checks/classifier evidence;
-- implement FAST/STANDARD/CRITICAL applicability;
-- make CRITICAL review independent of implementation context;
-- emit stable actionable finding objects;
-- bind audit to exact material SHA;
-- ignore inherited/stale V1 handoff as a release blocker when V2 evidence is valid;
-- keep legacy audit adapter only during migration.
+## Evidence and continuation rule
 
-Validation evidence:
+For exact implementation/validation/rollout evidence, read the relevant requirement entry in `config/delivery-v2-requirements.json` and only then open the referenced file/PR/run. Do not preload all historical evidence into an AI context.
 
-- the trusted independent-audit runtime was promoted to `main` through PR #50 before the final pilot, so the authoritative request was generated by trusted runtime rather than candidate-only code;
-- PR #48 final candidate `c403eaf94fcd10b9fae6da3b781be3a3955e273c` passed exact-head `Delivery V2 CI` run `34690592843`;
-- independent audit run `34690625580` used reviewer `delivery-v2-auditor-codex-critical` with `candidate-contract-evidence-only` context isolation and returned **approved** with zero blocking findings;
-- the exact audit request fingerprint is `363824d1c8391469fb0003351b58da757907d298bb6b2f2617e83cd51e8ac6a8`;
-- the machine-readable evidence summary is versioned at `docs/delivery-v2/evidence/dv2-008-critical-independent-audit.json`;
-- the audit result is durably published in PR #48. The audit workflow's upload step concluded success, but the Actions artifacts API returned zero artifacts when observed, so artifact availability is not claimed.
+A new session should read, in order:
 
-Exit condition: a CRITICAL pilot can be approved/rejected on its actual candidate without requiring `.audit/entregar-issue/handoff-ready.json`. **Satisfied.**
+1. `docs/delivery-v2/MASTER_SPEC.md`;
+2. `config/delivery-v2-requirements.json`;
+3. this roadmap;
+4. the current issue/PR.
 
-### DV2-009 — Bounded remediation state machine
-
-Status: **validated**.
-
-Depends on DV2-008 findings contract.
-
-Required work:
-
-- deterministic transition table;
-- attempt accounting by risk;
-- CI-failure classification (`actionable`, `external`, `preexisting`);
-- targeted audit remediation;
-- invalidation on material SHA drift;
-- escalation packet when budgets are exhausted;
-- no recursive/nested orchestration Skills.
-
-Validation evidence:
-
-- `docs/delivery-v2/evidence/dv2-009-bounded-remediation.json` records the final real PR #48 sequence without claiming retroactive controller ownership;
-- candidate `1971fb5751dd99883c6772094bd4b1448fb4089e` passed CI run `34690291734` and was rejected by independent audit `34690327617` with one release-blocking finding;
-- audit remediation produced candidate `6de29792e0f9a828ee6332d756ffbe82aa964615`, whose CI run `34690481605` failed in `V2 unit tests` and was replayed as an actionable CI failure;
-- the next bounded implementation produced `c403eaf94fcd10b9fae6da3b781be3a3955e273c`, which passed CI `34690592843`, passed independent audit `34690625580`, and was merged as `134fea2c8dffd4db5678935e5ab2386585f0169c`;
-- the production state machine replay reaches that approved path with 3/3 implementation attempts, 2/3 allowed audit runs, and 1/2 audit-remediation attempts;
-- from the exact third-attempt state, `test/v2-remediation-live-evidence.test.mjs` proves that another actionable CI failure escalates to `implementation-budget-exhausted` instead of authorizing a fourth implementation attempt;
-- PR #52 and CI run `34692649283` validated the live evidence replay against the production state machine.
-
-Exit condition: every loop either reaches a terminal state or deterministic escalation within configured budgets. **Satisfied.**
-
-### DV2-010 — Exact-head release gate
-
-Status: **validated**.
-
-Depends on DV2-008 and DV2-009.
-
-Required work:
-
-- stable final required status;
-- exact remote head check;
-- risk/profile/fingerprint binding;
-- required CI aggregation;
-- audit aggregation by risk;
-- unresolved finding check;
-- automatic invalidation on SHA drift;
-- explicit merge-policy decision.
-
-Validation evidence:
-
-- `docs/delivery-v2/evidence/dv2-010-exact-head-release.json` records the real final PR #48 candidate and evidence set;
-- at freeze time, material and remote head were both `c403eaf94fcd10b9fae6da3b781be3a3955e273c`;
-- required CI `34690592843` was completed/success on that exact candidate;
-- the candidate classifier source `src/v2/risk-profile.mjs` is bound to Git blob `4bd6e9bdfc06fc6392e34ecd852af0590d9fb6b0`; the validation test recomputes both the Git blob identity and the SHA-256 source fingerprint rather than using an invented fingerprint;
-- independent audit `34690625580` approved the same candidate with request fingerprint `363824d1c8391469fb0003351b58da757907d298bb6b2f2617e83cd51e8ac6a8` and zero unresolved findings/blockers;
-- `evaluateReleaseGate` derives `ready-for-human-merge`, `Delivery V2 Release=success`, and merge policy `human-authorized-only` / automatic merge false from those evidence references;
-- the live test independently mutates remote head, required-check subject SHA, audit candidate SHA, and classifier fingerprint; every mutation invalidates readiness with the expected fail-closed state/reason;
-- PR #54 and CI run `34692897163` validated the exact-head release exercise.
-
-Exit condition: `ready-for-human-merge` can be derived entirely from current GitHub/V2 evidence. **Satisfied.**
-
-## Phase D — make the controller resumable and measurable
-
-### DV2-016 — Persistent resumable delivery state
-
-Status: **validated**.
-
-Required work:
-
-- durable state schema;
-- idempotent transitions;
-- attempt counters;
-- evidence/check references;
-- remote identity reconciliation;
-- resume command/API;
-- stale-state protection.
-
-Implementation evidence:
-
-- versioned persistent state schema retains target identity, material SHA, risk/classifier, provider, state, counters, checks/findings/evidence and last reason;
-- checkpoint IDs make repeated updates idempotent; attempt counters are monotonic and risk-bounded;
-- remote PR/head identity is re-read at resume time and a fresher remote head invalidates candidate-bound evidence and returns to `queued`;
-- `npm run resume:v2 -- --state-file ... --repo ... --pr ... --head-ref ... --remote-head ...` exposes the resume command/API and requires fresh GitHub identity as input.
-
-Validation evidence: PR #39 at material head `da06036d42a2a8b4fe28eb55e00cd1793b4e6b24` was resumed from durable state by two distinct Node processes using fresh GitHub PR/head identity; both independently derived `run-audit`. The machine-readable evidence is stored in `docs/delivery-v2/evidence/dv2-016-live-resume.json`.
-
-Exit condition: another process/chat can resume the same PR using repository/GitHub state only. **Satisfied.**
-
-### DV2-011 — Observability and cost accounting
-
-Status: **validated**.
-
-Can progress in parallel with DV2-016.
-
-Required work:
-
-- normalized delivery metrics;
-- provider calls/turns/credits/cost where available;
-- CI queue/run duration;
-- audit/remediation duration;
-- end-to-end duration;
-- terminal reason;
-- benchmark reporting by risk/repository/provider.
-
-Implementation evidence:
-
-- versioned metrics records capture repository/issue/PR/risk/provider/classifier, provider calls, attempts, AI usage, safe provider cost, CI/audit/end-to-end timing, terminal reason, diff size and escalation;
-- unavailable tokens/cost remain explicit `null` rather than invented zeroes; provider cost rejects unexpected fields that could carry secrets;
-- idempotent metrics storage keys records by repository/PR/material SHA;
-- summaries provide cross-repository grouping by repository/risk/provider with averages, p50/p95, attempts, calls, escalations and cost totals by currency;
-- baseline comparison derives reduction and speedup from measured timings; `npm run metrics:v2 -- --metrics-file ...` reports stored evidence.
-
-Validation evidence:
-
-- `docs/delivery-v2/evidence/dv2-011-live-metrics.json` records two real merged target deliveries with exact material SHA, classifier fingerprint, risk, GitHub Actions timing, PR end-to-end timing and diff size;
-- `controle_calorias#1069` was observed as CRITICAL on `0f0cf57ab5c541093d2b7928b3cdac998620ee1e`; Actions run `34664118578` completed green with 567,000 ms CI execution;
-- `training-system#435` was observed as CRITICAL on `ae0fade7be03c6c66f00fbd605bd85d9259aa622`; Actions run `34664164768` completed green with 993,000 ms CI execution;
-- both locks carry canonical classifier fingerprint `35914f89844e0a6c35a436af1a1856e6a2b37ab7f5e0f3d3c1749e7a89d3ad24`;
-- unavailable AI usage/cost is represented as null/unavailable rather than reconstructed from chat history;
-- `test/v2-metrics-live-evidence.test.mjs` normalizes those records and proves cross-repository summaries through the production metrics implementation; PR #41 and CI run `34669122471` validated the evidence file itself.
-
-Exit condition: V2 performance/cost comparisons no longer depend on manual timing from chat transcripts. **Satisfied.**
-
-## Phase E — prove the design in real repositories
-
-### DV2-012 — `controle_calorias`
-
-Status: **rolled-out**.
-
-Existing evidence:
-
-- adaptive CI migration merged;
-- full post-merge regression preserved;
-- real FAST accessibility change executed related tests instead of the full 24-shard suite;
-- observed FAST runtime ~128 seconds versus ~1,255-second historical full baseline.
-
-Follow-up after DV2-007: completed. PR #1069 is merged in `develop` with the generated versioned package active.
-
-### DV2-013 — `training-system`
-
-Status: **validated, not rolled out**.
-
-Validation evidence:
-
-- the generated classifier package migration is merged in PR #435 as `0fba4d2870e087775433b844e22f04c0daa84bcf`;
-- no machine-verifiable independent finding object for PR #435 is persisted in its conversation, reviews, issue #431 comments, recovered prior context or repository code search; this absence is recorded without relabeling the unavailable audit as approved/resolved;
-- real low-risk UI pilot PR #436 changed only `apps/web/src/components/AppErrorBoundary.tsx` and was classified `FAST` on exact head `ed59660e0a5cbe8b202491b105e36614770dfac6`;
-- workflow run `34693145142` completed green in 164 seconds end-to-end; `FAST validation` executed for 74 seconds, while `STANDARD validation` and `CRITICAL validation` were skipped;
-- FAST executed exact-head evidence, classifier self-test, web type-check, lint, related tests, build, architecture checks and artifact upload; Prisma generation and STANDARD/CRITICAL type compatibility were skipped in merge-preview;
-- exact-head artifact `10298051005` has digest `sha256:bc7c2382e4a941a86b271ff6c56ae12db0cfc550a2c1ec736b4b8dadd074298a` and binds `headSha == checkoutSha == ed59660e0a5cbe8b202491b105e36614770dfac6`;
-- compared with the 993-second CRITICAL migration run `34664164768`, the observed FAST workflow was ~83.5% shorter / ~6.05x faster; this is explicitly a profile benchmark rather than an apples-to-apples diff comparison;
-- machine-readable evidence is versioned at `docs/delivery-v2/evidence/dv2-013-training-system-fast.json` and exercised by `test/v2-training-system-fast-evidence.test.mjs`.
-
-PR #436 remains intentionally unmerged because automatic merge authorization is scoped to `delivery-orchestrator`, not `training-system`; therefore DV2-013 is not labeled `rolled-out` on the basis of that pilot.
-
-Exit condition: a real low-risk UI candidate proves FAST routing, exact-head evidence, focused validation, skipped STANDARD/CRITICAL gates and material runtime reduction. **Satisfied.**
-
-## Phase F — retire the old model
-
-### DV2-014 — V1 and nested-Skill retirement
-
-Depends on DV2-006 through DV2-013 and DV2-016 being terminal.
-
-Required work:
-
-- make V2 the default entrypoint;
-- disable/remove legacy active `delivery-request` loops;
-- remove normal-path nested Skill orchestration;
-- remove mandatory V1 handoff/certificate dependency;
-- migrate/close queued legacy work;
-- remove dead loop/max-cycle code;
-- update README/security/capabilities/docs;
-- retain history only where it has traceability value.
-
-Exit condition: no normal delivery path needs V1 to complete safely.
-
-## Phase G — keep the program itself governed
-
-### DV2-015 — Canonical master specification and executable completeness gate
-
-Status: **validated**.
-
-Required work:
-
-- canonical `MASTER_SPEC.md`;
-- this roadmap;
-- machine-readable requirements manifest;
-- structural verifier;
-- CI integration;
-- umbrella issue #27 aligned with stable IDs.
-
-Exit condition: `npm run verify:v2` is green in CI and a new context can reconstruct all architectural decisions from repository state.
-
-## Release-to-default checklist
-
-Delivery V2 must not be declared complete until `node scripts/verify-delivery-v2-completeness.mjs --require-complete` exits successfully.
-
-That means every required item below is terminal:
-
-- DV2-001
-- DV2-002
-- DV2-003
-- DV2-004
-- DV2-005
-- DV2-006
-- DV2-007
-- DV2-008
-- DV2-009
-- DV2-010
-- DV2-011
-- DV2-012
-- DV2-013
-- DV2-014
-- DV2-015
-- DV2-016
-
-## Next implementation order
-
-Unless a production incident changes priority, the remaining implementation order is:
-
-1. DV2-014
-
-Every PR should name the `DV2-*` IDs it advances and update the manifest only when the evidence justifies the new status.
+Issue #27 is historical rollout context and is only needed when a current task depends on that history.

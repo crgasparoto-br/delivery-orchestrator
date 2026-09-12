@@ -39,6 +39,22 @@
     ".audit/entregar-issue/**",
     "skills/catalog/**"
   ],
+  "postRetirementHardening": {
+    "issueNumber": 59,
+    "removedResidualPaths": [
+      "scripts/finalize-control-request.mjs",
+      "skills/orquestrar-entrega/**"
+    ],
+    "runtimeMarkerScan": true,
+    "forbiddenRuntimeMarkers": [
+      "delivery-request",
+      "CONTROL_ISSUE_NUMBER",
+      "max_cycles",
+      "orquestrar-entrega",
+      "delivery-loop",
+      "persistent delivery queue"
+    ]
+  },
   "invariants": [
     "normal delivery no longer accepts delivery-request control issues",
     "normal delivery no longer exposes max_cycles or a recursive implement-audit loop",
