@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { runCommand } from './process.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const WORKER = path.join(HERE, 'role-runtime-worker.mjs');
+const DEFAULT_WORKER = path.join(HERE, 'role-runtime-worker.mjs');
 const USER_RE = /^[a-z_][a-z0-9_-]*[$]?$/i;
 
 export function validateRoleUsers(implementerUser, auditorUser) {
@@ -16,6 +16,10 @@ export function validateRoleUsers(implementerUser, auditorUser) {
   return { implementerUser: impl, auditorUser: audit };
 }
 
+export function roleRuntimeWorkerPath(env = process.env) {
+  return String(env.DELIVERY_ROLE_RUNTIME_WORKER || '').trim() || DEFAULT_WORKER;
+}
+
 function sudoEnv() {
   const env = { PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin' };
   for (const key of ['LANG', 'LC_ALL', 'TERM']) if (process.env[key]) env[key] = process.env[key];
@@ -26,7 +30,7 @@ export async function runRoleTask(user, task, payload = {}) {
   if (!USER_RE.test(String(user || ''))) throw new Error(`Invalid delivery role user: ${user || '(empty)'}`);
   const result = await runCommand(
     'sudo',
-    ['-n', '-u', user, '-H', '--', process.execPath, WORKER, task],
+    ['-n', '-u', user, '-H', '--', process.execPath, roleRuntimeWorkerPath(), task],
     { env: sudoEnv(), input: `${JSON.stringify(payload)}\n` }
   );
   const text = result.stdout.trim();

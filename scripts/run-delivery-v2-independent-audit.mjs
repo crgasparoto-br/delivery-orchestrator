@@ -138,8 +138,9 @@ async function main() {
       prompt: auditPrompt(request),
       outputSchema: independentAuditModelOutputSchema(),
       role: 'auditor',
-      githubToken,
-      sandboxMode: 'read-only'
+      githubToken: '',
+      sandboxMode: 'read-only',
+      networkAccessEnabled: false
     });
     const finalized = finalizeIndependentAuditResult({ request, modelResult: response.result, reviewerRunId });
     const evidence = {
