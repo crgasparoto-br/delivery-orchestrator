@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "requirement": "DV2-010",
+  "exercise": "live-exact-head-release-gate",
+  "repository": "crgasparoto-br/delivery-orchestrator",
+  "pullRequestNumber": 48,
+  "materialHeadSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
+  "currentRemoteHeadShaAtFreeze": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
+  "evidenceCollection": {
+    "materialHeadSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
+    "remoteHeadSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
+    "evidenceRef": "github:delivery-orchestrator#48@c403eaf94fcd10b9fae6da3b781be3a3955e273c"
+  },
+  "classifier": {
+    "subjectSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
+    "profile": "critical",
+    "version": "delivery-v2-risk-profile-v1",
+    "sourcePath": "src/v2/risk-profile.mjs",
+    "gitBlobSha": "4bd6e9bdfc06fc6392e34ecd852af0590d9fb6b0",
+    "fingerprintAlgorithm": "sha256-utf8-source",
+    "fingerprintDerivedByValidationTest": true,
+    "evidenceRef": "git:c403eaf94fcd10b9fae6da3b781be3a3955e273c:src/v2/risk-profile.mjs"
+  },
+  "mergePreview": {
+    "required": false
+  },
+  "checks": [
+    {
+      "name": "Delivery V2 CI",
+      "required": true,
+      "subjectSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
+      "status": "completed",
+      "conclusion": "success",
+      "workflowRunId": 34690592843,
+      "evidenceRef": "github-actions:34690592843"
+    }
+  ],
+  "audit": {
+    "candidateSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
+    "decision": "approved",
+    "mode": "independent",
+    "requestFingerprint": "363824d1c8391469fb0003351b58da757907d298bb6b2f2617e83cd51e8ac6a8",
+    "workflowRunId": 34690625580,
+    "durablePrCommentId": 5645558801,
+    "evidenceRef": "github:delivery-orchestrator#48:comment-5645558801"
+  },
+  "unresolvedFindings": [],
+  "blockers": [],
+  "expectedRelease": {
+    "readiness": true,
+    "state": "ready-for-human-merge",
+    "requiredStatus": {
+      "name": "Delivery V2 Release",
+      "state": "success"
+    },
+    "mergePolicy": {
+      "decision": "human-authorized-only",
+      "automaticMergeAllowed": false
+    }
+  },
+  "observedMerge": {
+    "merged": true,
+    "mergeCommitSha": "134fea2c8dffd4db5678935e5ab2386585f0169c"
+  },
+  "invalidationScenarios": [
+    {
+      "id": "remote-head-drift",
+      "mutation": "currentRemoteHeadSha",
+      "value": "134fea2c8dffd4db5678935e5ab2386585f0169c",
+      "expectedState": "queued",
+      "expectedReason": "remote-head-drift"
+    },
+    {
+      "id": "required-check-stale",
+      "mutation": "checks[0].subjectSha",
+      "value": "1971fb5751dd99883c6772094bd4b1448fb4089e",
+      "expectedState": "ci-pending",
+      "expectedReason": "required-check-stale:Delivery V2 CI"
+    },
+    {
+      "id": "required-audit-stale",
+      "mutation": "audit.candidateSha",
+      "value": "1971fb5751dd99883c6772094bd4b1448fb4089e",
+      "expectedState": "audit-pending",
+      "expectedReason": "required-audit-stale"
+    },
+    {
+      "id": "classifier-fingerprint-mismatch",
+      "mutation": "classifier.fingerprint",
+      "value": "stale-fingerprint",
+      "expectedState": "classified",
+      "expectedReason": "classifier-fingerprint-mismatch"
+    }
+  ],
+  "result": "validation-evidence",
+  "conclusion": "The final PR #48 candidate had an exact remote head, exact-head green required CI, matching classifier source identity, approved independent audit and no unresolved blockers. The release gate must derive ready-for-human-merge from that evidence only, and must immediately invalidate readiness when the remote head, required check, audit candidate or classifier fingerprint drifts."
+}
