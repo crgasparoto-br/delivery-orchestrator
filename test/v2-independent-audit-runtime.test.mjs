@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   DELIVERY_V2_CODEX_AUDITOR_IDENTITY,
   assertTrustedCriticalAuditPilot,
+  assertTrustedSourceWorkflowRun,
   buildGithubNativeCriticalAuditRequest,
   finalizeIndependentAuditResult,
   fingerprintClassifierSource,
@@ -18,8 +19,8 @@ const REPOSITORY = 'crgasparoto-br/delivery-orchestrator';
 
 function pilotPr(overrides = {}) {
   return {
-    number: 45,
-    title: 'security(v2): enforce trusted audit origin in runtime',
+    number: 46,
+    title: 'security(v2): bind audit evidence to trusted CI workflow',
     body: 'Exercises the GitHub-native auditor.\n\nDV2-AUDIT-PILOT: critical\n',
     user: { login: 'implementer-user' },
     base: { ref: 'main', sha: B },
@@ -33,6 +34,8 @@ function greenRun(overrides = {}) {
   return {
     id: 9001,
     name: 'Delivery V2 CI',
+    event: 'pull_request',
+    repository: { full_name: REPOSITORY },
     head_sha: A,
     status: 'completed',
     conclusion: 'success',
@@ -47,7 +50,7 @@ test('CRITICAL pilot marker is explicit and line-bound', () => {
 });
 
 test('runtime independently enforces trusted repository origin for CRITICAL pilots', () => {
-  assert.equal(assertTrustedCriticalAuditPilot(pilotPr(), REPOSITORY).number, 45);
+  assert.equal(assertTrustedCriticalAuditPilot(pilotPr(), REPOSITORY).number, 46);
   assert.throws(
     () => assertTrustedCriticalAuditPilot(pilotPr({ head: { ref: 'fork', sha: A, repo: { full_name: 'attacker/fork' } } }), REPOSITORY),
     /trusted repository/
@@ -55,6 +58,16 @@ test('runtime independently enforces trusted repository origin for CRITICAL pilo
   assert.throws(
     () => assertTrustedCriticalAuditPilot(pilotPr({ body: 'no pilot marker' }), REPOSITORY),
     /not marked/
+  );
+});
+
+test('source audit evidence must come from the trusted exact-head Delivery V2 CI pull-request run', () => {
+  assert.equal(assertTrustedSourceWorkflowRun(greenRun(), REPOSITORY, A).id, 9001);
+  assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ name: 'Unrelated CI' }), REPOSITORY, A), /source workflow must be Delivery V2 CI/);
+  assert.throws(() => assertTrustedSourceWorkflowRun(greenRun({ event: 'push' }), REPOSITORY, A), /source workflow event must be pull_request/);
+  assert.throws(
+    () => assertTrustedSourceWorkflowRun(greenRun({ repository: { full_name: 'attacker/fork' } }), REPOSITORY, A),
+    /source workflow repository must be/
   );
 });
 
@@ -74,6 +87,7 @@ test('GitHub-native CRITICAL request binds exact head, CI and classifier without
   assert.equal(request.applicability.required, true);
   assert.equal(request.applicability.mode, 'independent');
   assert.equal(request.candidate.checks[0].workflowRunId, 9001);
+  assert.equal(request.candidate.checks[0].name, 'Delivery V2 CI');
   assert.equal(request.candidate.legacyV1HandoffObserved, false);
   assert.equal(request.candidate.classifier.fingerprint, fingerprintClassifierSource('export const classifier = true;\n'));
   assert.equal(request.reviewerContextPolicy.includeImplementerHiddenReasoning, false);
@@ -126,7 +140,7 @@ test('reviewer run cannot reuse the implementer/PR run identity', () => {
   });
   assert.throws(() => finalizeIndependentAuditResult({
     request,
-    reviewerRunId: 45,
+    reviewerRunId: 46,
     modelResult: { decision: 'approved', findings: [] }
   }), /independent/);
 });

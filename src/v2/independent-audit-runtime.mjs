@@ -3,6 +3,8 @@ import { buildAuditRequest, evaluateAuditOutcome } from './audit-contract.mjs';
 
 export const DELIVERY_V2_CRITICAL_AUDIT_PILOT_MARKER = 'DV2-AUDIT-PILOT: critical';
 export const DELIVERY_V2_CODEX_AUDITOR_IDENTITY = 'delivery-v2-auditor-codex-critical';
+export const DELIVERY_V2_SOURCE_WORKFLOW_NAME = 'Delivery V2 CI';
+export const DELIVERY_V2_SOURCE_WORKFLOW_EVENT = 'pull_request';
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
 
@@ -38,6 +40,30 @@ export function assertTrustedCriticalAuditPilot(pullRequest, repository) {
   return pullRequest;
 }
 
+export function assertTrustedSourceWorkflowRun(sourceWorkflowRun, repository, materialHeadSha) {
+  if (!sourceWorkflowRun || typeof sourceWorkflowRun !== 'object') throw new Error('sourceWorkflowRun is required');
+  const expectedRepository = requiredString(repository, 'repository');
+  const expectedHeadSha = requiredSha(materialHeadSha, 'materialHeadSha');
+  const workflowName = requiredString(sourceWorkflowRun.name, 'sourceWorkflowRun.name');
+  if (workflowName !== DELIVERY_V2_SOURCE_WORKFLOW_NAME) {
+    throw new Error(`source workflow must be ${DELIVERY_V2_SOURCE_WORKFLOW_NAME}`);
+  }
+  const workflowEvent = requiredString(sourceWorkflowRun.event, 'sourceWorkflowRun.event').toLowerCase();
+  if (workflowEvent !== DELIVERY_V2_SOURCE_WORKFLOW_EVENT) {
+    throw new Error(`source workflow event must be ${DELIVERY_V2_SOURCE_WORKFLOW_EVENT}`);
+  }
+  const workflowRepository = requiredString(sourceWorkflowRun.repository?.full_name, 'sourceWorkflowRun.repository.full_name');
+  if (workflowRepository !== expectedRepository) {
+    throw new Error(`source workflow repository must be ${expectedRepository}`);
+  }
+  const runHeadSha = requiredSha(sourceWorkflowRun.head_sha, 'sourceWorkflowRun.head_sha');
+  if (runHeadSha !== expectedHeadSha) throw new Error('source workflow is stale for the PR material head');
+  if (sourceWorkflowRun.status !== 'completed' || sourceWorkflowRun.conclusion !== 'success') {
+    throw new Error('source workflow must be terminal green before independent audit');
+  }
+  return sourceWorkflowRun;
+}
+
 export function fingerprintClassifierSource(source) {
   return createHash('sha256').update(requiredString(source, 'classifier source')).digest('hex');
 }
@@ -53,14 +79,9 @@ export function buildGithubNativeCriticalAuditRequest({
 } = {}) {
   if (!pullRequest || typeof pullRequest !== 'object') throw new Error('pullRequest is required');
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) throw new Error('changedPaths must be a non-empty array');
-  if (!sourceWorkflowRun || typeof sourceWorkflowRun !== 'object') throw new Error('sourceWorkflowRun is required');
 
   const materialHeadSha = requiredSha(pullRequest.head?.sha, 'pullRequest.head.sha');
-  const runHeadSha = requiredSha(sourceWorkflowRun.head_sha, 'sourceWorkflowRun.head_sha');
-  if (runHeadSha !== materialHeadSha) throw new Error('source workflow is stale for the PR material head');
-  if (sourceWorkflowRun.status !== 'completed' || sourceWorkflowRun.conclusion !== 'success') {
-    throw new Error('source workflow must be terminal green before independent audit');
-  }
+  assertTrustedSourceWorkflowRun(sourceWorkflowRun, repository, materialHeadSha);
 
   const mergePreviewSha = SHA_RE.test(String(pullRequest.merge_commit_sha ?? ''))
     ? String(pullRequest.merge_commit_sha).toLowerCase()
@@ -85,7 +106,7 @@ export function buildGithubNativeCriticalAuditRequest({
       fingerprint: fingerprintClassifierSource(classifierSource)
     },
     checks: [{
-      name: requiredString(sourceWorkflowRun.name, 'sourceWorkflowRun.name'),
+      name: DELIVERY_V2_SOURCE_WORKFLOW_NAME,
       required: true,
       scope: 'material-head',
       subjectSha: materialHeadSha,
