@@ -52,10 +52,11 @@ const historicalRuntimeReferences = [
   ['skills/catalog', /skills\/catalog(?:\/|\b)/i],
   ['.audit', /(?:^|[^A-Za-z0-9_$])\.audit(?:[\/\\]|(?=['"`\s;)]|$))/i]
 ];
-const referenceOnlyAllowlist = [
-  /Context hygiene: do not inspect or summarize .*\.audit\/\*\*.*skills\/catalog\/\*\*/i,
-  /Do not use or seek implementation conversation history, \.audit\/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle/i
+const referenceOnlyFragments = [
+  'Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts',
+  'Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'
 ];
+const activeTextSurfaceExtension = /\.(?:md|txt|ya?ml|json|mjs|cjs|js|jsx|ts|tsx|py|sh|toml)$/i;
 
 async function exists(relativePath) {
   try {
@@ -87,23 +88,24 @@ async function listFiles(relativePath) {
 
 function isExecutableDependencySurface(relativePath) {
   if (activeRootFiles.includes(relativePath)) return true;
-  if (relativePath.startsWith('scripts/') || relativePath.startsWith('src/')) return /\.(?:mjs|cjs|js|json|sh)$/i.test(relativePath);
-  if (relativePath.startsWith('.github/')) return /\.(?:ya?ml|json|mjs|cjs|js|sh)$/i.test(relativePath);
-  if (relativePath.startsWith('skills/')) return /\.(?:py|mjs|cjs|js|sh|ya?ml|json)$/i.test(relativePath);
-  if (relativePath.startsWith('trust/')) return /\.(?:json|ya?ml|mjs|cjs|js|sh)$/i.test(relativePath);
-  return false;
+  if (!activeRuntimeRoots.some((runtimeRoot) => relativePath.startsWith(`${runtimeRoot}/`))) return false;
+  const fileName = relativePath.split('/').at(-1) ?? '';
+  const extensionless = !fileName.includes('.');
+  return extensionless || activeTextSurfaceExtension.test(relativePath);
 }
 
-function isReferenceOnlyLine(line) {
-  return referenceOnlyAllowlist.some((pattern) => pattern.test(line));
+function stripReferenceOnlyProse(line) {
+  let candidate = line;
+  for (const fragment of referenceOnlyFragments) candidate = candidate.replaceAll(fragment, '');
+  return candidate;
 }
 
 function historicalReferences(body) {
   const matches = [];
   for (const line of body.split(/\r?\n/)) {
-    if (isReferenceOnlyLine(line)) continue;
+    const candidate = stripReferenceOnlyProse(line);
     for (const [marker, pattern] of historicalRuntimeReferences) {
-      if (pattern.test(line)) matches.push(marker);
+      if (pattern.test(candidate)) matches.push(marker);
     }
   }
   return [...new Set(matches)];
@@ -153,9 +155,13 @@ test('historical reference gate is fail-closed across manifests, workflow uses, 
   assert.deepEqual(historicalReferences("'durationsMs.audit'"), []);
   assert.deepEqual(historicalReferences('Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts unless needed.'), []);
   assert.deepEqual(historicalReferences('Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'), []);
+  assert.deepEqual(historicalReferences('run: cat .audit/entregar-issue/handoff-ready.json # Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'), ['.audit']);
   assert.equal(isExecutableDependencySurface('package.json'), true);
   assert.equal(isExecutableDependencySurface('.github/workflows/delivery-v2-worker-codex-fast.lock.yml'), true);
+  assert.equal(isExecutableDependencySurface('.github/workflows/delivery-v2-worker-codex-critical.md'), true);
   assert.equal(isExecutableDependencySurface('.github/actions/delivery-v2-risk/action.yml'), true);
+  assert.equal(isExecutableDependencySurface('skills/foo/SKILL.md'), true);
+  assert.equal(isExecutableDependencySurface('scripts/legacy-runner'), true);
 });
 
 test('capability manifest describes only the active V2 architecture', async () => {
