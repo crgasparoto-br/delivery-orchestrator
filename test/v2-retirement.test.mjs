@@ -40,9 +40,8 @@ const retiredPaths = [
 const nonRuntimeRootDirectories = new Set(['.audit', '.git', 'docs', 'node_modules', 'test']);
 const nonRuntimeRootFiles = new Set(['.gitignore', 'README.md', 'LICENSE', 'LICENSE.md']);
 const historicalRuntimeExclusions = ['skills/catalog/'];
-const nestedSkillNamePattern = '(?:entregar[-\\s]+issue|revisar[-\\s]+issue|auditar[-\\s]+issue|corrigir[-\\s]+ci|design[-\\s]+interface|documentacao[-\\s]+repositorio|fluxos[-\\s]+conversacionais)';
-const nestedSkillInvocationPattern = new RegExp(`(?:@\\s*${nestedSkillNamePattern}\\b|skills?:\\/\\/${nestedSkillNamePattern}\\b|\\b(?:invokeSkill|runSkill|useSkill)\\s*\\([^\\n]{0,80}${nestedSkillNamePattern}\\b)`, 'i');
-const collapsedNestedSkillInvocationPattern = new RegExp(`(?:@${nestedSkillNamePattern}|skills?:\\/\\/${nestedSkillNamePattern}|(?:invokeSkill|runSkill|useSkill)${nestedSkillNamePattern})`, 'i');
+const nestedSkillInvocationPattern = /(?:\b(?:invokeSkill|runSkill|useSkill)\s*\(|skills?:\/\/)/i;
+const collapsedNestedSkillInvocationPattern = /(?:invokeskill|runskill|useskill|skills?:\/\/)/i;
 const forbiddenActiveV1Markers = [
   ['delivery-request', /delivery-request/i],
   ['CONTROL_ISSUE_NUMBER', /CONTROL_ISSUE_NUMBER/],
@@ -51,10 +50,7 @@ const forbiddenActiveV1Markers = [
   ['delivery-loop', /delivery-loop/i],
   ['persistent delivery queue', /persistent delivery queue/i]
 ];
-const historicalRuntimeReferences = [
-  ['skills/catalog', /skills\/catalog\b/i],
-  ['.audit', /(?:^|[^A-Za-z0-9_$])\.audit\b/i]
-];
+const auditPathPattern = /(?:^|[^A-Za-z0-9_$])\.audit\b/i;
 const referenceOnlyFragments = [
   'Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts',
   'Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.',
@@ -97,14 +93,10 @@ function isExecutableDependencySurface(relativePath) {
   return extensionless || activeTextSurfaceExtension.test(relativePath);
 }
 
-function stripReferenceOnlyProse(line) {
-  let candidate = line;
+function stripReferenceOnlyProse(source) {
+  let candidate = source;
   for (const fragment of referenceOnlyFragments) candidate = candidate.replaceAll(fragment, '');
   return candidate;
-}
-
-function stripReferenceOnlyProseFromBody(body) {
-  return body.split(/\r?\n/).map(stripReferenceOnlyProse).join('\n');
 }
 
 function collapseSourceComposition(source) {
@@ -112,20 +104,18 @@ function collapseSourceComposition(source) {
 }
 
 function historicalReferences(body) {
+  const candidate = stripReferenceOnlyProse(body);
+  const collapsed = collapseSourceComposition(candidate);
   const matches = [];
-  for (const line of body.split(/\r?\n/)) {
-    const candidate = stripReferenceOnlyProse(line);
-    const probes = [candidate, collapseSourceComposition(candidate)];
-    for (const [marker, pattern] of historicalRuntimeReferences) {
-      if (probes.some((probe) => pattern.test(probe))) matches.push(marker);
-    }
-  }
-  return [...new Set(matches)];
+  if (/skills\/catalog\b/i.test(candidate) || /skillscatalog\b/i.test(collapsed)) matches.push('skills/catalog');
+  if (auditPathPattern.test(candidate) || auditPathPattern.test(collapsed)) matches.push('.audit');
+  return matches;
 }
 
 function nestedSkillInvocation(body) {
-  if (nestedSkillInvocationPattern.test(body)) return true;
-  return collapsedNestedSkillInvocationPattern.test(collapseSourceComposition(body));
+  const candidate = stripReferenceOnlyProse(body);
+  if (nestedSkillInvocationPattern.test(candidate)) return true;
+  return collapsedNestedSkillInvocationPattern.test(collapseSourceComposition(candidate));
 }
 
 async function activeExecutableFiles() {
@@ -152,7 +142,7 @@ test('active runtime trees cannot reintroduce V1 orchestration markers or nested
   const matches = [];
   for (const relativePath of await activeExecutableFiles()) {
     const body = await readFile(new URL(relativePath, root), 'utf8');
-    const executableBody = stripReferenceOnlyProseFromBody(body);
+    const executableBody = stripReferenceOnlyProse(body);
     for (const [marker, pattern] of forbiddenActiveV1Markers) {
       if (pattern.test(executableBody)) matches.push(`${relativePath}:${marker}`);
     }
@@ -174,7 +164,9 @@ test('historical reference gate is fail-closed across new runtime roots, manifes
   assert.deepEqual(historicalReferences("const legacy = '.audit/entregar-issue'; await readFile(path.join(root, legacy, 'handoff-ready.json'))"), ['.audit']);
   assert.deepEqual(historicalReferences("const legacyRoot = '.audit'; await readFile(path.join(root, legacyRoot, 'handoff-ready.json'))"), ['.audit']);
   assert.deepEqual(historicalReferences("const legacyRoot = ['.au', 'dit'].join(''); await readFile(path.join(root, legacyRoot, 'handoff-ready.json'))"), ['.audit']);
+  assert.deepEqual(historicalReferences("const legacyRoot = ['.au',\n'dit'].join(''); await readFile(path.join(root, legacyRoot, 'handoff-ready.json'))"), ['.audit']);
   assert.deepEqual(historicalReferences("const legacyCatalog = ['skills/', 'catalog'].join('');"), ['skills/catalog']);
+  assert.deepEqual(historicalReferences("const legacyCatalog = path.join('skills', 'catalog', 'legacy.js');"), ['skills/catalog']);
   assert.deepEqual(historicalReferences('run: cat .audit/entregar-issue/handoff-ready.json'), ['.audit']);
   assert.deepEqual(historicalReferences('uses: ./skills/catalog/example/action'), ['skills/catalog']);
   assert.deepEqual(historicalReferences('{"scripts":{"legacy":"node skills/catalog/legacy.js"}}'), ['skills/catalog']);
@@ -186,7 +178,9 @@ test('historical reference gate is fail-closed across new runtime roots, manifes
   assert.deepEqual(historicalReferences('Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.'), []);
   assert.deepEqual(historicalReferences('run: cat .audit/entregar-issue/handoff-ready.json # Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'), ['.audit']);
   assert.equal(nestedSkillInvocation("invokeSkill('auditar-issue')"), true);
-  assert.equal(nestedSkillInvocation("invokeSkill(['auditar', '-', 'issue'].join(''))"), true);
+  assert.equal(nestedSkillInvocation("invokeSkill('security-review')"), true);
+  assert.equal(nestedSkillInvocation("invokeSkill(['security', '-', 'review'].join(''))"), true);
+  assert.equal(nestedSkillInvocation("const ref = 'skills://security-review';"), true);
   assert.equal(nestedSkillInvocation('Use independent audit policy, but do not invoke nested Skills.'), false);
   assert.equal(isExecutableDependencySurface('package.json'), true);
   assert.equal(isExecutableDependencySurface('.github/workflows/delivery-v2-worker-codex-fast.lock.yml'), true);
@@ -208,9 +202,9 @@ test('canonical requirements may describe retired V1 surfaces without making the
   assert.match(retirement.summary, /only active normal-path entrypoint/);
   assert.match(retirement.summary, /are retired/);
   assert.deepEqual(historicalReferences(body), []);
-  const executableBody = stripReferenceOnlyProseFromBody(body);
+  const executableBody = stripReferenceOnlyProse(body);
   assert.doesNotMatch(executableBody, /delivery-request/i);
-  assert.doesNotMatch(executableBody, /(?:^|[^A-Za-z0-9_$])\.audit\b/i);
+  assert.doesNotMatch(executableBody, auditPathPattern);
 });
 
 test('capability manifest describes only the active V2 architecture', async () => {
