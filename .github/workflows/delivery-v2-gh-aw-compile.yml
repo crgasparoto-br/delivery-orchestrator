@@ -34,18 +34,31 @@ jobs:
         with:
           version: v0.88.7
 
-      - name: Compile workers in strict mode
-        run: gh aw compile --strict
-
-      - name: Publish canonical compiled locks
+      - name: Compile and publish canonical locks
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
-          if git diff --cached --quiet; then
-            echo "Compiled worker locks already current."
-            exit 0
-          fi
-          git commit -m "chore: compile Delivery V2 workers"
-          git push origin "HEAD:${{ github.ref_name }}"
+
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            git reset --hard "origin/${GITHUB_REF_NAME}"
+
+            gh aw compile --strict
+            git add .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
+            if git diff --cached --quiet; then
+              echo "Compiled worker locks already current."
+              exit 0
+            fi
+
+            git commit -m "chore: compile Delivery V2 workers"
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+
+            echo "Remote head moved while publishing compiled locks; recompiling from the latest branch head (attempt ${attempt}/3)."
+          done
+
+          echo "Could not publish compiled worker locks after three fresh-head attempts." >&2
+          exit 1
