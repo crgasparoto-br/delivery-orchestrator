@@ -16,6 +16,8 @@ import {
 } from '../src/v2/target-independent-audit-runtime.mjs';
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
+const FINGERPRINT_RE = /^[0-9a-f]{64}$/i;
+const STATE_PREFIX = '<!-- delivery-v2-target-audit-state:';
 
 function requiredEnv(name) {
   const value = String(process.env[name] ?? '').trim();
@@ -26,6 +28,12 @@ function requiredEnv(name) {
 function requiredSha(value, label) {
   const resolved = String(value ?? '').trim().toLowerCase();
   if (!SHA_RE.test(resolved)) throw new Error(`${label} must be a 40-character Git commit SHA`);
+  return resolved;
+}
+
+function requiredFingerprint(value, label) {
+  const resolved = String(value ?? '').trim().toLowerCase();
+  if (!FINGERPRINT_RE.test(resolved)) throw new Error(`${label} must be a 64-character SHA-256 fingerprint`);
   return resolved;
 }
 
@@ -54,14 +62,62 @@ async function fetchText(url, token, accept = 'application/vnd.github+json') {
   return response.text();
 }
 
-async function fetchChangedPaths(repository, pullRequestNumber, token) {
-  const paths = [];
+async function fetchChangedFileEvidence(repository, pullRequestNumber, token) {
+  const files = [];
   for (let page = 1; ; page += 1) {
-    const files = await fetchJson(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}/files?per_page=100&page=${page}`, token);
-    paths.push(...files.map((file) => file.filename));
-    if (files.length < 100) break;
+    const pageFiles = await fetchJson(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}/files?per_page=100&page=${page}`, token);
+    if (!Array.isArray(pageFiles)) throw new Error('GitHub changed-file response must be an array');
+    for (const file of pageFiles) {
+      const filename = String(file?.filename ?? '').trim();
+      const patch = typeof file?.patch === 'string' ? file.patch : '';
+      if (!filename) throw new Error('changed-file evidence contains an empty filename');
+      if (!patch) throw new Error(`changed-file evidence is incomplete: patch missing for ${filename}`);
+      files.push(Object.freeze({
+        filename,
+        previousFilename: file.previous_filename ? String(file.previous_filename) : null,
+        status: String(file.status ?? ''),
+        blobSha: requiredSha(file.sha, `changed file ${filename} blob SHA`),
+        additions: Number(file.additions ?? 0),
+        deletions: Number(file.deletions ?? 0),
+        changes: Number(file.changes ?? 0),
+        patch
+      }));
+    }
+    if (pageFiles.length < 100) break;
   }
-  return paths;
+  if (files.length === 0) throw new Error('target audit changed-file inventory must be non-empty');
+  const paths = files.map((file) => file.filename);
+  if (new Set(paths).size !== paths.length) throw new Error('target audit changed-file inventory contains duplicate filenames');
+
+  const diffText = await fetchText(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}`, token, 'application/vnd.github.v3.diff');
+  if (!diffText.trim()) throw new Error('target audit candidate diff is empty');
+  const diffPaths = [...diffText.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)].map((match) => match[2].trim());
+  if (diffPaths.length !== files.length) {
+    throw new Error(`candidate diff file count ${diffPaths.length} does not match changed-file inventory ${files.length}`);
+  }
+  const inventorySorted = [...paths].sort();
+  const diffSorted = [...diffPaths].sort();
+  if (inventorySorted.some((entry, index) => entry !== diffSorted[index])) {
+    throw new Error('candidate diff paths do not exactly match changed-file inventory');
+  }
+  for (const file of files) {
+    if (!diffText.includes(file.patch)) throw new Error(`candidate diff does not contain the full GitHub patch for ${file.filename}`);
+  }
+
+  const inventoryFingerprint = fingerprintText(JSON.stringify(files));
+  const diffFingerprint = fingerprintText(diffText);
+  return Object.freeze({
+    files: Object.freeze(files),
+    paths: Object.freeze(paths),
+    diffText,
+    evidence: Object.freeze({
+      fileCount: files.length,
+      paths: Object.freeze(paths),
+      allPatchesPresent: true,
+      inventoryFingerprint,
+      diffFingerprint
+    })
+  });
 }
 
 async function fetchFileEvidenceAtRef(repository, filePath, ref, token) {
@@ -78,7 +134,22 @@ async function fetchFileEvidenceAtRef(repository, filePath, ref, token) {
   });
 }
 
-async function fetchSourceWorkflowBinding(config, token) {
+async function fetchMergePreviewCommitEvidence(config, token) {
+  const payload = await fetchJson(`https://api.github.com/repos/${config.repository}/commits/${config.mergePreviewSha}`, token);
+  const evidenceBody = {
+    sha: requiredSha(payload.sha, 'merge preview commit SHA'),
+    parentShas: Array.isArray(payload.parents) ? payload.parents.map((parent, index) => requiredSha(parent?.sha, `merge preview parent ${index}`)) : [],
+    treeSha: requiredSha(payload.commit?.tree?.sha, 'merge preview tree SHA'),
+    message: String(payload.commit?.message ?? ''),
+    verified: payload.commit?.verification?.verified === true,
+    verificationReason: String(payload.commit?.verification?.reason ?? ''),
+    committerLogin: String(payload.committer?.login ?? '')
+  };
+  const fingerprint = fingerprintText(JSON.stringify(evidenceBody));
+  return Object.freeze({ ...evidenceBody, fingerprint });
+}
+
+async function fetchSourceWorkflowCorroboration(config, token) {
   const jobsPayload = await fetchJson(`https://api.github.com/repos/${config.repository}/actions/runs/${config.sourceWorkflow.runId}/jobs?filter=latest&per_page=100`, token);
   const jobs = Array.isArray(jobsPayload.jobs) ? jobsPayload.jobs : [];
   const matches = jobs.filter((job) => job.name === config.sourceWorkflow.bindingJobName);
@@ -92,25 +163,110 @@ async function fetchSourceWorkflowBinding(config, token) {
   }
 
   const logText = await fetchText(`https://api.github.com/repos/${config.repository}/actions/jobs/${job.id}/logs`, token);
-  const bindings = [...logText.matchAll(/\+([0-9a-f]{40}):refs\/remotes\/pull\/(\d+)\/merge\b/gi)]
-    .map((match) => ({ mergePreviewSha: match[1].toLowerCase(), pullRequestNumber: Number.parseInt(match[2], 10) }));
-  const unique = [...new Map(bindings.map((binding) => [`${binding.pullRequestNumber}:${binding.mergePreviewSha}`, binding])).values()];
-  if (unique.length === 0) throw new Error('source workflow binding logs do not contain a pull/<number>/merge ref');
-  const expected = unique.filter((binding) => binding.pullRequestNumber === config.pullRequestNumber && binding.mergePreviewSha === config.mergePreviewSha);
-  const conflicting = unique.filter((binding) => binding.pullRequestNumber !== config.pullRequestNumber || binding.mergePreviewSha !== config.mergePreviewSha);
-  if (expected.length !== 1 || conflicting.length > 0) {
-    throw new Error(`source workflow binding logs are ambiguous for PR #${config.pullRequestNumber} merge preview ${config.mergePreviewSha}`);
+  const refPattern = new RegExp(`\\+${config.mergePreviewSha}:refs\\/remotes\\/pull\\/${config.pullRequestNumber}\\/merge\\b`, 'i');
+  const refMappingObserved = refPattern.test(logText);
+  const checkoutPattern = new RegExp(`HEAD is now at ${config.mergePreviewSha.slice(0, 7)}\\b`, 'i');
+  const checkoutObserved = checkoutPattern.test(logText);
+  if (!refMappingObserved || !checkoutObserved) {
+    throw new Error('source workflow log does not corroborate the configured PR merge ref and checked-out merge preview');
   }
 
   return Object.freeze({
-    jobId: Number(job.id),
-    jobName: String(job.name),
-    status: String(job.status),
-    conclusion: String(job.conclusion),
-    pullRequestNumber: config.pullRequestNumber,
-    mergePreviewSha: config.mergePreviewSha,
-    materialHeadSha: config.materialHeadSha,
-    logFingerprint: fingerprintText(logText)
+    evidence: Object.freeze({
+      jobId: Number(job.id),
+      jobName: String(job.name),
+      status: String(job.status),
+      conclusion: String(job.conclusion),
+      pullRequestNumber: config.pullRequestNumber,
+      mergePreviewSha: config.mergePreviewSha,
+      materialHeadSha: config.materialHeadSha,
+      logFingerprint: fingerprintText(logText),
+      refMappingObserved,
+      checkoutObserved
+    }),
+    logText
+  });
+}
+
+function normalizePersistedTargetAuditState(raw, commentId) {
+  if (!raw || Array.isArray(raw) || typeof raw !== 'object') throw new Error(`target audit state in comment ${commentId} must be an object`);
+  if (raw.schemaVersion !== 1) throw new Error(`target audit state in comment ${commentId} has unsupported schemaVersion`);
+  const targetAuditId = String(raw.targetAuditId ?? '').trim();
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(targetAuditId)) throw new Error(`target audit state in comment ${commentId} has invalid targetAuditId`);
+  const candidateSha = requiredSha(raw.candidateSha, `target audit state ${commentId} candidateSha`);
+  const requestFingerprint = requiredFingerprint(raw.requestFingerprint, `target audit state ${commentId} requestFingerprint`);
+  const runtimeSha = requiredSha(raw.runtimeSha, `target audit state ${commentId} runtimeSha`);
+  if (!Number.isInteger(raw.auditWorkflowRunId) || raw.auditWorkflowRunId < 1) throw new Error(`target audit state in comment ${commentId} has invalid auditWorkflowRunId`);
+  if (!Number.isInteger(raw.sourceWorkflowRunId) || raw.sourceWorkflowRunId < 1) throw new Error(`target audit state in comment ${commentId} has invalid sourceWorkflowRunId`);
+  if (!['approved', 'rejected'].includes(raw.decision)) throw new Error(`target audit state in comment ${commentId} has invalid decision`);
+  if (!Array.isArray(raw.findings)) throw new Error(`target audit state in comment ${commentId} findings must be an array`);
+  return Object.freeze({
+    schemaVersion: 1,
+    targetAuditId,
+    candidateSha,
+    auditWorkflowRunId: raw.auditWorkflowRunId,
+    sourceWorkflowRunId: raw.sourceWorkflowRunId,
+    decision: raw.decision,
+    requestFingerprint,
+    runtimeSha,
+    findings: Object.freeze(raw.findings.map((finding) => Object.freeze({ ...finding }))),
+    commentId
+  });
+}
+
+async function fetchPersistedTargetAuditStates(controlRepository, issueNumber, token) {
+  const states = [];
+  for (let page = 1; ; page += 1) {
+    const comments = await fetchJson(`https://api.github.com/repos/${controlRepository}/issues/${issueNumber}/comments?per_page=100&page=${page}`, token);
+    if (!Array.isArray(comments)) throw new Error('target audit state comments response must be an array');
+    for (const comment of comments) {
+      const body = String(comment?.body ?? '');
+      if (!body.includes(STATE_PREFIX)) continue;
+      const matches = [...body.matchAll(/<!-- delivery-v2-target-audit-state:([A-Za-z0-9_-]+) -->/g)];
+      if (matches.length !== 1) throw new Error(`target audit state comment ${comment.id} has malformed or ambiguous state marker`);
+      let parsed;
+      try {
+        parsed = JSON.parse(Buffer.from(matches[0][1], 'base64url').toString('utf8'));
+      } catch (error) {
+        throw new Error(`target audit state comment ${comment.id} cannot be decoded: ${error.message}`);
+      }
+      states.push(normalizePersistedTargetAuditState(parsed, Number(comment.id)));
+    }
+    if (comments.length < 100) break;
+  }
+  const runIds = states.map((state) => state.auditWorkflowRunId);
+  if (new Set(runIds).size !== runIds.length) throw new Error('durable target audit state contains duplicate audit workflow run ids');
+  return Object.freeze(states);
+}
+
+function deriveTargetAuditProgress(config, states) {
+  const relevant = states.filter((state) => state.targetAuditId === config.id);
+  const sameCandidate = relevant.filter((state) => state.candidateSha === config.materialHeadSha);
+  if (sameCandidate.length > 0) {
+    throw new Error(`target candidate ${config.materialHeadSha} already has durable audit state; a new material SHA is required before re-audit`);
+  }
+  const auditAttempt = relevant.length + 1;
+  const priorFindings = [];
+  const seen = new Set();
+  for (const state of relevant) {
+    for (const finding of state.findings) {
+      const id = String(finding?.id ?? '').trim();
+      if (!id) continue;
+      const key = `${state.candidateSha}:${id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      priorFindings.push({
+        id,
+        candidateSha: state.candidateSha,
+        status: state.decision === 'rejected' ? 'previous-rejection' : 'previous-audit'
+      });
+    }
+  }
+  return Object.freeze({
+    auditAttempt,
+    implementationAttempt: auditAttempt,
+    priorFindings: Object.freeze(priorFindings),
+    priorStates: Object.freeze(relevant)
   });
 }
 
@@ -149,7 +305,23 @@ async function loadRuntimeEvidence(runtimeSha, targetConfigText) {
   });
 }
 
-async function prepareBundle({ request, config, contractText, diffText, pullRequest, candidateWorkflow, baseWorkflow, classifierSource, sourceWorkflowBinding, auditRuntimeEvidence }) {
+async function prepareBundle({
+  request,
+  config,
+  contractText,
+  diffText,
+  changedFiles,
+  diffEvidence,
+  pullRequest,
+  candidateWorkflow,
+  baseWorkflow,
+  classifierSource,
+  sourceWorkflowCorroboration,
+  sourceWorkflowLogText,
+  mergePreviewCommitEvidence,
+  auditRuntimeEvidence,
+  priorTargetAudits
+}) {
   const root = await mkdtemp(path.join(tmpdir(), 'delivery-v2-target-independent-audit-'));
   await chmod(root, 0o755);
   execFileSync('git', ['init', '-q'], { cwd: root });
@@ -157,7 +329,12 @@ async function prepareBundle({ request, config, contractText, diffText, pullRequ
     'AUDIT_REQUEST.json': `${JSON.stringify(request, null, 2)}\n`,
     'TARGET_AUDIT_CONFIG.json': `${JSON.stringify(config, null, 2)}\n`,
     'AUDIT_RUNTIME_EVIDENCE.json': `${JSON.stringify(auditRuntimeEvidence, null, 2)}\n`,
-    'SOURCE_WORKFLOW_BINDING.json': `${JSON.stringify(sourceWorkflowBinding, null, 2)}\n`,
+    'SOURCE_WORKFLOW_CORROBORATION.json': `${JSON.stringify(sourceWorkflowCorroboration, null, 2)}\n`,
+    'SOURCE_WORKFLOW_CORROBORATION.log': sourceWorkflowLogText,
+    'MERGE_PREVIEW_COMMIT.json': `${JSON.stringify(mergePreviewCommitEvidence, null, 2)}\n`,
+    'CHANGED_FILES.json': `${JSON.stringify(changedFiles, null, 2)}\n`,
+    'DIFF_COVERAGE.json': `${JSON.stringify(diffEvidence, null, 2)}\n`,
+    'PRIOR_TARGET_AUDITS.json': `${JSON.stringify(priorTargetAudits, null, 2)}\n`,
     'MASTER_SPEC.md': contractText,
     'CANDIDATE.diff': diffText,
     'PULL_REQUEST.json': `${JSON.stringify({
@@ -185,8 +362,9 @@ async function prepareBundle({ request, config, contractText, diffText, pullRequ
 function auditPrompt(request) {
   return `You are the independent semantic reviewer for a historical Delivery V2 CRITICAL target candidate.\n\n` +
     `Your entire allowed context is the sanitized Git repository bundle in the current working directory. Do not use or seek conversation history, legacy .audit handoffs, hidden implementer reasoning, network resources, or any source outside this bundle. Do not modify files or Git state.\n\n` +
-    `Audit exactly ${request.candidate.repository} PR #${request.candidate.pullRequestNumber} candidate ${request.candidate.materialHeadSha}. The trusted controller has bound repository/PR/base/head/merge-preview/workflow-run identity in AUDIT_REQUEST.json, TARGET_AUDIT_CONFIG.json and SOURCE_WORKFLOW_BINDING.json. The audit runtime commit and contract/config/runtime fingerprints are in AUDIT_RUNTIME_EVIDENCE.json.\n\n` +
-    `IMPORTANT: the candidate changed its own source CI workflow. A green source CI run proves only that the configured run completed successfully on the exact candidate; it is NOT a trust anchor for the workflow's correctness. Compare SOURCE_WORKFLOW_BASE.yml, SOURCE_WORKFLOW_CANDIDATE.yml and CANDIDATE.diff, and independently assess whether the candidate weakens required safety, risk classification, exact-head evidence, critical gates, or repository-specific promotion boundaries.\n\n` +
+    `Audit exactly ${request.candidate.repository} PR #${request.candidate.pullRequestNumber} candidate ${request.candidate.materialHeadSha}. The controller binds repository/PR/base/head/merge-preview/workflow identity in AUDIT_REQUEST.json. MERGE_PREVIEW_COMMIT.json is GitHub-owned commit evidence whose exact parents must be base then candidate head. SOURCE_WORKFLOW_CORROBORATION.log is candidate-workflow evidence under review and is corroboration only, never the merge-preview trust anchor.\n\n` +
+    `DIFF_COVERAGE.json and CHANGED_FILES.json attest that every GitHub changed-file entry has a patch and that the aggregate CANDIDATE.diff covers exactly that inventory. AUDIT_RUNTIME_EVIDENCE.json pins the audit runtime and contract/config/runtime fingerprints. PRIOR_TARGET_AUDITS.json contains any durable prior target-audit state; the same material candidate is never re-audited.\n\n` +
+    `IMPORTANT: the candidate changed its own source CI workflow. A green source CI run proves only that the configured run completed successfully on the exact candidate; it is NOT a trust anchor for the workflow's correctness. Compare SOURCE_WORKFLOW_BASE.yml, SOURCE_WORKFLOW_CANDIDATE.yml, SOURCE_WORKFLOW_CORROBORATION.log and CANDIDATE.diff, and independently assess whether the candidate weakens required safety, risk classification, exact-head evidence, critical gates, or repository-specific promotion boundaries.\n\n` +
     `Review the whole candidate diff against MASTER_SPEC.md, with special attention to DV2-005/006/007/013 and fail-closed invariants. Return all cheap release-blocking findings in one pass. Finding IDs must be stable and start with DV2-. Use decision=approved only when there is no release-blocking finding; use decision=rejected when at least one blocksRelease=true finding exists. Evidence must identify a concrete path/hunk/contract mismatch, not private chain-of-thought.\n\n` +
     `Return only the requested JSON object with decision and findings.`;
 }
@@ -194,6 +372,7 @@ function auditPrompt(request) {
 async function main() {
   const targetAuditId = requiredEnv('TARGET_AUDIT_ID').toLowerCase();
   const githubToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
+  const controlRepository = requiredEnv('GITHUB_REPOSITORY');
   const reviewerRunId = Number.parseInt(requiredEnv('GITHUB_RUN_ID'), 10);
   const runtimeSha = requiredSha(requiredEnv('AUDIT_RUNTIME_SHA'), 'AUDIT_RUNTIME_SHA');
   const checkedOutSha = requiredSha(execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), 'checked out runtime SHA');
@@ -207,28 +386,35 @@ async function main() {
   const loadedConfig = await loadTargetConfig(targetAuditId);
   const config = loadedConfig.config;
   const runtime = await loadRuntimeEvidence(runtimeSha, loadedConfig.rawText);
+  const persistedStates = await fetchPersistedTargetAuditStates(controlRepository, 27, githubToken);
+  const progress = deriveTargetAuditProgress(config, persistedStates);
 
   const pullRequest = await fetchJson(`https://api.github.com/repos/${config.repository}/pulls/${config.pullRequestNumber}`, githubToken);
   const sourceWorkflowRun = await fetchJson(`https://api.github.com/repos/${config.repository}/actions/runs/${config.sourceWorkflow.runId}`, githubToken);
   const sourceWorkflowDefinition = await fetchJson(`https://api.github.com/repos/${config.repository}/actions/workflows/${config.sourceWorkflow.workflowId}`, githubToken);
-  const sourceWorkflowBinding = await fetchSourceWorkflowBinding(config, githubToken);
-  const changedPaths = await fetchChangedPaths(config.repository, config.pullRequestNumber, githubToken);
+  const sourceWorkflowCorroboration = await fetchSourceWorkflowCorroboration(config, githubToken);
+  const mergePreviewCommitEvidence = await fetchMergePreviewCommitEvidence(config, githubToken);
+  const changed = await fetchChangedFileEvidence(config.repository, config.pullRequestNumber, githubToken);
   const candidateWorkflow = await fetchFileEvidenceAtRef(config.repository, config.sourceWorkflow.path, config.materialHeadSha, githubToken);
   const baseWorkflow = await fetchFileEvidenceAtRef(config.repository, config.sourceWorkflow.path, config.baseSha, githubToken);
   const classifierSource = (await fetchFileEvidenceAtRef(config.repository, config.classifierPath, config.materialHeadSha, githubToken)).content;
-  const diffText = await fetchText(`https://api.github.com/repos/${config.repository}/pulls/${config.pullRequestNumber}`, githubToken, 'application/vnd.github.v3.diff');
 
   const request = buildTargetCriticalAuditRequest({
     config,
     pullRequest,
-    changedPaths,
+    changedPaths: changed.paths,
     sourceWorkflowRun,
     sourceWorkflowDefinition,
-    sourceWorkflowBindingEvidence: sourceWorkflowBinding,
+    sourceWorkflowBindingEvidence: sourceWorkflowCorroboration.evidence,
+    mergePreviewCommitEvidence,
+    diffEvidence: changed.evidence,
     candidateWorkflowEvidence: candidateWorkflow,
     baseWorkflowEvidence: baseWorkflow,
     classifierSource,
-    auditRuntimeEvidence: runtime.evidence
+    auditRuntimeEvidence: runtime.evidence,
+    auditAttempt: progress.auditAttempt,
+    implementationAttempt: progress.implementationAttempt,
+    priorFindings: progress.priorFindings
   });
 
   let bundle;
@@ -237,13 +423,18 @@ async function main() {
       request,
       config,
       contractText: runtime.contractText,
-      diffText,
+      diffText: changed.diffText,
+      changedFiles: changed.files,
+      diffEvidence: changed.evidence,
       pullRequest,
       candidateWorkflow,
       baseWorkflow,
       classifierSource,
-      sourceWorkflowBinding,
-      auditRuntimeEvidence: runtime.evidence
+      sourceWorkflowCorroboration: sourceWorkflowCorroboration.evidence,
+      sourceWorkflowLogText: sourceWorkflowCorroboration.logText,
+      mergePreviewCommitEvidence,
+      auditRuntimeEvidence: runtime.evidence,
+      priorTargetAudits: progress.priorStates
     });
     const codexHome = process.env.CODEX_AUDITOR_HOME || path.join(linuxHome(auditorUser), '.codex-delivery', 'auditor');
     const executor = new CodexExecutor({
@@ -275,8 +466,11 @@ async function main() {
         mergePreviewSha: config.mergePreviewSha,
         mergeCommitSha: config.mergeCommitSha
       },
+      auditAttempt: progress.auditAttempt,
       sourceWorkflowRunId: config.sourceWorkflow.runId,
-      sourceWorkflowBinding,
+      sourceWorkflowCorroboration: sourceWorkflowCorroboration.evidence,
+      mergePreviewCommitEvidence,
+      diffEvidence: changed.evidence,
       auditWorkflowRunId: reviewerRunId,
       auditRuntime: runtime.evidence,
       request,
@@ -294,6 +488,7 @@ async function main() {
       pullRequestNumber: config.pullRequestNumber,
       candidateSha: config.materialHeadSha,
       mergePreviewSha: config.mergePreviewSha,
+      auditAttempt: progress.auditAttempt,
       decision: finalized.result.decision,
       releaseBlocked: finalized.outcome.releaseBlocked,
       requestFingerprint: request.requestFingerprint,
