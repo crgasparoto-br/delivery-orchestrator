@@ -1,52 +1,37 @@
 # Security and independence model
 
-Implementation and audit are separated on five axes:
+Delivery V2 treats GitHub and deterministic code as the control plane. AI execution is bounded by explicit provider/risk policy and cannot grant itself additional attempts, credentials, release authority or another provider.
 
-1. **Context** — every phase uses a fresh Codex thread; prior threads are never resumed.
-2. **OS process identity** — implementer and auditor execute as different non-root Linux users through non-interactive `sudo -u` from the trusted runner control plane.
-3. **Codex identity** — each Linux user owns a separate persistent `CODEX_HOME`; the runtime rejects equal paths and performs reciprocal readability probes against `auth.json`.
-4. **Workspace** — implementation and audit use different clones created by their respective role users. The audit clone is detached at the certified handoff SHA and verified clean after the audit.
-5. **Credentials** — the write token is explicit only for the implementer, the read token is explicit only for the auditor, and the signing key exists only during the auditor phase.
+## Deterministic control plane
 
-## Why Codex sandboxing is not the credential boundary
+GitHub owns the durable delivery identity: repository, issue/PR, base/head refs, exact material SHA, CI runs, independent-audit evidence and release state. A material SHA change invalidates candidate-bound CI and audit evidence.
 
-`workspace-write` limits writes but is not treated as a filesystem confidentiality boundary. Role credential isolation therefore does not depend on hiding sibling paths or on Codex sandbox read restrictions. The security boundary is the Linux UID plus restrictive filesystem ownership/modes, verified with negative cross-role read probes before model execution.
+The controller fails closed when risk classification is unknown or sensitive, provider selection cannot be satisfied exactly, required exact-head checks are stale/missing/red, or a required audit is missing/rejected.
 
-## Environment boundary
+## Credential boundary
 
-The Codex environment is built from a small operational allowlist rather than inheriting the runner's complete `process.env`. Raw orchestration variables and API/access-token variables are stripped. The implementer additionally cannot receive auditor key password, key ID, output directory or trusted-auditor path through its explicit environment.
+Normal V2 workers do not receive a generic control-plane write token. Privileged mutations are performed by GitHub Actions or other explicitly bounded publishers after deterministic validation. Provider dispatch has no silent fallback.
 
-Role payloads, including GitHub tokens and API-key fallback material, are sent to the role worker over stdin. They are not appended to `sudo`, `node`, `gh` or Git command lines.
+Independent semantic review is separated from implementation by fresh context and evidence scope. The reviewer receives the exact candidate/evidence required for review, not implementer hidden reasoning. The current self-hosted audit runtime uses the dedicated auditor OS identity and an isolated Codex home; role execution helpers remain only where the V2 audit runtime requires them.
 
-## ChatGPT authentication boundary
+## Risk and attempt budgets
 
-`CODEX_AUTH_MODE=chatgpt` preserves each role's credential cache because Codex refreshes `auth.json` in place. Each persistent home is prepared by its owning role user, mode `0700`; `auth.json` is mode `0600`. The opposite role must fail an `R_OK` probe against that file before the delivery proceeds.
+FAST, STANDARD and CRITICAL policies define finite implementation and audit/remediation budgets. Every review/remediation cycle must consume the corresponding counter. Exhaustion escalates to a human terminal state rather than starting another open-ended AI-on-AI loop.
 
-The workflow is restricted to trusted private automation and checks repository visibility at runtime. A public repository, missing role user, interactive sudo requirement, missing refreshable auth cache, shared role identity, shared home or successful cross-role auth read fails closed.
+FAST is an allowlist: unknown paths and authentication/authorization/session/identity/permission boundaries promote to CRITICAL. Repository policy may promote risk or add reviewed safe roots but cannot weaken core invariants.
 
-`CODEX_AUTH_MODE=api-key` remains explicit and requires `OPENAI_API_KEY`. Temporary role homes are still created under separate Linux users, so API-key mode does not silently collapse the process boundary.
+## Independent audit
 
-## Auditor signing material
+CRITICAL release requires an independent result bound to the exact candidate and request evidence. The normal V2 audit is GitHub-native and does not require legacy `.audit/entregar-issue/handoff-ready.json` certificates.
 
-The signing private key is never prepared before implementation. After the implementer process has exited and exact-head CI has been observed, the orchestrator asks the auditor role worker to decode the key into the auditor runtime directory with mode `0600`. It then executes a negative read probe as the implementer user; any readable result aborts the audit.
+A green source CI run is evidence, not proof that a candidate-modified workflow is semantically safe. Independent review must still assess relevant workflow and code changes when they are part of the candidate.
 
-The key directory is removed in a `finally` path immediately after the auditor Codex call. It is never stored in persistent `CODEX_HOME`, the implementation workspace, repository files, issue/PR text, or forensic artifacts.
+## Release authority
 
-## Trusted control plane and sudo scope
+Release readiness is computed deterministically from the current material head, effective risk, required checks, audit policy and unresolved findings. Merge authority is separate repository policy; it is never implied by an AI result.
 
-The GitHub Actions runner process is the trusted orchestration control plane and necessarily receives the configured secrets. Its sudo policy should grant passwordless impersonation only to the dedicated implementer and auditor users, not passwordless root. Neither role user receives a sudo rule allowing it to become the other role.
+## Retired V1 boundary
 
-## Fail-closed conditions
+The former `delivery-request:` issue queue, `delivery-loop.yml`, `max_cycles` recursion, nested-Skill normal path and mandatory V1 handoff/signing flow are retired. Historical `.audit/entregar-issue/**` and `skills/catalog/**` content may remain for traceability but is not an active security or orchestration dependency.
 
-The orchestrator fails closed when any of these occur:
-
-- implementer and auditor Linux users are equal or invalid;
-- role `CODEX_HOME` paths are equal;
-- either role cannot prepare/read its own credential store;
-- either role can read the other role's credential store;
-- the implementer can read the materialized auditor signing key;
-- role worker execution requires interaction or fails;
-- implementation/audit context IDs are equal;
-- handoff identity is missing or the audit workspace changes;
-- the audit is inconclusive or release gating is not independently satisfied;
-- the same rejected identity/finding fingerprint repeats without progress.
+Any reintroduction of those active V1 entrypoints is a regression and is blocked by `test/v2-retirement.test.mjs`.

@@ -59,6 +59,9 @@ jobs:
       - name: Verify Delivery V2 contract
         run: npm run verify:v2
 
+      - name: Verify Delivery V2 terminal completeness
+        run: npm run verify:v2:complete
+
       - name: Syntax checks
         shell: bash
         run: |
