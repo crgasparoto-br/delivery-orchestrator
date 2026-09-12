@@ -218,7 +218,7 @@
     {
       "id": "DV2-010",
       "title": "Exact-head release gate",
-      "status": "implemented",
+      "status": "validated",
       "requiredForV2Default": true,
       "summary": "Release readiness is computed from the current PR head, required checks, risk profile and required independent review; material SHA drift invalidates prior approval.",
       "implementationRefs": [
@@ -227,7 +227,13 @@
       ],
       "validationRefs": [
         "file:test/v2-release-gate.test.mjs",
-        "file:test/v2-delivery-plan.test.mjs"
+        "file:test/v2-release-gate-live-evidence.test.mjs",
+        "file:docs/delivery-v2/evidence/dv2-010-exact-head-release.json",
+        "file:test/v2-delivery-plan.test.mjs",
+        "github:delivery-orchestrator#54",
+        "commit:1315274732bac8e421e9c3b2bf7783c97db943f3",
+        "commit:5c14445e7d82784b16e1fe7af0f708c5e07909a2",
+        "github-actions:34692897163"
       ],
       "rolloutRefs": [],
       "trackingIssue": 27
