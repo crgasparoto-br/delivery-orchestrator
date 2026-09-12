@@ -89,10 +89,10 @@
     {
       "id": "DV2-007",
       "title": "Versioned classifier distribution and repository-specific promotion policy",
-      "status": "planned",
+      "status": "implemented",
       "requiredForV2Default": true,
       "summary": "Public/private target repositories consume a generated, fingerprinted policy snapshot from the private orchestrator; overrides may promote risk or add reviewed safe roots but cannot weaken core invariants.",
-      "implementationRefs": [],
+      "implementationRefs": ["file:src/v2/classifier-distribution.mjs", "file:scripts/export-delivery-v2-classifier.mjs", "file:scripts/verify-delivery-v2-targets.mjs", "file:.github/workflows/delivery-v2-sync-classifier.yml", "file:config/delivery-v2-targets/controle_calorias.json", "file:config/delivery-v2-targets/training-system.json", "github:delivery-orchestrator#31", "github:delivery-orchestrator#32", "github:controle_calorias#1069", "github:training-system#435"],
       "validationRefs": [],
       "rolloutRefs": [],
       "trackingIssue": 27
