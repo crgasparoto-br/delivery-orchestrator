@@ -1,6 +1,6 @@
 # Delivery V2: GitHub-native, risk-adaptive delivery
 
-> **Quick guide only.** The canonical architecture is `docs/delivery-v2/MASTER_SPEC.md`. Machine-readable requirement status is `config/delivery-v2-requirements.json`; implementation order is `docs/delivery-v2/ROADMAP.md`; GitHub issue #27 is the operational umbrella. This file must not be used to override those sources.
+> **Quick guide only.** The canonical architecture is `docs/delivery-v2/MASTER_SPEC.md`. Machine-readable requirement status is `config/delivery-v2-requirements.json`; sequencing/history is `docs/delivery-v2/ROADMAP.md`; GitHub issue #27 is the completed V2 umbrella. This file must not override those sources.
 
 ## Core idea
 
@@ -10,17 +10,19 @@ Delivery V2 moves orchestration decisions out of the coding model:
 
 GitHub owns repository/issue/PR identity, exact SHAs, risk, budgets, checks and release state. AI providers are bounded workers for implementation or independent semantic review.
 
-## Providers
+## Providers and bounded execution
 
-Supported providers:
-
-- `codex`
-- `claude`
-- `copilot`
-
-Provider+risk resolves to exactly one compiled `gh-aw` worker. Invalid configuration, missing authentication or provider failure fails closed. There is no silent provider fallback.
+Supported providers are `codex`, `claude` and `copilot`. Provider+risk resolves to exactly one compiled `gh-aw` worker. Invalid configuration, missing authentication or provider failure fails closed; there is no silent provider fallback.
 
 Agent shell execution receives read access only. Privileged write capability is exposed through constrained safe outputs, not a general write token.
+
+The baseline AI ceilings remain:
+
+- FAST: 20 turns / 100 credits;
+- STANDARD: 40 turns / 250 credits;
+- CRITICAL: 80 turns / 500 credits.
+
+These are ceilings, not consumption targets. They should only be tightened from measured production evidence.
 
 ## Risk profiles
 
@@ -29,7 +31,6 @@ Agent shell execution receives read access only. Privileged write capability is 
 - strict low-risk allowlist;
 - focused/related tests and affected build;
 - max 2 implementation attempts;
-- 20 AI turns / 100 credits;
 - no mandatory LLM audit;
 - full regression after merge or scheduled safety net.
 
@@ -38,7 +39,6 @@ Agent shell execution receives read access only. Privileged write capability is 
 - ordinary application/business/API changes outside critical boundaries;
 - affected/non-database tests plus build;
 - max 2 implementation attempts;
-- 40 AI turns / 250 credits;
 - focused independent audit when policy requires it.
 
 ### CRITICAL
@@ -49,78 +49,68 @@ Agent shell execution receives read access only. Privileged write capability is 
 - shared contracts;
 - CI/workflows/config/dependencies/infrastructure;
 - privileged integrations;
-- unknown or uncertain paths.
+- unknown, incomplete or uncertain changed-file evidence.
 
-CRITICAL keeps the complete repository safety gate, requires independent semantic audit, allows max 3 implementation attempts / 2 audit-remediation attempts, and uses 80 turns / 500 credits.
+CRITICAL keeps the complete repository safety gate, requires independent semantic audit and allows max 3 implementation attempts / 2 audit-remediation attempts.
 
-Requested risk can promote but never downgrade observed risk.
+Requested risk can promote but never downgrade observed risk. Missing changed-file evidence stays fail-closed; efficiency work must improve deterministic evidence, not guess a cheaper profile from issue prose.
 
-## Adaptive CI
+## Adaptive CI and exact-head evidence
 
 `actions/delivery-v2-risk` and the V2 CI plan provide deterministic risk outputs. Target repositories keep their own build/test commands.
 
 FAST is a strict safe-root allowlist. Static extensions do not grant FAST outside trusted roots. Repository-specific policy can add sensitive boundaries and promote risk, but cannot weaken core CRITICAL invariants. Unknown paths fail closed.
 
-Public target repositories cannot directly consume private reusable workflows from this private repository. The canonical master spec defines generated, fingerprinted vendoring as the official distribution direction.
+Public target repositories consume generated, fingerprinted classifier packages instead of depending directly on private reusable workflows.
 
-## Audit and release direction
+Audit and release evidence binds to repository + issue/PR, base SHA, exact material head SHA, merge-preview SHA when applicable, observed risk/classifier fingerprint and required checks. Material head drift invalidates candidate-bound evidence.
 
-The normal V2 audit contract is GitHub-native. It binds review to:
+## AI context hygiene
 
-- repository + issue/PR;
-- base SHA;
-- exact material head SHA;
-- merge-preview SHA when applicable;
-- observed risk and classifier fingerprint;
-- required checks/workflow evidence;
-- actionable audit findings for that same candidate.
+Implementation workers start from the target issue and repository instructions and should search only issue-relevant source/test/docs paths. Historical or generated delivery material is excluded from model exploration by default, including `.audit/**`, `skills/catalog/**`, `.generated/**` and compiled `*.lock.yml` files, unless the issue explicitly targets those paths or a deterministic check requires them.
 
-A stale legacy `.audit/entregar-issue/handoff-ready.json` must not be mandatory for a normal V2 delivery.
+This is a context/token optimization only. It never hides evidence required by CI, audit or a task that actually owns one of those paths.
 
-The exact-head release gate is deterministic. Any material SHA drift invalidates prior CI/audit evidence.
+The canonical compiled `gh-aw` worker locks live in `.github/workflows/*.lock.yml` plus `.github/aw/actions-lock.json`. Duplicate `.generated/gh-aw` snapshots are not part of the active architecture.
+
+## Observability and cost accounting
+
+Delivery metrics preserve provider usage when available:
+
+- AI turns and credits;
+- input, output and total tokens;
+- optional per-stage AI usage;
+- provider cost;
+- provider calls and attempts;
+- CI/audit/end-to-end duration;
+- change size, terminal reason and escalation.
+
+Summaries aggregate usage by repository/risk/provider and by stage when stage telemetry exists. Missing token/credit/cost telemetry remains unknown/null; it is never silently converted to zero. This distinction is required before using the data to tune worker budgets.
+
+The first measured FAST pilot in `controle_calorias` observed approximately 128 seconds versus an earlier approximately 1,255-second full baseline (~89.8% reduction, ~9.8x faster). This is evidence, not a universal SLA.
 
 ## Current program state
 
-Validated foundation:
+Delivery V2 is the default and only active delivery architecture. The required DV2-001..DV2-016 program reached terminal status under the completion contract, and V1 active orchestration was retired under DV2-014.
 
-- deterministic plan/risk/execution policy;
-- provider dispatch;
-- safe-output provider workers;
-- risk budgets;
-- adaptive CI core.
+Post-completion hardening keeps the following invariants continuously enforced:
 
-Real pilot evidence:
-
-- `controle_calorias` adaptive migration is merged;
-- a real FAST PR completed in about 128 seconds versus an earlier ~1,255-second full baseline.
-
-Still required before V2 becomes the default:
-
-- classifier hardening and target-specific sensitive-boundary policy;
-- versioned distribution to public/private repos;
-- GitHub-native audit;
-- bounded remediation state machine;
-- exact-head release gate;
-- observability/cost accounting;
-- persistent resumable state;
-- completed `training-system` FAST pilot;
-- V1/nested-Skill retirement.
+- no active `delivery-request`/`max_cycles`/recursive V1 runtime returns;
+- historical `.audit/entregar-issue/**` and `skills/catalog/**` material remains traceability-only;
+- compiled workers stay synchronized with their Markdown sources;
+- token/credit telemetry remains explicit and comparable;
+- risk classification remains fail-closed.
 
 Run:
 
 ```bash
+npm test
+npm run validate
 npm run verify:v2
-```
-
-to validate the contract structure and show pending required items.
-
-Run:
-
-```bash
 npm run verify:v2:complete
 ```
 
-only as the strict completion/retirement gate; it must remain red while required roadmap items are non-terminal.
+`verify:v2:complete` is now a regression guard for the terminal V2 contract rather than a pending rollout gate.
 
 ## New-context continuation
 
@@ -129,6 +119,6 @@ A new agent/chat should read, in order:
 1. `docs/delivery-v2/MASTER_SPEC.md`
 2. `config/delivery-v2-requirements.json`
 3. `docs/delivery-v2/ROADMAP.md`
-4. GitHub issue #27
+4. issue #27 for completed-program history and the current issue/PR for new work
 
-Then run `npm run verify:v2` and continue the next non-terminal requirement. Conversation history is not a source-of-truth dependency.
+Conversation history is optional context, never a correctness dependency. Historical V1 artifacts must not be used to reconstruct current orchestration state.
