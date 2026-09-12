@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "requirement": "DV2-009",
+  "exercise": "live-bounded-remediation-replay",
+  "repository": "crgasparoto-br/delivery-orchestrator",
+  "pullRequestNumber": 48,
+  "riskProfile": "critical",
+  "evidenceNature": "Real GitHub CI and independent-audit outcomes from the final PR #48 remediation sequence, replayed through the current production remediation state machine. The historical sequence was not originally driven by this replay test, so the evidence does not claim retroactive controller ownership.",
+  "policy": {
+    "maxImplementationAttempts": 3,
+    "maxAuditRemediationAttempts": 2,
+    "maxAuditRunsIncludingInitial": 3
+  },
+  "timeline": [
+    {
+      "sequence": 1,
+      "candidateSha": "1971fb5751dd99883c6772094bd4b1448fb4089e",
+      "implementationAttempt": 1,
+      "auditRemediationAttempt": 0,
+      "ci": {
+        "workflowRunId": 34690291734,
+        "jobId": 103544229075,
+        "conclusion": "success"
+      },
+      "audit": {
+        "workflowRunId": 34690327617,
+        "decision": "rejected",
+        "durablePrCommentId": 5645524677,
+        "blockingFindings": [
+          {
+            "id": "DV2-008-EVIDENCE-REGRESSION-NONDISCRIMINATING",
+            "candidateSha": "1971fb5751dd99883c6772094bd4b1448fb4089e",
+            "blocksRelease": true,
+            "remediationMode": "systemic",
+            "surface": "test/v2-critical-audit-pilot-evidence.test.mjs",
+            "failureMode": "The pilot regression did not prove mandatory workflow provenance and exact PR/base/head/repository bindings field by field."
+          }
+        ]
+      }
+    },
+    {
+      "sequence": 2,
+      "candidateSha": "6de29792e0f9a828ee6332d756ffbe82aa964615",
+      "implementationAttempt": 2,
+      "auditRemediationAttempt": 1,
+      "ci": {
+        "workflowRunId": 34690481605,
+        "jobId": 103544725584,
+        "conclusion": "failure",
+        "failureClass": "actionable",
+        "failingStep": "V2 unit tests",
+        "cause": "The new remediation test expected an exception at the wrong validation boundary; Node test runner reported Missing expected exception."
+      },
+      "audit": null
+    },
+    {
+      "sequence": 3,
+      "candidateSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
+      "implementationAttempt": 3,
+      "auditRemediationAttempt": 1,
+      "ci": {
+        "workflowRunId": 34690592843,
+        "jobId": 103545010264,
+        "conclusion": "success"
+      },
+      "audit": {
+        "workflowRunId": 34690625580,
+        "decision": "approved",
+        "durablePrCommentId": 5645558801,
+        "requestFingerprint": "363824d1c8391469fb0003351b58da757907d298bb6b2f2617e83cd51e8ac6a8",
+        "blockingFindings": []
+      }
+    }
+  ],
+  "observedCounters": {
+    "implementationAttempts": 3,
+    "auditAttempts": 2,
+    "auditRemediationAttempts": 1
+  },
+  "observedOutcome": {
+    "stateBeforeMerge": "ready-for-human-merge",
+    "merged": true,
+    "mergeCommitSha": "134fea2c8dffd4db5678935e5ab2386585f0169c",
+    "terminalReasonForReplay": "authorized-merge-completed"
+  },
+  "boundedAlternative": {
+    "branchPointCandidateSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
+    "hypothesis": "If the third implementation attempt had produced another actionable CI failure instead of the observed success, the state machine must escalate immediately rather than authorize a fourth implementation attempt.",
+    "expectedState": "escalated",
+    "expectedReason": "implementation-budget-exhausted"
+  },
+  "result": "validation-evidence",
+  "conclusion": "The final real PR #48 sequence contains one independent-audit rejection, one actionable CI failure during remediation, and a subsequent exact-SHA CI plus independent-audit approval. Replaying those real outcomes through the current DV2 remediation state machine reaches the approved merge path within CRITICAL budgets; the same live state deterministically escalates if a fourth implementation attempt would otherwise be required."
+}
