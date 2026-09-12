@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "requirement": "DV2-008",
+  "exercise": "github-native-critical-independent-audit",
+  "repository": "crgasparoto-br/delivery-orchestrator",
+  "pullRequestNumber": 48,
+  "headRef": "test/27-dv2-008-critical-ci-binding-pilot-v2",
+  "materialHeadSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
+  "trustedAuditRuntimeMainSha": "b622f90d1fb71f896193dd41f7914c87a0642e3c",
+  "sourceCi": {
+    "workflowName": "Delivery V2 CI",
+    "workflowId": 355818772,
+    "workflowRunId": 34690592843,
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "independentAudit": {
+    "workflowName": "Delivery V2 Independent Audit",
+    "workflowId": 356266823,
+    "workflowRunId": 34690625580,
+    "status": "completed",
+    "conclusion": "success",
+    "decision": "approved",
+    "reviewer": "delivery-v2-auditor-codex-critical",
+    "contextIsolation": "candidate-contract-evidence-only",
+    "requestFingerprint": "363824d1c8391469fb0003351b58da757907d298bb6b2f2617e83cd51e8ac6a8",
+    "blockingFindings": [],
+    "durablePrCommentId": 5645558801,
+    "artifactUploadStepConclusion": "success",
+    "artifactsApiTotalCountObserved": 0,
+    "artifactAvailableViaActionsApi": false
+  },
+  "merge": {
+    "merged": true,
+    "mergeCommitSha": "134fea2c8dffd4db5678935e5ab2386585f0169c"
+  },
+  "legacyV1HandoffRequired": false,
+  "result": "validated",
+  "conclusion": "A real CRITICAL pull request passed exact-head Delivery V2 CI and was independently approved from the trusted main audit runtime with zero release-blocking findings. The authoritative decision is durably published in the PR conversation and bound to the exact candidate SHA and request fingerprint; the Actions artifacts API returned zero artifacts despite the upload step concluding success, so no artifact availability is claimed."
+}
