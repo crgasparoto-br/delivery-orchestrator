@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { writeFile } from 'node:fs/promises';
+import { appendFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
+const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
 const SHA_RE = /^[0-9a-f]{40}$/i;
 
 function requiredEnv(name) {
@@ -52,82 +53,113 @@ export function selectManagedPullRequest(pulls, { issueNumber, baseBranch } = {}
   return candidates[0] ?? null;
 }
 
-export function parsePersistentStateEnvelope(comments) {
+function parseJsonEnvelope(comments, marker, label) {
   if (!Array.isArray(comments)) throw new Error('comments must be an array');
-  const matching = comments.filter((comment) => String(comment?.body ?? '').startsWith(STATE_MARKER));
+  const matching = comments.filter((comment) => String(comment?.body ?? '').startsWith(marker));
   if (matching.length === 0) return null;
-  if (matching.length > 1) throw new Error('multiple Delivery V2 state comments found; refusing ambiguous resume');
+  if (matching.length > 1) throw new Error(`multiple ${label} comments found; refusing ambiguous recovery`);
   const body = String(matching[0].body ?? '');
   const fenced = body.match(/```json\s*([\s\S]*?)\s*```/);
-  if (!fenced) throw new Error('Delivery V2 state comment is missing its JSON envelope');
-  const envelope = JSON.parse(fenced[1]);
-  if (!envelope?.persistent || typeof envelope.persistent !== 'object' || Array.isArray(envelope.persistent)) {
-    throw new Error('Delivery V2 state comment is missing persistent state');
-  }
-  return Object.freeze({ commentId: matching[0].id ?? null, persistent: envelope.persistent, controller: envelope.controller ?? null });
+  if (!fenced) throw new Error(`${label} comment is missing its JSON envelope`);
+  return Object.freeze({ commentId: matching[0].id ?? null, value: JSON.parse(fenced[1]) });
 }
 
-export function evaluateReentry({
-  pullRequest,
-  stateEnvelope,
-  targetRepository,
-  issueNumber,
-  baseBranch,
-  provider
-} = {}) {
-  if (!pullRequest) {
+export function parsePersistentStateEnvelope(comments) {
+  const parsed = parseJsonEnvelope(comments, STATE_MARKER, 'Delivery V2 state');
+  if (!parsed) return null;
+  if (!parsed.value?.persistent || typeof parsed.value.persistent !== 'object' || Array.isArray(parsed.value.persistent)) {
+    throw new Error('Delivery V2 state comment is missing persistent state');
+  }
+  return Object.freeze({ commentId: parsed.commentId, persistent: parsed.value.persistent, controller: parsed.value.controller ?? null });
+}
+
+export function parseBootstrapLease(comments) {
+  const parsed = parseJsonEnvelope(comments, BOOTSTRAP_MARKER, 'Delivery V2 bootstrap state');
+  if (!parsed) return null;
+  const value = parsed.value;
+  return Object.freeze({
+    commentId: parsed.commentId,
+    schemaVersion: value.schemaVersion,
+    repository: String(value.repository ?? ''),
+    issueNumber: Number(value.issueNumber),
+    baseBranch: String(value.baseBranch ?? ''),
+    provider: String(value.provider ?? '').toLowerCase(),
+    requestedRisk: String(value.requestedRisk ?? '').toLowerCase(),
+    implementationAttempts: Number(value.implementationAttempts),
+    status: String(value.status ?? ''),
+    controllerRunId: value.controllerRunId == null ? null : Number(value.controllerRunId)
+  });
+}
+
+export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider } = {}) {
+  const resolvedIssue = positiveInteger(issueNumber, 'issueNumber');
+  const resolvedProvider = String(provider ?? '').toLowerCase();
+
+  if (pullRequest) {
+    const prNumber = positiveInteger(pullRequest.number, 'pullRequest.number');
+    const remoteHeadSha = String(pullRequest?.head?.sha ?? '').trim().toLowerCase();
+    if (!SHA_RE.test(remoteHeadSha)) throw new Error('pullRequest.head.sha must be a 40-character Git commit SHA');
+
+    if (!stateEnvelope) {
+      return Object.freeze({
+        runController: true,
+        resumePr: prNumber,
+        status: 'resume-existing-delivery',
+        pullRequestNumber: prNumber,
+        materialHeadSha: remoteHeadSha,
+        staleStateDetected: true,
+        nextAction: 'recover-pr-state'
+      });
+    }
+
+    const persistent = stateEnvelope.persistent;
+    if (persistent.issueNumber !== resolvedIssue) throw new Error('persisted state issue does not match requested issue');
+    if (String(persistent.baseRef ?? '') !== String(baseBranch ?? '')) throw new Error('persisted state baseRef does not match requested base branch');
+    if (String(persistent.provider ?? '').toLowerCase() !== resolvedProvider) throw new Error('persisted state provider does not match requested provider');
+
+    const resumed = reconcilePersistentState(persistent, {
+      repository: targetRepository,
+      pullRequestNumber: prNumber,
+      headRef: String(pullRequest?.head?.ref ?? ''),
+      remoteHeadSha
+    });
     return Object.freeze({
       runController: true,
-      status: 'new-delivery',
+      resumePr: prNumber,
+      status: 'resume-existing-delivery',
+      pullRequestNumber: prNumber,
+      materialHeadSha: resumed.state.materialHeadSha,
+      staleStateDetected: resumed.staleStateDetected,
+      nextAction: resumed.nextAction,
+      persistedStatus: resumed.state.status,
+      attempts: resumed.state.attempts
+    });
+  }
+
+  if (bootstrapLease) {
+    if (bootstrapLease.repository !== targetRepository || bootstrapLease.issueNumber !== resolvedIssue) throw new Error('bootstrap lease target does not match requested delivery');
+    if (bootstrapLease.baseBranch !== String(baseBranch ?? '') || bootstrapLease.provider !== resolvedProvider) throw new Error('bootstrap lease policy does not match requested delivery');
+    return Object.freeze({
+      runController: false,
+      resumePr: null,
+      status: 'blocked-initial-attempt-already-reserved',
       pullRequestNumber: null,
       materialHeadSha: null,
       staleStateDetected: false,
-      nextAction: 'dispatch-initial-worker'
+      nextAction: 'recover-initial-attempt',
+      attempts: { implementation: bootstrapLease.implementationAttempts }
     });
   }
-
-  const prNumber = positiveInteger(pullRequest.number, 'pullRequest.number');
-  const remoteHeadSha = String(pullRequest?.head?.sha ?? '').trim().toLowerCase();
-  if (!SHA_RE.test(remoteHeadSha)) throw new Error('pullRequest.head.sha must be a 40-character Git commit SHA');
-
-  if (!stateEnvelope) {
-    return Object.freeze({
-      runController: false,
-      status: 'blocked-existing-pr-without-state',
-      pullRequestNumber: prNumber,
-      materialHeadSha: remoteHeadSha,
-      staleStateDetected: false,
-      nextAction: 'recover-persistent-state'
-    });
-  }
-
-  const persistent = stateEnvelope.persistent;
-  if (persistent.issueNumber !== positiveInteger(issueNumber, 'issueNumber')) {
-    throw new Error('persisted state issue does not match requested issue');
-  }
-  if (String(persistent.baseRef ?? '') !== String(baseBranch ?? '')) {
-    throw new Error('persisted state baseRef does not match requested base branch');
-  }
-  if (String(persistent.provider ?? '').toLowerCase() !== String(provider ?? '').toLowerCase()) {
-    throw new Error('persisted state provider does not match requested provider');
-  }
-
-  const resumed = reconcilePersistentState(persistent, {
-    repository: targetRepository,
-    pullRequestNumber: prNumber,
-    headRef: String(pullRequest?.head?.ref ?? ''),
-    remoteHeadSha
-  });
 
   return Object.freeze({
-    runController: false,
-    status: 'resume-existing-delivery',
-    pullRequestNumber: prNumber,
-    materialHeadSha: resumed.state.materialHeadSha,
-    staleStateDetected: resumed.staleStateDetected,
-    nextAction: resumed.nextAction,
-    persistedStatus: resumed.state.status,
-    attempts: resumed.state.attempts
+    runController: true,
+    resumePr: null,
+    status: 'new-delivery',
+    pullRequestNumber: null,
+    materialHeadSha: null,
+    staleStateDetected: false,
+    nextAction: 'dispatch-initial-worker',
+    attempts: { implementation: 0 }
   });
 }
 
@@ -141,26 +173,27 @@ async function listOpenPullRequests(repository, baseBranch, token) {
   return pulls;
 }
 
-async function listIssueComments(repository, prNumber, token) {
+async function listIssueComments(repository, issueNumber, token) {
   const comments = [];
   for (let page = 1; ; page += 1) {
-    const batch = await api(`https://api.github.com/repos/${repository}/issues/${prNumber}/comments?per_page=100&page=${page}`, token);
+    const batch = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=100&page=${page}`, token);
     comments.push(...batch);
     if (batch.length < 100) break;
   }
   return comments;
 }
 
-function writeGithubOutput(decision) {
+async function writeGithubOutput(decision) {
   const outputPath = String(process.env.GITHUB_OUTPUT ?? '').trim();
-  if (!outputPath) return Promise.resolve();
+  if (!outputPath) return;
   const lines = [
     `run_controller=${decision.runController ? 'true' : 'false'}`,
+    `resume_pr=${decision.resumePr ?? ''}`,
     `status=${decision.status}`,
     `pr_number=${decision.pullRequestNumber ?? ''}`,
     `next_action=${decision.nextAction}`
   ].join('\n');
-  return import('node:fs/promises').then(({ appendFile }) => appendFile(outputPath, `${lines}\n`, 'utf8'));
+  await appendFile(outputPath, `${lines}\n`, 'utf8');
 }
 
 async function main() {
@@ -168,18 +201,17 @@ async function main() {
   const issueNumber = positiveInteger(requiredEnv('TARGET_ISSUE'), 'TARGET_ISSUE');
   const baseBranch = requiredEnv('BASE_BRANCH');
   const provider = requiredEnv('DELIVERY_AI_PROVIDER');
-  const token = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
+  const readToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const resultPath = String(process.env.CONTROLLER_RESULT_PATH ?? '').trim();
 
-  const pulls = await listOpenPullRequests(targetRepository, baseBranch, token);
+  const pulls = await listOpenPullRequests(targetRepository, baseBranch, readToken);
   const pullRequest = selectManagedPullRequest(pulls, { issueNumber, baseBranch });
   let stateEnvelope = null;
-  if (pullRequest) {
-    const comments = await listIssueComments(targetRepository, pullRequest.number, token);
-    stateEnvelope = parsePersistentStateEnvelope(comments);
-  }
+  let bootstrapLease = null;
+  if (pullRequest) stateEnvelope = parsePersistentStateEnvelope(await listIssueComments(targetRepository, pullRequest.number, readToken));
+  else bootstrapLease = parseBootstrapLease(await listIssueComments(targetRepository, issueNumber, readToken));
 
-  const decision = evaluateReentry({ pullRequest, stateEnvelope, targetRepository, issueNumber, baseBranch, provider });
+  const decision = evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider });
   await writeGithubOutput(decision);
 
   if (!decision.runController && resultPath) {

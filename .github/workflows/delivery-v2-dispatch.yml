@@ -84,13 +84,23 @@ jobs:
         id: reentry
         run: node scripts/guard-delivery-v2-reentry.mjs
 
+      - name: Reserve initial implementation attempt
+        if: steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr == ''
+        run: node scripts/reserve-delivery-v2-initial-attempt.mjs
+
       - name: Build initial deterministic plan
-        if: steps.reentry.outputs.run_controller == 'true'
+        if: steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr == ''
         run: node src/cli.mjs plan-v2 | tee "${RUNNER_TEMP}/delivery-v2-initial-plan.json"
 
-      - name: Run bounded Delivery V2 controller
-        if: steps.reentry.outputs.run_controller == 'true'
+      - name: Run initial bounded Delivery V2 controller
+        if: steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr == ''
         run: node scripts/run-delivery-v2-controller.mjs
+
+      - name: Resume existing Delivery V2 controller
+        if: steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr != ''
+        env:
+          DELIVERY_V2_RESUME_PR: ${{ steps.reentry.outputs.resume_pr }}
+        run: node scripts/resume-delivery-v2-controller.mjs
 
       - name: Publish controller summary
         if: always()
