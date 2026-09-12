@@ -37,6 +37,10 @@ function classifyPath(path, repositoryPolicy) {
   if (repositoryPolicy.criticalPaths.includes(path)) {
     return { profile: 'critical', reason: `repository-critical-path:${path}` };
   }
+  const criticalFragment = repositoryPolicy.criticalPathFragments.find((fragment) => path.includes(fragment));
+  if (criticalFragment) {
+    return { profile: 'critical', reason: `repository-critical-fragment:${criticalFragment}:${path}` };
+  }
 
   const criticalRoot = firstMatchingRoot(path, repositoryPolicy.criticalRoots);
   if (criticalRoot) {
