@@ -36,8 +36,8 @@ await edit('scripts/resume-delivery-v2-controller.mjs', (body) => {
   if (!auditFn.test(out)) throw new Error('resume audit reader not found');
   out = out.replace(auditFn, `async function auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber, candidateSha, auditRun, sourceWorkflowRunId, token }) {\n  return loadAuthoritativeAuditResult({ orchestratorRepository, trustedRef: orchestratorRef, targetRepository, issueNumber, pullRequestNumber: prNumber, candidateSha, auditRun, sourceWorkflowRunId, token });\n}`);
   out = replaceOnce(out,
-    "  await persist({ nextAction: state.status });",
-    "  await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 resumed evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });\n  await persist({ nextAction: state.status });",
+    "  await persist({ nextAction: state.status });\n\n  for (let cycle = 0; cycle < 8; cycle += 1) {",
+    "  await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 resumed evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });\n  await persist({ nextAction: state.status });\n\n  for (let cycle = 0; cycle < 8; cycle += 1) {",
     'resume pending status');
   out = replaceOnce(out,
     "      if (failureClass !== 'actionable') throw new Error(`required check ended with external/ambiguous conclusion ${latestCheck.conclusion}; refusing AI remediation`);",
