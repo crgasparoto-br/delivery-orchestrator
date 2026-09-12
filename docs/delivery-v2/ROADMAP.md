@@ -130,7 +130,7 @@ Exit condition: every loop either reaches a terminal state or deterministic esca
 
 ### DV2-010 — Exact-head release gate
 
-Status: **implemented; validation pending live exact-head release exercise**.
+Status: **validated**.
 
 Depends on DV2-008 and DV2-009.
 
@@ -145,7 +145,18 @@ Required work:
 - automatic invalidation on SHA drift;
 - explicit merge-policy decision.
 
-Exit condition: `ready-for-human-merge` can be derived entirely from current GitHub/V2 evidence.
+Validation evidence:
+
+- `docs/delivery-v2/evidence/dv2-010-exact-head-release.json` records the real final PR #48 candidate and evidence set;
+- at freeze time, material and remote head were both `c403eaf94fcd10b9fae6da3b781be3a3955e273c`;
+- required CI `34690592843` was completed/success on that exact candidate;
+- the candidate classifier source `src/v2/risk-profile.mjs` is bound to Git blob `4bd6e9bdfc06fc6392e34ecd852af0590d9fb6b0`; the validation test recomputes both the Git blob identity and the SHA-256 source fingerprint rather than using an invented fingerprint;
+- independent audit `34690625580` approved the same candidate with request fingerprint `363824d1c8391469fb0003351b58da757907d298bb6b2f2617e83cd51e8ac6a8` and zero unresolved findings/blockers;
+- `evaluateReleaseGate` derives `ready-for-human-merge`, `Delivery V2 Release=success`, and merge policy `human-authorized-only` / automatic merge false from those evidence references;
+- the live test independently mutates remote head, required-check subject SHA, audit candidate SHA, and classifier fingerprint; every mutation invalidates readiness with the expected fail-closed state/reason;
+- PR #54 and CI run `34692897163` validated the exact-head release exercise.
+
+Exit condition: `ready-for-human-merge` can be derived entirely from current GitHub/V2 evidence. **Satisfied.**
 
 ## Phase D — make the controller resumable and measurable
 
@@ -301,8 +312,7 @@ That means every required item below is terminal:
 
 Unless a production incident changes priority, continue in this order:
 
-1. validate DV2-010 with a live exact-head release exercise
-2. close DV2-013
-3. DV2-014
+1. close DV2-013
+2. DV2-014
 
 Every PR should name the `DV2-*` IDs it advances and update the manifest only when the evidence justifies the new status.
