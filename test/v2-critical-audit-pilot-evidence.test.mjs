@@ -124,7 +124,6 @@ test('trusted source rejects every independently mutated PR/head/base/repository
 });
 
 test('trusted source rejects every independently mutated workflow identity or provenance field', () => {
-  assertSourceRejected({ run: sourceRun({ id: 0 }) }, /sourceWorkflowRun.id|positive integer/);
   assertSourceRejected({ run: sourceRun({ workflow_id: WORKFLOW_ID + 1 }) }, /workflow_id/);
   assertSourceRejected({ run: sourceRun({ path: '.github/workflows/lookalike.yml' }) }, /source workflow run must use/);
   assertSourceRejected({ run: sourceRun({ event: 'push' }) }, /source workflow event/);
@@ -136,6 +135,13 @@ test('trusted source rejects every independently mutated workflow identity or pr
   assertSourceRejected({ evidence: sourceEvidence({ trustedBase: { ref: A, path: WORKFLOW_PATH, blobSha: BLOB, content: WORKFLOW_SOURCE } }) }, /trusted workflow ref/);
   assertSourceRejected({ evidence: sourceEvidence({ candidate: { ref: A, path: WORKFLOW_PATH, blobSha: OTHER_BLOB, content: WORKFLOW_SOURCE } }) }, /trusted base workflow blob/);
   assertSourceRejected({ evidence: sourceEvidence({ candidate: { ref: A, path: WORKFLOW_PATH, blobSha: BLOB, content: `${WORKFLOW_SOURCE}jobs: {}\n` } }) }, /fingerprint does not match/);
+});
+
+test('audit request rejects an invalid source workflow run id at the check-evidence boundary', () => {
+  assert.throws(
+    () => buildRequest({ sourceWorkflowRun: sourceRun({ id: 0 }) }),
+    /sourceWorkflowRun\.id must be a positive integer/
+  );
 });
 
 test('serialized authoritative evidence fails closed when mandatory fields are stripped or corrupted', () => {
