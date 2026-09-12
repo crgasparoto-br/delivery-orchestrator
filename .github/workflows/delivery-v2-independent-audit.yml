@@ -70,6 +70,8 @@ jobs:
       SOURCE_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
       SOURCE_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
       AUDIT_RESULT_PATH: /tmp/delivery-v2-independent-audit-result-${{ github.run_id }}.json
+      DELIVERY_ROLE_RUNTIME_ROOT: /tmp/delivery-v2-role-runtime-${{ github.run_id }}
+      DELIVERY_ROLE_RUNTIME_WORKER: /tmp/delivery-v2-role-runtime-${{ github.run_id }}/role-runtime-worker.mjs
       CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'chatgpt' }}
       CODEX_AUDITOR_HOME: ${{ vars.CODEX_AUDITOR_HOME }}
       DELIVERY_IMPLEMENTER_USER: ${{ vars.DELIVERY_IMPLEMENTER_USER || 'delivery-implementer' }}
@@ -116,6 +118,18 @@ jobs:
       - name: Install trusted runtime dependencies
         run: /usr/local/bin/npm ci --no-audit --no-fund
 
+      - name: Prepare isolated auditor role runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -n rm -rf "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n mkdir -p "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n cp src/role-runtime-worker.mjs src/files.mjs "$DELIVERY_ROLE_RUNTIME_ROOT/"
+          sudo -n cp -a node_modules "$DELIVERY_ROLE_RUNTIME_ROOT/node_modules"
+          sudo -n chown -R "$DELIVERY_AUDITOR_USER:$DELIVERY_AUDITOR_USER" "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n chmod -R u+rwX,go-rwx "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n -u "$DELIVERY_AUDITOR_USER" -H -- test -r "$DELIVERY_ROLE_RUNTIME_WORKER"
+
       - name: Run exact-head independent audit
         id: audit
         run: /usr/local/bin/node scripts/run-delivery-v2-independent-audit.mjs
@@ -160,3 +174,10 @@ jobs:
               issue_number: Number(process.env.PR_NUMBER),
               body,
             });
+
+      - name: Cleanup isolated auditor runtime
+        if: always()
+        shell: bash
+        run: |
+          sudo -n rm -rf "$DELIVERY_ROLE_RUNTIME_ROOT"
+          rm -f "$AUDIT_RESULT_PATH"

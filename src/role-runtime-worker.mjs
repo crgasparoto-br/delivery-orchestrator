@@ -104,7 +104,7 @@ async function runCodex(payload) {
     model: payload.model,
     sandboxMode: payload.sandboxMode,
     approvalPolicy: 'never',
-    networkAccessEnabled: true,
+    networkAccessEnabled: payload.networkAccessEnabled !== false,
     skipGitRepoCheck: false
   });
   const result = await thread.run(payload.prompt, { outputSchema: payload.outputSchema });

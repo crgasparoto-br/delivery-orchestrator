@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   DELIVERY_V2_CODEX_AUDITOR_IDENTITY,
+  assertTrustedCriticalAuditPilot,
   buildGithubNativeCriticalAuditRequest,
   finalizeIndependentAuditResult,
   fingerprintClassifierSource,
@@ -13,15 +14,16 @@ import {
 const A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const M = 'cccccccccccccccccccccccccccccccccccccccc';
+const REPOSITORY = 'crgasparoto-br/delivery-orchestrator';
 
 function pilotPr(overrides = {}) {
   return {
-    number: 43,
-    title: 'test(v2): critical audit pilot',
+    number: 45,
+    title: 'security(v2): enforce trusted audit origin in runtime',
     body: 'Exercises the GitHub-native auditor.\n\nDV2-AUDIT-PILOT: critical\n',
     user: { login: 'implementer-user' },
     base: { ref: 'main', sha: B },
-    head: { ref: 'test/dv2-audit-pilot', sha: A },
+    head: { ref: 'test/dv2-audit-pilot', sha: A, repo: { full_name: REPOSITORY } },
     merge_commit_sha: M,
     ...overrides
   };
@@ -44,9 +46,21 @@ test('CRITICAL pilot marker is explicit and line-bound', () => {
   assert.equal(isCriticalAuditPilot(pilotPr({ body: 'DV2-AUDIT-PILOT: standard' })), false);
 });
 
+test('runtime independently enforces trusted repository origin for CRITICAL pilots', () => {
+  assert.equal(assertTrustedCriticalAuditPilot(pilotPr(), REPOSITORY).number, 45);
+  assert.throws(
+    () => assertTrustedCriticalAuditPilot(pilotPr({ head: { ref: 'fork', sha: A, repo: { full_name: 'attacker/fork' } } }), REPOSITORY),
+    /trusted repository/
+  );
+  assert.throws(
+    () => assertTrustedCriticalAuditPilot(pilotPr({ body: 'no pilot marker' }), REPOSITORY),
+    /not marked/
+  );
+});
+
 test('GitHub-native CRITICAL request binds exact head, CI and classifier without legacy handoff', () => {
   const request = buildGithubNativeCriticalAuditRequest({
-    repository: 'crgasparoto-br/delivery-orchestrator',
+    repository: REPOSITORY,
     issueNumber: 27,
     pullRequest: pilotPr(),
     changedPaths: ['src/v2/audit-contract.mjs'],
@@ -68,7 +82,7 @@ test('GitHub-native CRITICAL request binds exact head, CI and classifier without
 
 test('stale or non-green CI cannot seed the independent audit', () => {
   const base = {
-    repository: 'crgasparoto-br/delivery-orchestrator',
+    repository: REPOSITORY,
     issueNumber: 27,
     pullRequest: pilotPr(),
     changedPaths: ['src/v2/audit-contract.mjs'],
@@ -80,7 +94,7 @@ test('stale or non-green CI cannot seed the independent audit', () => {
 
 test('controller injects reviewer identity, exact SHA and request fingerprint', () => {
   const request = buildGithubNativeCriticalAuditRequest({
-    repository: 'crgasparoto-br/delivery-orchestrator',
+    repository: REPOSITORY,
     issueNumber: 27,
     pullRequest: pilotPr(),
     changedPaths: ['src/v2/audit-contract.mjs'],
@@ -103,7 +117,7 @@ test('controller injects reviewer identity, exact SHA and request fingerprint', 
 
 test('reviewer run cannot reuse the implementer/PR run identity', () => {
   const request = buildGithubNativeCriticalAuditRequest({
-    repository: 'crgasparoto-br/delivery-orchestrator',
+    repository: REPOSITORY,
     issueNumber: 27,
     pullRequest: pilotPr(),
     changedPaths: ['src/v2/audit-contract.mjs'],
@@ -112,12 +126,12 @@ test('reviewer run cannot reuse the implementer/PR run identity', () => {
   });
   assert.throws(() => finalizeIndependentAuditResult({
     request,
-    reviewerRunId: 43,
+    reviewerRunId: 45,
     modelResult: { decision: 'approved', findings: [] }
   }), /independent/);
 });
 
-test('workflow gives the semantic reviewer read-only isolated inputs and publishes only controller output', async () => {
+test('workflow and runtime both enforce isolated trusted audit inputs', async () => {
   const workflow = await readFile(new URL('../.github/workflows/delivery-v2-independent-audit.yml', import.meta.url), 'utf8');
   const runner = await readFile(new URL('../scripts/run-delivery-v2-independent-audit.mjs', import.meta.url), 'utf8');
 
@@ -131,6 +145,7 @@ test('workflow gives the semantic reviewer read-only isolated inputs and publish
   assert.match(workflow, /sameRepository && marked/);
   assert.doesNotMatch(workflow, /handoff-ready\.json/);
   assert.doesNotMatch(workflow, /\.audit\/entregar-issue/);
+  assert.match(runner, /assertTrustedCriticalAuditPilot/);
   assert.match(runner, /sandboxMode: 'read-only'/);
   assert.match(runner, /finalizeIndependentAuditResult/);
   assert.doesNotMatch(runner, /handoff-ready\.json/);

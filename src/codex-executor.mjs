@@ -35,7 +35,7 @@ export function buildRoleEnvironment({ baseEnv, extraEnv = {}, codexHome, github
   const env = { ...safeBaseEnvironment(baseEnv), ...extraEnv };
   for (const key of [...AUTH_ENV_KEYS, ...ORCHESTRATOR_ONLY_ENV_KEYS]) delete env[key];
   if (role === 'implementer') for (const key of IMPLEMENTER_FORBIDDEN_ENV_KEYS) delete env[key];
-  return { ...env, CODEX_HOME: codexHome, GH_TOKEN: githubToken, GITHUB_TOKEN: githubToken, DELIVERY_ROLE: role };
+  return { ...env, CODEX_HOME: codexHome, GH_TOKEN: githubToken || '', GITHUB_TOKEN: githubToken || '', DELIVERY_ROLE: role };
 }
 
 export class CodexExecutor {
@@ -49,7 +49,7 @@ export class CodexExecutor {
     this.runRoleTask = runRoleTaskFn;
   }
 
-  async runFresh({ workingDirectory, codexHome, prompt, outputSchema, role, githubToken, sandboxMode, extraEnv = {} }) {
+  async runFresh({ workingDirectory, codexHome, prompt, outputSchema, role, githubToken = '', sandboxMode, networkAccessEnabled = true, extraEnv = {} }) {
     if (!ROLES.has(role)) throw new Error(`Unsupported delivery role: ${role}`);
     const env = buildRoleEnvironment({ baseEnv: process.env, extraEnv, codexHome, githubToken, role });
     return this.runRoleTask(this.roleUsers[role], 'run-codex', {
@@ -62,6 +62,7 @@ export class CodexExecutor {
       outputSchema,
       role,
       sandboxMode,
+      networkAccessEnabled,
       env
     });
   }
