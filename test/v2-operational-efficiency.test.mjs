@@ -21,17 +21,22 @@ test('generic audit is target/PR driven and no longer requires the issue-27 pilo
   assert.doesNotMatch(body, /DV2-AUDIT-PILOT|TARGET_ISSUE: '27'/);
 });
 
-test('platform CI executes terminal completeness once and delegates gh-aw compilation to its dedicated exact-candidate workflow', async () => {
+test('trusted platform CI remains the single automatic exact-head compile while verification scripts avoid duplicate target scans', async () => {
   const ci = await readFile('.github/workflows/delivery-v2-ci.yml', 'utf8');
-  assert.equal((ci.match(/npm run verify:v2:complete/g) ?? []).length, 1);
-  assert.doesNotMatch(ci, /npm run verify:v2\s*(?:\n|$)/);
-  assert.doesNotMatch(ci, /gh aw compile/);
+  assert.match(ci, /npm run verify:v2\s*(?:\n|$)/);
+  assert.match(ci, /npm run verify:v2:complete/);
+  assert.match(ci, /gh aw compile --strict/);
 
   const compile = await readFile('.github/workflows/delivery-v2-gh-aw-compile.yml', 'utf8');
-  assert.match(compile, /pull_request:/);
+  assert.match(compile, /workflow_dispatch:/);
+  assert.doesNotMatch(compile, /(?:^|\n)\s{2}(?:pull_request|push):/);
   assert.match(compile, /permissions:\n  contents: read/);
   assert.match(compile, /gh aw compile --strict/);
   assert.doesNotMatch(compile, /git push|contents: write/);
+
+  const pkg = JSON.parse(await readFile('package.json', 'utf8'));
+  assert.match(pkg.scripts['verify:v2'], /verify-delivery-v2-targets\.mjs/);
+  assert.doesNotMatch(pkg.scripts['verify:v2:complete'], /verify-delivery-v2-targets\.mjs/);
 });
 
 test('controller target policy binds each rollout repository to one stable required check and trusted workflow', async () => {
