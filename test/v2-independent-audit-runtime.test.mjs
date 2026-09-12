@@ -131,7 +131,7 @@ test('reviewer run cannot reuse the implementer/PR run identity', () => {
   }), /independent/);
 });
 
-test('workflow gives the semantic reviewer isolated inputs and preserves audit evidence before optional artifact upload', async () => {
+test('workflow gives the semantic reviewer isolated inputs and controller-only durable write output', async () => {
   const workflow = await readFile(new URL('../.github/workflows/delivery-v2-independent-audit.yml', import.meta.url), 'utf8');
   const runner = await readFile(new URL('../scripts/run-delivery-v2-independent-audit.mjs', import.meta.url), 'utf8');
 
@@ -139,7 +139,9 @@ test('workflow gives the semantic reviewer isolated inputs and preserves audit e
   assert.match(workflow, /Delivery V2 CI/);
   assert.match(workflow, /runs-on: \[self-hosted, linux, delivery-orchestrator\]/);
   assert.match(workflow, /DELIVERY_GITHUB_READ_TOKEN/);
-  assert.doesNotMatch(workflow, /DELIVERY_GITHUB_WRITE_TOKEN/);
+  assert.equal((workflow.match(/DELIVERY_GITHUB_WRITE_TOKEN/g) || []).length, 1);
+  assert.match(workflow, /- name: Publish audit result to PR[\s\S]*?github-token: \$\{\{ secrets\.DELIVERY_GITHUB_WRITE_TOKEN \}\}/);
+  assert.doesNotMatch(runner, /DELIVERY_GITHUB_WRITE_TOKEN/);
   assert.match(workflow, /DV2-AUDIT-PILOT: critical/);
   assert.match(workflow, /head\.repo\?\.full_name/);
   assert.match(workflow, /sameRepository && marked/);
