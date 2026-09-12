@@ -6,10 +6,10 @@ import path from 'node:path';
 
 import { CodexExecutor } from '../src/codex-executor.mjs';
 import {
+  assertTrustedCriticalAuditPilot,
   buildGithubNativeCriticalAuditRequest,
   finalizeIndependentAuditResult,
-  independentAuditModelOutputSchema,
-  isCriticalAuditPilot
+  independentAuditModelOutputSchema
 } from '../src/v2/independent-audit-runtime.mjs';
 
 function requiredEnv(name) {
@@ -45,8 +45,7 @@ async function resolvePilotPullRequest({ repository, headBranch, headSha, token 
   const pulls = await fetchJson(`https://api.github.com/repos/${repository}/pulls?${query}`, token);
   const matches = pulls.filter((pull) => String(pull.head?.sha).toLowerCase() === headSha.toLowerCase());
   if (matches.length !== 1) throw new Error(`expected exactly one open PR for ${headBranch}@${headSha}, found ${matches.length}`);
-  if (!isCriticalAuditPilot(matches[0])) throw new Error('PR is not marked as a DV2 CRITICAL audit pilot');
-  return matches[0];
+  return assertTrustedCriticalAuditPilot(matches[0], repository);
 }
 
 async function fetchChangedPaths(repository, pullRequestNumber, token) {

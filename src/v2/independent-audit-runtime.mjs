@@ -27,6 +27,17 @@ export function isCriticalAuditPilot(pullRequest) {
   return String(pullRequest?.body ?? '').split(/\r?\n/).some((line) => line.trim() === DELIVERY_V2_CRITICAL_AUDIT_PILOT_MARKER);
 }
 
+export function assertTrustedCriticalAuditPilot(pullRequest, repository) {
+  if (!pullRequest || typeof pullRequest !== 'object') throw new Error('pullRequest is required');
+  const expectedRepository = requiredString(repository, 'repository');
+  const headRepository = requiredString(pullRequest.head?.repo?.full_name, 'pullRequest.head.repo.full_name');
+  if (headRepository !== expectedRepository) {
+    throw new Error(`CRITICAL audit pilot must originate from the trusted repository: expected ${expectedRepository}, got ${headRepository}`);
+  }
+  if (!isCriticalAuditPilot(pullRequest)) throw new Error('PR is not marked as a DV2 CRITICAL audit pilot');
+  return pullRequest;
+}
+
 export function fingerprintClassifierSource(source) {
   return createHash('sha256').update(requiredString(source, 'classifier source')).digest('hex');
 }
