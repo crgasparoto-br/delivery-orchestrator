@@ -49,7 +49,7 @@ const forbiddenActiveV1Markers = [
 ];
 const forbiddenHistoricalRuntimeDependencies = [
   ['skills/catalog', /skills\/catalog(?:\/|\b)/i],
-  ['.audit', /(?:^|[^\w])\.audit(?:\/|\b)/im]
+  ['.audit filesystem dependency', /(?:new URL|path\.(?:join|resolve)|readFile|writeFile|access|readdir|mkdir|rm|copyFile)[^\n]{0,200}['\"`][^'\"`\n]*\.audit(?:\/|\\)/i]
 ];
 
 async function exists(relativePath) {
@@ -117,6 +117,12 @@ test('active executable surfaces cannot depend on historical V1 snapshot trees',
     }
   }
   assert.deepEqual(matches, []);
+});
+
+test('historical dependency detector distinguishes real filesystem coupling from isolation prose', () => {
+  const auditPattern = forbiddenHistoricalRuntimeDependencies.find(([marker]) => marker === '.audit filesystem dependency')[1];
+  assert.match("await readFile(path.join(root, '.audit/entregar-issue/handoff-ready.json'), 'utf8')", auditPattern);
+  assert.doesNotMatch('Do not use or seek .audit/entregar-issue artifacts.', auditPattern);
 });
 
 test('capability manifest describes only the active V2 architecture', async () => {
