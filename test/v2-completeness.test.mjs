@@ -9,29 +9,24 @@ import {
   validateDeliveryV2Contract
 } from '../scripts/verify-delivery-v2-completeness.mjs';
 
-test('canonical Delivery V2 manifest is structurally valid', () => {
+test('canonical Delivery V2 manifest is structurally valid and complete', () => {
   const result = runDeliveryV2Verification({ rootDir: process.cwd() });
 
   assert.equal(result.ok, true, result.errors.join('\n'));
   assert.equal(result.total >= 16, true);
-  assert.equal(result.complete, false);
-  assert.equal(result.incompleteRequired.includes('DV2-006'), false);
-  assert.equal(result.incompleteRequired.includes('DV2-007'), false);
-  assert.equal(result.incompleteRequired.includes('DV2-008'), false);
-  assert.equal(result.incompleteRequired.includes('DV2-009'), false);
-  assert.equal(result.incompleteRequired.includes('DV2-010'), false);
-  assert.equal(result.incompleteRequired.includes('DV2-013'), false);
-  assert.deepEqual(result.incompleteRequired, ['DV2-014']);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.incompleteRequired, []);
 });
 
-test('strict completion mode fails while required roadmap items remain non-terminal', () => {
+test('strict completion mode passes when every required roadmap item is terminal', () => {
   const result = runDeliveryV2Verification({
     rootDir: process.cwd(),
     requireComplete: true
   });
 
-  assert.equal(result.ok, false);
-  assert.match(result.errors.at(-1), /Delivery V2 is not complete/);
+  assert.equal(result.ok, true, result.errors.join('\n'));
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.incompleteRequired, []);
 });
 
 test('validator rejects duplicate IDs and unknown documentation IDs', () => {
