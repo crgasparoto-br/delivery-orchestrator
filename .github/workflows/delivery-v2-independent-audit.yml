@@ -25,13 +25,22 @@ jobs:
       should_target_audit: ${{ steps.resolve.outputs.should_target_audit }}
       target_audit_id: ${{ steps.resolve.outputs.target_audit_id }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
+      runtime_sha: ${{ steps.resolve.outputs.runtime_sha }}
     steps:
       - name: Resolve exact audit trigger PR
         id: resolve
         uses: actions/github-script@v7
+        env:
+          WORKFLOW_RUNTIME_SHA: ${{ github.workflow_sha }}
         with:
           script: |
             const run = context.payload.workflow_run;
+            const runtimeSha = String(process.env.WORKFLOW_RUNTIME_SHA || '').toLowerCase();
+            if (!/^[0-9a-f]{40}$/.test(runtimeSha)) {
+              core.setFailed('github.workflow_sha did not provide an immutable audit runtime SHA');
+              return;
+            }
+            core.setOutput('runtime_sha', runtimeSha);
             core.setOutput('should_audit', 'false');
             core.setOutput('should_target_audit', 'false');
             core.setOutput('target_audit_id', '');
@@ -105,7 +114,8 @@ jobs:
       - name: Checkout trusted audit runtime
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ needs.resolve.outputs.runtime_sha }}
+          persist-credentials: false
 
       - name: Validate isolated auditor runtime
         shell: bash
@@ -219,6 +229,7 @@ jobs:
       actions: read
     env:
       TARGET_AUDIT_ID: ${{ needs.resolve.outputs.target_audit_id }}
+      AUDIT_RUNTIME_SHA: ${{ needs.resolve.outputs.runtime_sha }}
       AUDIT_RESULT_PATH: /tmp/delivery-v2-target-independent-audit-result-${{ github.run_id }}.json
       DELIVERY_ROLE_RUNTIME_ROOT: /tmp/delivery-v2-target-role-runtime-${{ github.run_id }}
       DELIVERY_ROLE_RUNTIME_WORKER: /tmp/delivery-v2-target-role-runtime-${{ github.run_id }}/role-runtime-worker.mjs
@@ -230,10 +241,11 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
     steps:
-      - name: Checkout trusted target-audit runtime
+      - name: Checkout pinned target-audit runtime
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ needs.resolve.outputs.runtime_sha }}
+          persist-credentials: false
 
       - name: Validate isolated target auditor runtime
         shell: bash
@@ -245,6 +257,7 @@ jobs:
           test -x "$npm_bin"
           test "$("$node_bin" -p 'Number(process.versions.node.split(".")[0])')" -ge 22
           test "$DELIVERY_IMPLEMENTER_USER" != "$DELIVERY_AUDITOR_USER"
+          test "$(git rev-parse HEAD)" = "$AUDIT_RUNTIME_SHA"
           id "$DELIVERY_AUDITOR_USER" >/dev/null
           auditor_home="${CODEX_AUDITOR_HOME:-$(getent passwd "$DELIVERY_AUDITOR_USER" | cut -d: -f6)/.codex-delivery/auditor}"
           if [ "$CODEX_AUTH_MODE" = "chatgpt" ]; then
@@ -273,12 +286,13 @@ jobs:
           sudo -n -u "$DELIVERY_AUDITOR_USER" -H -- test -r "$DELIVERY_ROLE_RUNTIME_WORKER"
 
       - name: Run configured target independent audit
+        id: target_audit
         run: /usr/local/bin/node scripts/run-delivery-v2-target-independent-audit.mjs
 
       - name: Print target audit decision
         shell: bash
         run: |
-          /usr/local/bin/node -e 'const p=require(process.env.AUDIT_RESULT_PATH); console.log(JSON.stringify({targetAuditId:p.targetAuditId,target:p.target,result:p.result,outcome:p.outcome},null,2))'
+          /usr/local/bin/node -e 'const p=require(process.env.AUDIT_RESULT_PATH); console.log(JSON.stringify({targetAuditId:p.targetAuditId,target:p.target,result:p.result,outcome:p.outcome,auditRuntime:p.auditRuntime,sourceWorkflowBinding:p.sourceWorkflowBinding},null,2))'
 
       - name: Upload machine-readable target audit result
         uses: actions/upload-artifact@v4
@@ -294,3 +308,147 @@ jobs:
         run: |
           sudo -n rm -rf "$DELIVERY_ROLE_RUNTIME_ROOT"
           rm -f "$AUDIT_RESULT_PATH"
+
+  persist_target_audit:
+    name: Persist durable target audit state
+    needs: [resolve, target_audit]
+    if: always() && needs.resolve.outputs.should_target_audit == 'true' && needs.target_audit.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      issues: write
+    outputs:
+      comment_id: ${{ steps.persist.outputs.comment_id }}
+    steps:
+      - name: Download target audit result
+        uses: actions/download-artifact@v4
+        with:
+          name: delivery-v2-target-independent-audit-${{ needs.resolve.outputs.target_audit_id }}-${{ github.run_id }}
+          path: /tmp/delivery-v2-target-audit-state
+
+      - name: Persist target audit decision on umbrella issue
+        id: persist
+        uses: actions/github-script@v7
+        env:
+          AUDIT_RESULT_PATH: /tmp/delivery-v2-target-audit-state/delivery-v2-target-independent-audit-result-${{ github.run_id }}.json
+          TARGET_AUDIT_ID: ${{ needs.resolve.outputs.target_audit_id }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('node:fs');
+            const payload = JSON.parse(fs.readFileSync(process.env.AUDIT_RESULT_PATH, 'utf8'));
+            if (payload.targetAuditId !== process.env.TARGET_AUDIT_ID) {
+              core.setFailed('downloaded target audit id does not match resolved target');
+              return;
+            }
+            const result = payload.result;
+            const blocking = result.findings.filter((finding) => finding.blocksRelease);
+            const marker = `<!-- delivery-v2-target-independent-audit:${payload.targetAuditId}:${result.candidateSha} -->`;
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const sourceRunUrl = `https://github.com/${payload.target.repository}/actions/runs/${payload.sourceWorkflowRunId}`;
+            const body = [
+              marker,
+              '## Delivery V2 target independent audit',
+              '',
+              `- Target: \`${payload.target.repository}#${payload.target.pullRequestNumber}\``,
+              `- Candidate: \`${result.candidateSha}\``,
+              `- Merge preview: \`${payload.target.mergePreviewSha}\``,
+              `- Merge commit: \`${payload.target.mergeCommitSha}\``,
+              `- Decision: **${result.decision}**`,
+              `- Reviewer: \`${result.reviewer.workerIdentity}\` (run ${result.reviewer.runId})`,
+              `- Context isolation: \`${result.reviewer.contextIsolation}\``,
+              `- Source CI run: ${payload.sourceWorkflowRunId} (${sourceRunUrl})`,
+              `- Source binding job: ${payload.sourceWorkflowBinding.jobId} / \`${payload.sourceWorkflowBinding.jobName}\``,
+              `- Source log fingerprint: \`${payload.sourceWorkflowBinding.logFingerprint}\``,
+              `- Audit workflow run: ${payload.auditWorkflowRunId} (${runUrl})`,
+              `- Audit runtime SHA: \`${payload.auditRuntime.runtimeSha}\``,
+              `- Request fingerprint: \`${result.requestFingerprint}\``,
+              `- Blocking findings: ${blocking.length}`,
+              '',
+              'Runtime fingerprints:',
+              '```json',
+              JSON.stringify(payload.auditRuntime, null, 2),
+              '```',
+              '',
+              'Findings:',
+              '```json',
+              JSON.stringify(result.findings, null, 2),
+              '```',
+            ].join('\n');
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 27,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => String(comment.body || '').includes(marker));
+            const saved = existing
+              ? await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body,
+                })
+              : await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: 27,
+                  body,
+                });
+            core.setOutput('comment_id', String(saved.data.id));
+
+  enforce_target_audit:
+    name: Enforce target audit decision
+    needs: [resolve, target_audit, persist_target_audit]
+    if: always() && needs.resolve.outputs.should_target_audit == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Verify target audit persistence prerequisites
+        env:
+          TARGET_JOB_RESULT: ${{ needs.target_audit.result }}
+          PERSIST_JOB_RESULT: ${{ needs.persist_target_audit.result }}
+          DURABLE_COMMENT_ID: ${{ needs.persist_target_audit.outputs.comment_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$TARGET_JOB_RESULT" = "success"
+          test "$PERSIST_JOB_RESULT" = "success"
+          test -n "$DURABLE_COMMENT_ID"
+
+      - name: Download target audit result
+        uses: actions/download-artifact@v4
+        with:
+          name: delivery-v2-target-independent-audit-${{ needs.resolve.outputs.target_audit_id }}-${{ github.run_id }}
+          path: /tmp/delivery-v2-target-audit-state
+
+      - name: Enforce target audit decision
+        env:
+          AUDIT_RESULT_PATH: /tmp/delivery-v2-target-audit-state/delivery-v2-target-independent-audit-result-${{ github.run_id }}.json
+          DURABLE_COMMENT_ID: ${{ needs.persist_target_audit.outputs.comment_id }}
+        shell: bash
+        run: |
+          /usr/local/bin/node - <<'NODE'
+          const payload = require(process.env.AUDIT_RESULT_PATH);
+          const decision = payload?.result?.decision;
+          const releaseBlocked = payload?.outcome?.releaseBlocked;
+          if (!process.env.DURABLE_COMMENT_ID) {
+            console.error('Durable target audit comment is missing.');
+            process.exit(1);
+          }
+          if (decision !== 'approved' || releaseBlocked !== false) {
+            console.error(`Target independent audit blocks release: decision=${decision}, releaseBlocked=${releaseBlocked}`);
+            process.exit(1);
+          }
+          console.log(JSON.stringify({
+            ok: true,
+            targetAuditId: payload.targetAuditId,
+            candidateSha: payload.result.candidateSha,
+            decision,
+            releaseBlocked,
+            durableCommentId: process.env.DURABLE_COMMENT_ID,
+            requestFingerprint: payload.result.requestFingerprint
+          }));
+          NODE
