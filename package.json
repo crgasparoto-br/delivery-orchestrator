@@ -1,6 +1,6 @@
 {
   "name": "delivery-orchestrator",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Delivery V2 GitHub-native deterministic control plane with risk-adaptive CI, bounded remediation and independent audit.",
