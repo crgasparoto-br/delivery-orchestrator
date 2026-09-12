@@ -67,6 +67,18 @@ test('metrics allow unavailable token and cost values without inventing zeros', 
   assert.equal(summary.overall.aiUsage.credits.total, null);
 });
 
+test('partial token telemetry remains unknown unless a provider supplies totalTokens', () => {
+  const partial = createDeliveryMetrics(metricsInput({ aiUsage: { inputTokens: 100 } }));
+  assert.equal(partial.aiUsage.inputTokens, 100);
+  assert.equal(partial.aiUsage.outputTokens, null);
+  assert.equal(partial.aiUsage.totalTokens, null);
+
+  const explicit = createDeliveryMetrics(metricsInput({ aiUsage: { inputTokens: 100, totalTokens: 175 } }));
+  assert.equal(explicit.aiUsage.inputTokens, 100);
+  assert.equal(explicit.aiUsage.outputTokens, null);
+  assert.equal(explicit.aiUsage.totalTokens, 175);
+});
+
 test('explicit token total must reconcile with input plus output tokens', () => {
   assert.throws(() => createDeliveryMetrics(metricsInput({
     aiUsage: { inputTokens: 100, outputTokens: 50, totalTokens: 999 }
