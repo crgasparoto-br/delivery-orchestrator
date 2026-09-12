@@ -24,6 +24,7 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
+          token: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
 
       - name: Materialize V2.1 candidate
         shell: bash
