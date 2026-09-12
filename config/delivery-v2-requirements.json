@@ -26,8 +26,16 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "GitHub owns delivery identity, deterministic planning, risk and execution policy; AI is a bounded worker, not the orchestrator.",
-      "implementationRefs": ["file:src/v2/delivery-plan.mjs", "file:src/v2/execution-policy.mjs", "file:src/v2/risk-profile.mjs"],
-      "validationRefs": ["file:test/v2-delivery-plan.test.mjs", "file:test/v2-risk-profile.test.mjs", "github:delivery-orchestrator#21"],
+      "implementationRefs": [
+        "file:src/v2/delivery-plan.mjs",
+        "file:src/v2/execution-policy.mjs",
+        "file:src/v2/risk-profile.mjs"
+      ],
+      "validationRefs": [
+        "file:test/v2-delivery-plan.test.mjs",
+        "file:test/v2-risk-profile.test.mjs",
+        "github:delivery-orchestrator#21"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -37,8 +45,15 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "Provider+risk resolves to one pinned worker; missing auth or dispatch failure fails closed and never substitutes another provider.",
-      "implementationRefs": ["file:src/v2/provider-dispatch.mjs", "file:src/v2/provider-policy.mjs"],
-      "validationRefs": ["file:test/v2-provider-dispatch.test.mjs", "file:test/v2-provider-policy.test.mjs", "github:delivery-orchestrator#23"],
+      "implementationRefs": [
+        "file:src/v2/provider-dispatch.mjs",
+        "file:src/v2/provider-policy.mjs"
+      ],
+      "validationRefs": [
+        "file:test/v2-provider-dispatch.test.mjs",
+        "file:test/v2-provider-policy.test.mjs",
+        "github:delivery-orchestrator#23"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -48,8 +63,15 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "AI workers receive read capability and bounded safe outputs; write credentials are not exposed to agent shell execution.",
-      "implementationRefs": ["file:.github/workflows/delivery-v2-worker-codex-fast.md", "file:.github/workflows/delivery-v2-worker-claude-fast.md", "file:.github/workflows/delivery-v2-worker-copilot-fast.md"],
-      "validationRefs": ["file:test/v2-worker-contract.test.mjs", "github:delivery-orchestrator#23"],
+      "implementationRefs": [
+        "file:.github/workflows/delivery-v2-worker-codex-fast.md",
+        "file:.github/workflows/delivery-v2-worker-claude-fast.md",
+        "file:.github/workflows/delivery-v2-worker-copilot-fast.md"
+      ],
+      "validationRefs": [
+        "file:test/v2-worker-contract.test.mjs",
+        "github:delivery-orchestrator#23"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -59,8 +81,15 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "FAST/STANDARD/CRITICAL define CI depth, audit policy, implementation attempts, turns and AI-credit ceilings.",
-      "implementationRefs": ["file:src/v2/execution-policy.mjs", "file:src/v2/provider-policy.mjs"],
-      "validationRefs": ["file:test/v2-delivery-plan.test.mjs", "file:test/v2-provider-policy.test.mjs", "github:delivery-orchestrator#21"],
+      "implementationRefs": [
+        "file:src/v2/execution-policy.mjs",
+        "file:src/v2/provider-policy.mjs"
+      ],
+      "validationRefs": [
+        "file:test/v2-delivery-plan.test.mjs",
+        "file:test/v2-provider-policy.test.mjs",
+        "github:delivery-orchestrator#21"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -70,8 +99,15 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "A deterministic classifier selects focused, affected or full CI while caller repositories retain their concrete build/test commands.",
-      "implementationRefs": ["file:src/v2/ci-plan.mjs", "file:actions/delivery-v2-risk/action.yml", "file:.github/workflows/delivery-v2-classify-ci.yml"],
-      "validationRefs": ["file:test/v2-adaptive-ci.test.mjs", "github:delivery-orchestrator#26"],
+      "implementationRefs": [
+        "file:src/v2/ci-plan.mjs",
+        "file:actions/delivery-v2-risk/action.yml",
+        "file:.github/workflows/delivery-v2-classify-ci.yml"
+      ],
+      "validationRefs": [
+        "file:test/v2-adaptive-ci.test.mjs",
+        "github:delivery-orchestrator#26"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -81,41 +117,87 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "FAST is a strict safe allowlist; authentication, authorization, session, identity, permissions, sensitive boundaries and unknown paths cannot be downgraded by convenient filenames or extensions.",
-      "implementationRefs": ["file:src/v2/risk-profile.mjs", "file:src/v2/repository-risk-policy.mjs", "file:src/v2/ci-plan.mjs", "file:actions/delivery-v2-risk/index.cjs", "file:.github/workflows/delivery-v2-classify-ci.yml"],
-      "validationRefs": ["file:test/v2-risk-profile.test.mjs", "file:test/v2-adaptive-ci.test.mjs", "file:test/v2-delivery-plan.test.mjs"],
+      "implementationRefs": [
+        "file:src/v2/risk-profile.mjs",
+        "file:src/v2/repository-risk-policy.mjs",
+        "file:src/v2/ci-plan.mjs",
+        "file:actions/delivery-v2-risk/index.cjs",
+        "file:.github/workflows/delivery-v2-classify-ci.yml"
+      ],
+      "validationRefs": [
+        "file:test/v2-risk-profile.test.mjs",
+        "file:test/v2-adaptive-ci.test.mjs",
+        "file:test/v2-delivery-plan.test.mjs"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
     {
       "id": "DV2-007",
       "title": "Versioned classifier distribution and repository-specific promotion policy",
-      "status": "implemented",
+      "status": "validated",
       "requiredForV2Default": true,
       "summary": "Public/private target repositories consume a generated, fingerprinted policy snapshot from the private orchestrator; overrides may promote risk or add reviewed safe roots but cannot weaken core invariants.",
-      "implementationRefs": ["file:src/v2/classifier-distribution.mjs", "file:scripts/export-delivery-v2-classifier.mjs", "file:scripts/verify-delivery-v2-targets.mjs", "file:.github/workflows/delivery-v2-sync-classifier.yml", "file:config/delivery-v2-targets/controle_calorias.json", "file:config/delivery-v2-targets/training-system.json", "github:delivery-orchestrator#31", "github:delivery-orchestrator#32", "github:controle_calorias#1069", "github:training-system#435"],
-      "validationRefs": [],
-      "rolloutRefs": [],
+      "implementationRefs": [
+        "file:src/v2/classifier-distribution.mjs",
+        "file:scripts/export-delivery-v2-classifier.mjs",
+        "file:scripts/verify-delivery-v2-targets.mjs",
+        "file:.github/workflows/delivery-v2-sync-classifier.yml",
+        "file:config/delivery-v2-targets/controle_calorias.json",
+        "file:config/delivery-v2-targets/training-system.json",
+        "github:delivery-orchestrator#31",
+        "github:delivery-orchestrator#32",
+        "github:controle_calorias#1069",
+        "github:training-system#435"
+      ],
+      "validationRefs": [
+        "github:controle_calorias#1069",
+        "commit:controle_calorias@6507bdc0dc14ebc744de75393e5dc0c6bda8b112",
+        "github:training-system#435",
+        "commit:training-system@0fba4d2870e087775433b844e22f04c0daa84bcf",
+        "classifier-fingerprint:35914f89844e0a6c35a436af1a1856e6a2b37ab7f5e0f3d3c1749e7a89d3ad24"
+      ],
+      "rolloutRefs": [
+        "github:controle_calorias@develop",
+        "github:training-system@develop"
+      ],
       "trackingIssue": 27
     },
     {
       "id": "DV2-008",
       "title": "GitHub-native independent audit contract",
-      "status": "planned",
+      "status": "implemented",
       "requiredForV2Default": true,
       "summary": "Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.",
-      "implementationRefs": [],
-      "validationRefs": [],
+      "implementationRefs": [
+        "file:src/v2/audit-contract.mjs",
+        "file:schemas/delivery-v2-audit-input.schema.json",
+        "file:schemas/delivery-v2-audit-result.schema.json",
+        "file:src/v2/delivery-plan.mjs",
+        "github:delivery-orchestrator#34"
+      ],
+      "validationRefs": [
+        "file:test/v2-audit-contract.test.mjs",
+        "file:test/v2-delivery-plan.test.mjs",
+        "commit:42f1789387cc1f39d363052f2aa588292c06cbcd"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
     {
       "id": "DV2-009",
       "title": "Bounded remediation state machine",
-      "status": "planned",
+      "status": "implemented",
       "requiredForV2Default": true,
       "summary": "Actionable CI/audit findings re-enter a deterministic, attempt-bounded remediation loop; exhausted budgets escalate to humans instead of creating open-ended AI-on-AI loops.",
-      "implementationRefs": [],
-      "validationRefs": [],
+      "implementationRefs": [
+        "file:src/v2/remediation-state-machine.mjs",
+        "github:delivery-orchestrator#35"
+      ],
+      "validationRefs": [
+        "file:test/v2-remediation-state-machine.test.mjs",
+        "commit:155f223549035005929a47e485aee11792db14ee"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
@@ -147,9 +229,17 @@
       "status": "rolled-out",
       "requiredForV2Default": true,
       "summary": "Adaptive CI is merged and a real FAST change proved related-test routing and material runtime reduction.",
-      "implementationRefs": ["github:controle_calorias#1065", "github:controle_calorias#1067"],
-      "validationRefs": ["github:controle_calorias#1067", "benchmark:FAST=128s;baseline=1255s;reduction=89.8%"],
-      "rolloutRefs": ["github:controle_calorias@develop"],
+      "implementationRefs": [
+        "github:controle_calorias#1065",
+        "github:controle_calorias#1067"
+      ],
+      "validationRefs": [
+        "github:controle_calorias#1067",
+        "benchmark:FAST=128s;baseline=1255s;reduction=89.8%"
+      ],
+      "rolloutRefs": [
+        "github:controle_calorias@develop"
+      ],
       "trackingIssue": 27
     },
     {
@@ -158,7 +248,10 @@
       "status": "implemented",
       "requiredForV2Default": true,
       "summary": "Adaptive routing exists in PR #435 but must close independent-audit findings, merge, and prove a real FAST change before rollout is complete.",
-      "implementationRefs": ["github:training-system#431", "github:training-system#435"],
+      "implementationRefs": [
+        "github:training-system#431",
+        "github:training-system#435"
+      ],
       "validationRefs": [],
       "rolloutRefs": [],
       "trackingIssue": 27
@@ -180,8 +273,17 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "The repository, not a chat transcript, is the durable source of truth for architecture, requirement status and completion.",
-      "implementationRefs": ["file:docs/delivery-v2/MASTER_SPEC.md", "file:docs/delivery-v2/ROADMAP.md", "file:config/delivery-v2-requirements.json", "file:scripts/verify-delivery-v2-completeness.mjs"],
-      "validationRefs": ["file:test/v2-completeness.test.mjs", "github:delivery-orchestrator#28", "commit:2809d680f89622480a90a3196e6acab888a85131"],
+      "implementationRefs": [
+        "file:docs/delivery-v2/MASTER_SPEC.md",
+        "file:docs/delivery-v2/ROADMAP.md",
+        "file:config/delivery-v2-requirements.json",
+        "file:scripts/verify-delivery-v2-completeness.mjs"
+      ],
+      "validationRefs": [
+        "file:test/v2-completeness.test.mjs",
+        "github:delivery-orchestrator#28",
+        "commit:2809d680f89622480a90a3196e6acab888a85131"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
