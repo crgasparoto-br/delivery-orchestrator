@@ -102,7 +102,7 @@ Exit condition: a CRITICAL pilot can be approved/rejected on its actual candidat
 
 ### DV2-009 — Bounded remediation state machine
 
-Status: **implemented; validation pending bounded failure exercise**.
+Status: **validated**.
 
 Depends on DV2-008 findings contract.
 
@@ -116,7 +116,17 @@ Required work:
 - escalation packet when budgets are exhausted;
 - no recursive/nested orchestration Skills.
 
-Exit condition: every loop either reaches a terminal state or deterministic escalation within configured budgets.
+Validation evidence:
+
+- `docs/delivery-v2/evidence/dv2-009-bounded-remediation.json` records the final real PR #48 sequence without claiming retroactive controller ownership;
+- candidate `1971fb5751dd99883c6772094bd4b1448fb4089e` passed CI run `34690291734` and was rejected by independent audit `34690327617` with one release-blocking finding;
+- audit remediation produced candidate `6de29792e0f9a828ee6332d756ffbe82aa964615`, whose CI run `34690481605` failed in `V2 unit tests` and was replayed as an actionable CI failure;
+- the next bounded implementation produced `c403eaf94fcd10b9fae6da3b781be3a3955e273c`, which passed CI `34690592843`, passed independent audit `34690625580`, and was merged as `134fea2c8dffd4db5678935e5ab2386585f0169c`;
+- the production state machine replay reaches that approved path with 3/3 implementation attempts, 2/3 allowed audit runs, and 1/2 audit-remediation attempts;
+- from the exact third-attempt state, `test/v2-remediation-live-evidence.test.mjs` proves that another actionable CI failure escalates to `implementation-budget-exhausted` instead of authorizing a fourth implementation attempt;
+- PR #52 and CI run `34692649283` validated the live evidence replay against the production state machine.
+
+Exit condition: every loop either reaches a terminal state or deterministic escalation within configured budgets. **Satisfied.**
 
 ### DV2-010 — Exact-head release gate
 
@@ -291,9 +301,8 @@ That means every required item below is terminal:
 
 Unless a production incident changes priority, continue in this order:
 
-1. validate DV2-009 with bounded CI/audit remediation evidence
-2. validate DV2-010 with a live exact-head release exercise
-3. close DV2-013
-4. DV2-014
+1. validate DV2-010 with a live exact-head release exercise
+2. close DV2-013
+3. DV2-014
 
 Every PR should name the `DV2-*` IDs it advances and update the manifest only when the evidence justifies the new status.
