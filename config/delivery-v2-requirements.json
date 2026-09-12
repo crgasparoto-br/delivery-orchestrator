@@ -286,14 +286,23 @@
     {
       "id": "DV2-013",
       "title": "training-system pilot and FAST benchmark",
-      "status": "implemented",
+      "status": "validated",
       "requiredForV2Default": true,
-      "summary": "Adaptive routing exists in PR #435 but must close independent-audit findings, merge, and prove a real FAST change before rollout is complete.",
+      "summary": "Generated adaptive routing is active on develop and a real low-risk UI PR proved the FAST path, exact-head evidence, focused gates, skipped STANDARD/CRITICAL validation and material runtime reduction without claiming the unmerged pilot itself as rolled out.",
       "implementationRefs": [
         "github:training-system#431",
         "github:training-system#435"
       ],
-      "validationRefs": [],
+      "validationRefs": [
+        "file:test/v2-training-system-fast-evidence.test.mjs",
+        "file:docs/delivery-v2/evidence/dv2-013-training-system-fast.json",
+        "github:training-system#436",
+        "commit:training-system@ed59660e0a5cbe8b202491b105e36614770dfac6",
+        "github-actions:training-system#34693145142",
+        "artifact:training-system#10298051005",
+        "artifact-digest:sha256:bc7c2382e4a941a86b271ff6c56ae12db0cfc550a2c1ec736b4b8dadd074298a",
+        "benchmark:FAST=164s;baseline=993s;reduction=83.48%;speedup=6.05x"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
