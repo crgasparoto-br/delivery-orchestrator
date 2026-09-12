@@ -50,7 +50,7 @@ const forbiddenActiveV1Markers = [
 ];
 const historicalRuntimeReferences = [
   ['skills/catalog', /skills\/catalog(?:\/|\b)/i],
-  ['.audit', /\.audit(?:\/|\\|\b)/i]
+  ['.audit', /\.audit(?:[\/\\]|(?=['"`\s;)]|$))/i]
 ];
 const referenceOnlyAllowlist = [
   /Context hygiene: do not inspect or summarize .*\.audit\/\*\*.*skills\/catalog\/\*\*/i,
@@ -144,9 +144,12 @@ test('active executable surfaces cannot reference historical V1 snapshot trees e
 
 test('historical reference gate is fail-closed across manifests, workflow uses, shell and variable-built code paths', () => {
   assert.deepEqual(historicalReferences("const legacy = '.audit/entregar-issue'; await readFile(path.join(root, legacy, 'handoff-ready.json'))"), ['.audit']);
+  assert.deepEqual(historicalReferences("const legacyRoot = '.audit'; await readFile(path.join(root, legacyRoot, 'handoff-ready.json'))"), ['.audit']);
   assert.deepEqual(historicalReferences('run: cat .audit/entregar-issue/handoff-ready.json'), ['.audit']);
   assert.deepEqual(historicalReferences('uses: ./skills/catalog/example/action'), ['skills/catalog']);
   assert.deepEqual(historicalReferences('{"scripts":{"legacy":"node skills/catalog/legacy.js"}}'), ['skills/catalog']);
+  assert.deepEqual(historicalReferences('steps.risk.outputs.audit-required'), []);
+  assert.deepEqual(historicalReferences('durations.audit'), []);
   assert.deepEqual(historicalReferences('Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts unless needed.'), []);
   assert.deepEqual(historicalReferences('Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'), []);
   assert.equal(isExecutableDependencySurface('package.json'), true);
