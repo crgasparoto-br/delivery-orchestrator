@@ -196,7 +196,7 @@
     {
       "id": "DV2-009",
       "title": "Bounded remediation state machine",
-      "status": "implemented",
+      "status": "validated",
       "requiredForV2Default": true,
       "summary": "Actionable CI/audit findings re-enter a deterministic, attempt-bounded remediation loop; exhausted budgets escalate to humans instead of creating open-ended AI-on-AI loops.",
       "implementationRefs": [
@@ -205,7 +205,12 @@
       ],
       "validationRefs": [
         "file:test/v2-remediation-state-machine.test.mjs",
-        "commit:155f223549035005929a47e485aee11792db14ee"
+        "file:test/v2-remediation-live-evidence.test.mjs",
+        "file:docs/delivery-v2/evidence/dv2-009-bounded-remediation.json",
+        "github:delivery-orchestrator#52",
+        "commit:c104998bcd71d68a2ae90907ff5e522e34c318d3",
+        "commit:fecea01e365de2ed31854db5a4f22f51fc660ee7",
+        "github-actions:34692649283"
       ],
       "rolloutRefs": [],
       "trackingIssue": 27
