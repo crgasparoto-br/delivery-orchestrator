@@ -1,0 +1,62 @@
+    const oldDispatch = /async function dispatchWorkflowAndResolveRun\(\{ repository, workflow, ref, inputs, token \}\) \{[\s\S]*?\n\}/;
+    const match = out.match(oldDispatch);
+    if (!match) throw new Error(`${path}: dispatch resolver not found`);
+    const newDispatch = `async function dispatchWorkflowAndResolveRun({ repository, workflow, ref, inputs, token, kind, dispatchNonce = createDispatchNonce() }) {\n  await postJson(\`https://api.github.com/repos/\${repository}/actions/workflows/\${encodeURIComponent(workflow)}/dispatches\`, token, { ref, inputs: { ...inputs, dispatch_nonce: dispatchNonce } });\n  const deadline = Date.now() + 2 * 60 * 1000;\n  while (Date.now() < deadline) {\n    const correlated = selectCorrelatedWorkflowRun(await listWorkflowRuns(repository, workflow, token), { kind, nonce: dispatchNonce, ref });\n    if (correlated) return correlated;\n    await sleep(Math.min(POLL_MS, 5000));\n  }\n  throw new Error(\`timed out resolving correlated workflow dispatch: \${workflow}\`);\n}`;
+    out = out.replace(oldDispatch, newDispatch);
+    return out;
+  });
+}
+
+// Initial controller: route resume through one entrypoint, retain durable attempt count, classify CI correctly, use authoritative audit artifacts and publish final status.
+await edit('scripts/run-delivery-v2-controller.mjs', (body) => {
+  let out = body;
+  out = replaceOnce(out, 'async function main() {\n  const startedAt = Date.now();', "export async function main() {\n  if (String(process.env.DELIVERY_V2_RESUME_PR ?? '').trim()) {\n    const { main: resumeMain } = await import('./resume-delivery-v2-controller.mjs');\n    return resumeMain();\n  }\n  const startedAt = Date.now();", 'initial export/resume route');
+  out = replaceOnce(out,
+    "  const resultPath = process.env.CONTROLLER_RESULT_PATH || path.join(process.env.RUNNER_TEMP || tmpdir(), 'delivery-v2-controller-result.json');",
+    "  const resultPath = process.env.CONTROLLER_RESULT_PATH || path.join(process.env.RUNNER_TEMP || tmpdir(), 'delivery-v2-controller-result.json');\n  const initialAttempts = positiveInteger(process.env.DELIVERY_V2_INITIAL_ATTEMPTS || '1', 'DELIVERY_V2_INITIAL_ATTEMPTS');\n  const recoverWorkerRunId = String(process.env.DELIVERY_V2_RECOVER_WORKER_RUN_ID ?? '').trim() ? positiveInteger(process.env.DELIVERY_V2_RECOVER_WORKER_RUN_ID, 'DELIVERY_V2_RECOVER_WORKER_RUN_ID') : null;\n  const initialDispatchNonce = String(process.env.DELIVERY_V2_INITIAL_DISPATCH_NONCE ?? '').trim() || createDispatchNonce();",
+    'initial recovery env');
+  out = replaceOnce(out,
+    "  const initialDispatchAt = Date.now();\n  let worker = await dispatchWorker({\n    orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch,\n    targetRef: baseBranch, token: actionsToken\n  });\n  worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);",
+    "  let initialDispatchAt = Date.now();\n  let worker;\n  if (recoverWorkerRunId) {\n    worker = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${recoverWorkerRunId}`, actionsToken);\n    initialDispatchAt = Date.parse(worker.created_at ?? worker.run_started_at ?? new Date().toISOString());\n  } else {\n    worker = await dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef: baseBranch, token: actionsToken, dispatchNonce: initialDispatchNonce });\n  }\n  worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);",
+    'initial recover worker');
+  out = replaceOnce(out,
+    "async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef, targetPr = '', remediationContext = '', token }) {",
+    "async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef, targetPr = '', remediationContext = '', token, dispatchNonce = createDispatchNonce() }) {",
+    'initial worker dispatch signature');
+  out = replaceOnce(out,
+    "    token,\n    inputs: {",
+    "    token,\n    kind: 'worker',\n    dispatchNonce,\n    inputs: {",
+    'initial worker correlated dispatch');
+  out = replaceOnce(out,
+    "  let state = createOperationalDelivery({ plan, materialHeadSha });",
+    "  let state = createOperationalDelivery({ plan, materialHeadSha });\n  state = Object.freeze({ ...state, implementationAttempts: Math.max(state.implementationAttempts, initialAttempts) });",
+    'initial durable attempts');
+  out = replaceOnce(out,
+    "  const identity = () => ({",
+    "  let controller = {};\n  const identity = () => ({",
+    'initial controller envelope');
+  out = replaceOnce(out,
+    "  const persist = async (extra = {}) => upsertStateComment({\n    repository: targetRepository,\n    prNumber: pullRequest.number,\n    state,\n    identity: identity(),\n    classifier,\n    workflowChecks: latestCheck && latestSourceRun ? checkEvidence(latestCheck, latestSourceRun, materialHeadSha) : [],\n    evidenceRefs,\n    token: targetWriteToken,\n    extra\n  });",
+    "  const persist = async (extra = {}) => {\n    controller = { ...controller, ...extra };\n    return upsertStateComment({ repository: targetRepository, prNumber: pullRequest.number, state, identity: identity(), classifier, workflowChecks: latestCheck && latestSourceRun ? checkEvidence(latestCheck, latestSourceRun, materialHeadSha) : [], evidenceRefs, token: targetWriteToken, extra: controller });\n  };",
+    'initial persistent controller envelope');
+  out = replaceOnce(out,
+    "  await persist({ nextAction: 'observe-ci', workerRunId: worker.id });",
+    "  await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });\n  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce });",
+    'initial pending final status');
+  out = replaceOnce(out,
+    "    if (latestCheck.conclusion !== 'success') {\n      state = applyOperationalEvent(state, {\n        type: 'ci-result',\n        result: {\n          candidateSha: materialHeadSha,\n          conclusion: 'failure',\n          failureClass: 'actionable',",
+    "    if (latestCheck.conclusion !== 'success') {\n      const failureClass = ciFailureClassForConclusion(latestCheck.conclusion);\n      state = applyOperationalEvent(state, {\n        type: 'ci-result',\n        result: {\n          candidateSha: materialHeadSha,\n          conclusion: 'failure',\n          failureClass,",
+    'initial CI classification');
+  out = replaceOnce(out,
+    "      await persist({ nextAction: state.status });\n      if (state.status === 'escalated') break;\n\n      const remediation = operationalRemediationInput(state);",
+    "      await persist({ nextAction: failureClass === 'actionable' ? state.status : 'external-ci-blocker' });\n      if (failureClass !== 'actionable') {\n        await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'failure', description: `Delivery V2 blocked by external CI conclusion: ${latestCheck.conclusion}`, token: targetWriteToken });\n        throw new Error(`required check ended with external/ambiguous conclusion ${latestCheck.conclusion}; refusing AI remediation`);\n      }\n      if (state.status === 'escalated') break;\n\n      const remediation = operationalRemediationInput(state);",
+    'initial external CI handling');
+  out = replaceOnce(out,
+    "        workflow: 'delivery-v2-audit.yml',\n        ref: orchestratorRef,\n        token: actionsToken,\n        inputs: {",
+    "        workflow: 'delivery-v2-audit.yml',\n        ref: orchestratorRef,\n        token: actionsToken,\n        kind: 'audit',\n        inputs: {",
+    'initial audit correlated dispatch');
+  // Replace legacy comment reader body with authoritative artifact loader wrapper.
+  const auditFn = /async function auditResultFromComment\(\{ repository, prNumber, candidateSha, auditRunId, token \}\) \{[\s\S]*?\n\}/;
+  if (!auditFn.test(out)) throw new Error('initial audit reader not found');
+  out = out.replace(auditFn, `async function auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber, candidateSha, auditRun, sourceWorkflowRunId, token }) {\n  return loadAuthoritativeAuditResult({ orchestratorRepository, trustedRef: orchestratorRef, targetRepository, issueNumber, pullRequestNumber: prNumber, candidateSha, auditRun, sourceWorkflowRunId, token });\n}`);
+  out = replaceOnce(out,

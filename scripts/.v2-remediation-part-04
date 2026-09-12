@@ -1,0 +1,59 @@
+    "      lastAudit = await auditResultFromComment({ repository: targetRepository, prNumber: pullRequest.number, candidateSha: materialHeadSha, auditRunId: auditRun.id, token: targetReadToken });",
+    "      lastAudit = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: pullRequest.number, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });",
+    'initial authoritative audit');
+  out = replaceOnce(out,
+    "      await persist({ nextAction: state.status, auditRunId: auditRun.id });",
+    "      await persist({ nextAction: state.status, auditRunId: auditRun.id, auditRequestFingerprint: lastAudit.requestFingerprint });",
+    'initial audit provenance persist');
+  out = replaceOnce(out,
+    "      await persist({ nextAction: 'human-merge-policy', release });\n      break;",
+    "      await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'success', description: 'Delivery V2 exact-head release gate approved', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });\n      await persist({ nextAction: 'human-merge-policy', release });\n      break;",
+    'initial final status success');
+  return out;
+});
+
+// Resume controller uses the same correlation/provenance/release invariants.
+await edit('scripts/resume-delivery-v2-controller.mjs', (body) => {
+  let out = body;
+  out = replaceOnce(out,
+    "  operationalRemediationInput,\n  operationalStateFromPersistent,",
+    "  operationalRemediationInput,\n  operationalStateFromPersistent,\n  evaluateOperationalRelease,",
+    'resume release import');
+  out = replaceOnce(out,
+    'export function ciFailureClassForConclusion(conclusion) {\n  return String(conclusion ?? \'\').toLowerCase() === \'failure\' ? \'actionable\' : \'external\';\n}\n\n',
+    '',
+    'remove duplicate CI classifier');
+  out = replaceOnce(out, 'async function main() {', 'export async function main() {', 'resume export main');
+  out = replaceOnce(out,
+    "async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef, targetPr, remediationContext, token }) {",
+    "async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef, targetPr, remediationContext, token, dispatchNonce = createDispatchNonce() }) {",
+    'resume worker dispatch signature');
+  out = replaceOnce(out,
+    "    token,\n    inputs: {",
+    "    token,\n    kind: 'worker',\n    dispatchNonce,\n    inputs: {",
+    'resume worker correlated dispatch');
+  const auditFn = /async function auditResultFromComment\(\{ repository, prNumber, candidateSha, auditRunId, token \}\) \{[\s\S]*?\n\}/;
+  if (!auditFn.test(out)) throw new Error('resume audit reader not found');
+  out = out.replace(auditFn, `async function auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber, candidateSha, auditRun, sourceWorkflowRunId, token }) {\n  return loadAuthoritativeAuditResult({ orchestratorRepository, trustedRef: orchestratorRef, targetRepository, issueNumber, pullRequestNumber: prNumber, candidateSha, auditRun, sourceWorkflowRunId, token });\n}`);
+  out = replaceOnce(out,
+    "  await persist({ nextAction: state.status });",
+    "  await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 resumed evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });\n  await persist({ nextAction: state.status });",
+    'resume pending status');
+  out = replaceOnce(out,
+    "      if (failureClass !== 'actionable') throw new Error(`required check ended with external/ambiguous conclusion ${latestCheck.conclusion}; refusing AI remediation`);",
+    "      if (failureClass !== 'actionable') {\n        await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'failure', description: `Delivery V2 blocked by external CI conclusion: ${latestCheck.conclusion}`, token: targetWriteToken });\n        throw new Error(`required check ended with external/ambiguous conclusion ${latestCheck.conclusion}; refusing AI remediation`);\n      }",
+    'resume external CI status');
+  out = replaceOnce(out,
+    "          token: actionsToken,\n          inputs: {",
+    "          token: actionsToken,\n          kind: 'audit',\n          inputs: {",
+    'resume audit correlated dispatch');
+  out = replaceOnce(out,
+    "      const result = await auditResultFromComment({ repository: targetRepository, prNumber: resumePr, candidateSha: materialHeadSha, auditRunId: auditRun.id, token: targetReadToken });",
+    "      const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });\n      const result = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: sourceRun.id, token: actionsToken });",
+    'resume authoritative audit');
+  out = replaceOnce(out,
+    "      await persist({ nextAction: state.status, auditRunId: null });",
+    "      await persist({ nextAction: state.status, auditRunId: auditRun.id, auditRequestFingerprint: result.requestFingerprint });",
+    'resume audit provenance persist');
+  out = replaceOnce(out,
+    "  pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);\n  const payload = {",

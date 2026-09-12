@@ -1,0 +1,53 @@
+    "  assert.equal(decision.runController, true);\n  assert.equal(decision.status, 'retry-initial-delivery');\n  assert.equal(decision.nextAction, 'retry-initial-worker');\n  assert.equal(decision.priorInitialAttempts, 1);\n  assert.equal(decision.attempts.implementation, 1);",
+    'reentry bounded retry expectations');
+  out = replaceOnce(out,
+    "    decision: { dispatchAllowed: true, securityProfile: 'critical' },\n    repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex', requestedRisk: 'critical', runId: 101\n  });\n  assert.equal(lease.implementationAttempts, 1);",
+    "    decision: { dispatchAllowed: true, securityProfile: 'critical' },\n    repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex', requestedRisk: 'critical', runId: 101, workerWorkflow: 'worker.yml', dispatchNonce: 'nonce-1'\n  });\n  assert.equal(lease.implementationAttempts, 1);\n  assert.equal(lease.workerWorkflow, 'worker.yml');\n  assert.equal(lease.dispatchNonce, 'nonce-1');",
+    'reentry lease correlation expectations');
+  out = replaceOnce(out,
+    "  const bootstrapBody = `<!-- delivery-v2-bootstrap-state -->\\n## Delivery V2 bootstrap state\\n\\n\\`\\`\\`json\\n${JSON.stringify({ schemaVersion: 1, repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex', requestedRisk: 'critical', implementationAttempts: 1, status: 'reserved-initial-attempt', controllerRunId: 99 })}\\n\\`\\`\\``;",
+    "  const bootstrapBody = `<!-- delivery-v2-bootstrap-state -->\\n## Delivery V2 bootstrap state\\n\\n\\`\\`\\`json\\n${JSON.stringify({ schemaVersion: 1, repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex', requestedRisk: 'critical', effectiveRisk: 'critical', implementationAttempts: 1, status: 'reserved-initial-attempt', controllerRunId: 99, workerWorkflow: 'worker.yml', dispatchNonce: 'nonce-1' })}\\n\\`\\`\\``;",
+    'reentry parser fixture');
+  return out;
+});
+
+await edit('test/v2-reentry-guard.test.mjs', (body) => replaceOnce(
+  body,
+  "import {\n  ciFailureClassForConclusion,\n  markExistingAuditInFlight,\n  rebuildCiPendingState\n} from '../scripts/resume-delivery-v2-controller.mjs';",
+  "import { markExistingAuditInFlight, rebuildCiPendingState } from '../scripts/resume-delivery-v2-controller.mjs';\nimport { ciFailureClassForConclusion } from '../src/v2/controller-runtime.mjs';",
+  'reentry shared CI classifier import'
+));
+
+const controllerRuntimeTest = `import assert from 'node:assert/strict';
+import test from 'node:test';
+import { ciFailureClassForConclusion, expectedDispatchTitle, selectCorrelatedWorkflowRun, validateAuditArtifactPayload } from '../src/v2/controller-runtime.mjs';
+
+const SHA = 'a'.repeat(40);
+
+test('workflow dispatch correlation requires exact nonce title and trusted ref', () => {
+  const nonce = 'n-123';
+  const run = { id: 7, event: 'workflow_dispatch', display_title: expectedDispatchTitle('audit', nonce), head_branch: 'main' };
+  assert.equal(selectCorrelatedWorkflowRun([run], { kind: 'audit', nonce, ref: 'main' }).id, 7);
+  assert.equal(selectCorrelatedWorkflowRun([{ ...run, display_title: 'other' }], { kind: 'audit', nonce, ref: 'main' }), null);
+  assert.equal(selectCorrelatedWorkflowRun([{ ...run, head_branch: 'feature' }], { kind: 'audit', nonce, ref: 'main' }), null);
+});
+
+test('external CI conclusions never become actionable remediation', () => {
+  assert.equal(ciFailureClassForConclusion('failure'), 'actionable');
+  for (const conclusion of ['cancelled', 'timed_out', 'startup_failure', 'stale', 'neutral', 'skipped']) assert.equal(ciFailureClassForConclusion(conclusion), 'external');
+});
+
+test('authoritative audit artifact is exact-run exact-head and fingerprint bound', () => {
+  const fp = 'b'.repeat(64);
+  const payload = {
+    repository: 'owner/target', issueNumber: 63, pullRequestNumber: 64, sourceWorkflowRunId: 10, auditWorkflowRunId: 20,
+    request: { requestFingerprint: fp, candidate: { materialHeadSha: SHA } },
+    result: { candidateSha: SHA, requestFingerprint: fp, reviewer: { runId: 20, contextIsolation: 'candidate-contract-evidence-only', workerIdentity: 'delivery-v2-github-native-auditor' }, decision: 'approved', findings: [] }
+  };
+  assert.equal(validateAuditArtifactPayload(payload, { orchestratorRepository: 'owner/orchestrator', targetRepository: 'owner/target', issueNumber: 63, pullRequestNumber: 64, candidateSha: SHA, auditRunId: 20, sourceWorkflowRunId: 10 }).decision, 'approved');
+  assert.throws(() => validateAuditArtifactPayload({ ...payload, result: { ...payload.result, candidateSha: 'c'.repeat(40) } }, { orchestratorRepository: 'owner/orchestrator', targetRepository: 'owner/target', issueNumber: 63, pullRequestNumber: 64, candidateSha: SHA, auditRunId: 20, sourceWorkflowRunId: 10 }), /candidate mismatch/);
+});
+`;
+await write('test/v2-controller-runtime.test.mjs', controllerRuntimeTest);
+
+process.stdout.write(`${JSON.stringify({ ok: true, remediationId: randomUUID() })}\n`);

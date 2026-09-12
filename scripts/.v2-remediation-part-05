@@ -1,0 +1,47 @@
+    `  if (state.status === 'ready-for-human-merge') {\n    pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);\n    materialHeadSha = String(pullRequest.head.sha).toLowerCase();\n    latestCheck = (await fetchCheckRuns(targetRepository, materialHeadSha, targetReadToken)).find((item) => item.name === targetPolicy.requiredStatusName);\n    if (!latestCheck || latestCheck.status !== 'completed' || latestCheck.conclusion !== 'success') throw new Error('release gate requires exact-head terminal green source CI');\n    latestSourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });\n    let audit = null;\n    if (state.auditRequired) {\n      const auditRunId = positiveInteger(controller.auditRunId, 'persisted auditRunId');\n      const auditRun = await api(\`https://api.github.com/repos/\${orchestratorRepository}/actions/runs/\${auditRunId}\`, actionsToken);\n      const auditResult = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });\n      if (auditResult.decision !== 'approved') throw new Error('release gate requires approved authoritative audit');\n      audit = { candidateSha: materialHeadSha, decision: 'approved', mode: state.auditMode, requestFingerprint: auditResult.requestFingerprint, evidenceRef: auditRun.html_url };\n    }\n    const releaseInput = {\n      schemaVersion: 1, repository: targetRepository, pullRequestNumber: resumePr, materialHeadSha, currentRemoteHeadSha: materialHeadSha,\n      evidenceCollection: { materialHeadSha, remoteHeadSha: materialHeadSha, evidenceRef: \`github:\${targetRepository}#\${resumePr}@\${materialHeadSha}\` },\n      classifier: { subjectSha: materialHeadSha, profile: state.riskProfile, version: classifier.version, fingerprint: classifier.fingerprint, expectedFingerprint: classifier.fingerprint, evidenceRef: classifier.evidenceRef },\n      mergePreview: null,\n      checks: [{ name: latestCheck.name, required: true, subjectSha: materialHeadSha, status: latestCheck.status, conclusion: latestCheck.conclusion, workflowRunId: latestSourceRun.id, evidenceRef: latestCheck.details_url ?? latestSourceRun.html_url }],\n      standardAuditRequired: targetPolicy.standardAuditRequired !== false, audit, unresolvedFindings: [], blockers: []\n    };\n    const release = evaluateOperationalRelease({ state, releaseInput });\n    if (!release.readiness) throw new Error(\`release gate did not become ready: \${release.reasons.join(', ')}\`);\n    await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'success', description: 'Delivery V2 exact-head release gate approved', token: targetWriteToken, targetUrl: \`https://github.com/\${orchestratorRepository}/actions/runs/\${process.env.GITHUB_RUN_ID}\` });\n    await persist({ nextAction: 'human-merge-policy', release });\n  }\n\n  pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);\n  const payload = {`,
+    'resume release gate');
+  return out;
+});
+
+// Crash-safe dispatch ownership: persist nonce before every AI/audit dispatch and recover by exact nonce after restart.
+await edit('scripts/run-delivery-v2-controller.mjs', (body) => {
+  let out = body;
+  out = replaceOnce(out,
+    "      state = applyOperationalEvent(state, { type: 'start-audit' });\n      await persist({ nextAction: 'observe-audit' });\n      let auditRun = await dispatchWorkflowAndResolveRun({",
+    "      state = applyOperationalEvent(state, { type: 'start-audit' });\n      const auditDispatchNonce = createDispatchNonce();\n      await persist({ nextAction: 'dispatch-audit', auditRunId: null, auditDispatchNonce });\n      let auditRun = await dispatchWorkflowAndResolveRun({",
+    'initial audit nonce reservation');
+  out = replaceOnce(out,
+    "        kind: 'audit',\n        inputs: {",
+    "        kind: 'audit',\n        dispatchNonce: auditDispatchNonce,\n        inputs: {",
+    'initial audit nonce dispatch');
+  out = replaceOnce(out,
+    "      });\n      auditRun = await waitWorkflowRun(orchestratorRepository, auditRun.id, actionsToken);\n      auditRuns.push(auditRun);",
+    "      });\n      await persist({ nextAction: 'observe-audit', auditRunId: auditRun.id, auditDispatchNonce });\n      auditRun = await waitWorkflowRun(orchestratorRepository, auditRun.id, actionsToken);\n      auditRuns.push(auditRun);",
+    'initial audit run persistence');
+  out = replaceOnce(out,
+    "      state = applyOperationalEvent(state, { type: 'start-implementation' });\n      await persist({ nextAction: 'dispatch-ci-remediation' });",
+    "      state = applyOperationalEvent(state, { type: 'start-implementation' });\n      const workerDispatchNonce = createDispatchNonce();\n      await persist({ nextAction: 'dispatch-ci-remediation', workerRunId: null, workerDispatchNonce });",
+    'initial CI remediation nonce');
+  out = replaceOnce(out,
+    "        remediationContext: JSON.stringify(remediation),\n        token: actionsToken\n      });\n      worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);",
+    "        remediationContext: JSON.stringify(remediation),\n        token: actionsToken,\n        dispatchNonce: workerDispatchNonce\n      });\n      await persist({ nextAction: 'observe-remediation', workerRunId: worker.id, workerDispatchNonce });\n      worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);",
+    'initial CI remediation correlated run');
+  out = replaceOnce(out,
+    "        state = applyOperationalEvent(state, { type: 'start-implementation' });\n        await persist({ nextAction: 'dispatch-audit-remediation' });",
+    "        state = applyOperationalEvent(state, { type: 'start-implementation' });\n        const workerDispatchNonce = createDispatchNonce();\n        await persist({ nextAction: 'dispatch-audit-remediation', workerRunId: null, workerDispatchNonce });",
+    'initial audit remediation nonce');
+  out = replaceOnce(out,
+    "          remediationContext: JSON.stringify(remediation),\n          token: actionsToken\n        });\n        worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);",
+    "          remediationContext: JSON.stringify(remediation),\n          token: actionsToken,\n          dispatchNonce: workerDispatchNonce\n        });\n        await persist({ nextAction: 'observe-remediation', workerRunId: worker.id, workerDispatchNonce });\n        worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);",
+    'initial audit remediation correlated run');
+  return out;
+});
+
+await edit('scripts/resume-delivery-v2-controller.mjs', (body) => {
+  let out = body;
+  out = replaceOnce(out,
+    "    if (state.status === 'implementing') {\n      const workerRunId = Number(controller.workerRunId ?? 0);\n      if (!Number.isInteger(workerRunId) || workerRunId < 1) throw new Error('cannot safely resume an in-flight implementation without persisted workerRunId');\n      const run = await waitWorkflowRun(orchestratorRepository, workerRunId, actionsToken);",
+    "    if (state.status === 'implementing') {\n      let workerRunId = Number(controller.workerRunId ?? 0);\n      if ((!Number.isInteger(workerRunId) || workerRunId < 1) && controller.workerDispatchNonce) {\n        const recovered = selectCorrelatedWorkflowRun(await listWorkflowRuns(orchestratorRepository, plan.implementation.workflow, actionsToken), { kind: 'worker', nonce: controller.workerDispatchNonce, ref: orchestratorRef });\n        if (!recovered) throw new Error('cannot safely recover in-flight implementation by dispatch nonce; refusing duplicate worker');\n        workerRunId = recovered.id;\n        await persist({ nextAction: 'observe-remediation', workerRunId, workerDispatchNonce: controller.workerDispatchNonce });\n      }\n      if (!Number.isInteger(workerRunId) || workerRunId < 1) throw new Error('cannot safely resume an in-flight implementation without persisted worker identity');\n      const run = await waitWorkflowRun(orchestratorRepository, workerRunId, actionsToken);",
+    'resume worker recovery by nonce');
+  out = replaceOnce(out,
+    "      const remediation = operationalRemediationInput(state);\n      const beforeSha = materialHeadSha;\n      state = applyOperationalEvent(state, { type: 'start-implementation' });\n      await persist({ nextAction: 'dispatch-remediation', workerRunId: null });",
