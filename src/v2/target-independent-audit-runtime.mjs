@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { buildAuditRequest } from './audit-contract.mjs';
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
+const FINGERPRINT_RE = /^[0-9a-f]{64}$/i;
 const TARGET_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 
 function object(value, label) {
@@ -20,6 +21,11 @@ function positiveInt(value, label) {
 function sha(value, label) {
   const resolved = string(value, label).toLowerCase();
   if (!SHA_RE.test(resolved)) throw new Error(`${label} must be a 40-character Git commit SHA`);
+  return resolved;
+}
+function fingerprintValue(value, label) {
+  const resolved = string(value, label).toLowerCase();
+  if (!FINGERPRINT_RE.test(resolved)) throw new Error(`${label} must be a 64-character SHA-256 fingerprint`);
   return resolved;
 }
 function repository(value) {
@@ -52,6 +58,9 @@ export function normalizeTargetAuditConfig(raw) {
   const workflow = object(value.sourceWorkflow, 'sourceWorkflow');
   const event = string(workflow.event, 'sourceWorkflow.event').toLowerCase();
   if (event !== 'pull_request') throw new Error('sourceWorkflow.event must be pull_request');
+  const mergePreviewSha = sha(value.mergePreviewSha, 'mergePreviewSha');
+  const mergeCommitSha = sha(value.mergeCommitSha, 'mergeCommitSha');
+  if (mergePreviewSha === mergeCommitSha) throw new Error('mergePreviewSha and mergeCommitSha must represent distinct identities');
   return Object.freeze({
     schemaVersion: 1,
     id,
@@ -62,16 +71,56 @@ export function normalizeTargetAuditConfig(raw) {
     baseSha: sha(value.baseSha, 'baseSha'),
     headRef: string(value.headRef, 'headRef'),
     materialHeadSha: sha(value.materialHeadSha, 'materialHeadSha'),
-    mergeCommitSha: sha(value.mergeCommitSha, 'mergeCommitSha'),
+    mergePreviewSha,
+    mergeCommitSha,
     classifierPath: string(value.classifierPath, 'classifierPath'),
     sourceWorkflow: Object.freeze({
       runId: positiveInt(workflow.runId, 'sourceWorkflow.runId'),
       workflowId: positiveInt(workflow.workflowId, 'sourceWorkflow.workflowId'),
       name: string(workflow.name, 'sourceWorkflow.name'),
       path: string(workflow.path, 'sourceWorkflow.path'),
-      event
+      event,
+      bindingJobName: string(workflow.bindingJobName, 'sourceWorkflow.bindingJobName')
     }),
     purpose: string(value.purpose, 'purpose')
+  });
+}
+
+export function normalizeTargetSourceBindingEvidence(raw, configInput) {
+  const config = normalizeTargetAuditConfig(configInput);
+  const value = object(raw, 'sourceWorkflowBindingEvidence');
+  const jobName = string(value.jobName, 'sourceWorkflowBindingEvidence.jobName');
+  if (jobName !== config.sourceWorkflow.bindingJobName) throw new Error('source workflow binding job name does not match target audit config');
+  const status = string(value.status, 'sourceWorkflowBindingEvidence.status').toLowerCase();
+  const conclusion = string(value.conclusion, 'sourceWorkflowBindingEvidence.conclusion').toLowerCase();
+  if (status !== 'completed' || conclusion !== 'success') throw new Error('source workflow binding job must be terminal green');
+  const pullRequestNumber = positiveInt(value.pullRequestNumber, 'sourceWorkflowBindingEvidence.pullRequestNumber');
+  if (pullRequestNumber !== config.pullRequestNumber) throw new Error('source workflow binding evidence does not match configured pull request');
+  const mergePreviewSha = sha(value.mergePreviewSha, 'sourceWorkflowBindingEvidence.mergePreviewSha');
+  if (mergePreviewSha !== config.mergePreviewSha) throw new Error('source workflow binding evidence does not match configured merge preview');
+  const materialHeadSha = sha(value.materialHeadSha, 'sourceWorkflowBindingEvidence.materialHeadSha');
+  if (materialHeadSha !== config.materialHeadSha) throw new Error('source workflow binding evidence does not match configured material head');
+  return Object.freeze({
+    jobId: positiveInt(value.jobId, 'sourceWorkflowBindingEvidence.jobId'),
+    jobName,
+    status,
+    conclusion,
+    pullRequestNumber,
+    mergePreviewSha,
+    materialHeadSha,
+    logFingerprint: fingerprintValue(value.logFingerprint, 'sourceWorkflowBindingEvidence.logFingerprint')
+  });
+}
+
+export function normalizeTargetAuditRuntimeEvidence(raw) {
+  const value = object(raw, 'auditRuntimeEvidence');
+  return Object.freeze({
+    runtimeSha: sha(value.runtimeSha, 'auditRuntimeEvidence.runtimeSha'),
+    contractFingerprint: fingerprintValue(value.contractFingerprint, 'auditRuntimeEvidence.contractFingerprint'),
+    targetConfigFingerprint: fingerprintValue(value.targetConfigFingerprint, 'auditRuntimeEvidence.targetConfigFingerprint'),
+    runnerFingerprint: fingerprintValue(value.runnerFingerprint, 'auditRuntimeEvidence.runnerFingerprint'),
+    targetRuntimeFingerprint: fingerprintValue(value.targetRuntimeFingerprint, 'auditRuntimeEvidence.targetRuntimeFingerprint'),
+    workflowFingerprint: fingerprintValue(value.workflowFingerprint, 'auditRuntimeEvidence.workflowFingerprint')
   });
 }
 
@@ -90,10 +139,11 @@ export function assertTargetPullRequest(configInput, pullRequest) {
   return Object.freeze({ config, pullRequest: pr });
 }
 
-export function assertTargetSourceWorkflow(configInput, pullRequest, sourceWorkflowRun, sourceWorkflowDefinition) {
+export function assertTargetSourceWorkflow(configInput, pullRequest, sourceWorkflowRun, sourceWorkflowDefinition, sourceWorkflowBindingEvidence) {
   const { config, pullRequest: pr } = assertTargetPullRequest(configInput, pullRequest);
   const run = object(sourceWorkflowRun, 'sourceWorkflowRun');
   const definition = object(sourceWorkflowDefinition, 'sourceWorkflowDefinition');
+  const binding = normalizeTargetSourceBindingEvidence(sourceWorkflowBindingEvidence, config);
   if (positiveInt(run.id, 'sourceWorkflowRun.id') !== config.sourceWorkflow.runId) throw new Error('source workflow run id does not match target audit config');
   if (positiveInt(run.workflow_id, 'sourceWorkflowRun.workflow_id') !== config.sourceWorkflow.workflowId) throw new Error('source workflow id does not match target audit config');
   if (string(run.name, 'sourceWorkflowRun.name') !== config.sourceWorkflow.name) throw new Error('source workflow name does not match target audit config');
@@ -110,10 +160,10 @@ export function assertTargetSourceWorkflow(configInput, pullRequest, sourceWorkf
   if (string(definition.state, 'sourceWorkflowDefinition.state').toLowerCase() !== 'active') throw new Error('resolved workflow definition must be active');
 
   if (Array.isArray(run.pull_requests) && run.pull_requests.length > 0) {
-    const conflicting = run.pull_requests.some((binding) => Number(binding.number) !== config.pullRequestNumber);
+    const conflicting = run.pull_requests.some((candidate) => Number(candidate.number) !== config.pullRequestNumber);
     if (conflicting) throw new Error('source workflow run contains a conflicting pull request association');
   }
-  return Object.freeze({ config, pullRequest: pr, run, definition });
+  return Object.freeze({ config, pullRequest: pr, run, definition, binding });
 }
 
 export function buildTargetCriticalAuditRequest({
@@ -122,16 +172,20 @@ export function buildTargetCriticalAuditRequest({
   changedPaths,
   sourceWorkflowRun,
   sourceWorkflowDefinition,
+  sourceWorkflowBindingEvidence,
   candidateWorkflowEvidence,
   baseWorkflowEvidence,
-  classifierSource
+  classifierSource,
+  auditRuntimeEvidence
 } = {}) {
-  const { config, pullRequest: pr, run, definition } = assertTargetSourceWorkflow(
+  const { config, pullRequest: pr, run, binding } = assertTargetSourceWorkflow(
     configInput,
     pullRequest,
     sourceWorkflowRun,
-    sourceWorkflowDefinition
+    sourceWorkflowDefinition,
+    sourceWorkflowBindingEvidence
   );
+  const runtime = normalizeTargetAuditRuntimeEvidence(auditRuntimeEvidence);
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) throw new Error('changedPaths must be a non-empty array');
   if (!changedPaths.includes(config.sourceWorkflow.path)) throw new Error('target audit expects the source workflow itself in changed paths');
 
@@ -150,6 +204,14 @@ export function buildTargetCriticalAuditRequest({
   const candidateWorkflowFingerprint = fingerprint(candidateWorkflow.content);
   const baseWorkflowFingerprint = fingerprint(baseWorkflow.content);
   const classifierFingerprint = fingerprint(classifierSource);
+  const workflowEvidence = Object.freeze({
+    workflowId: config.sourceWorkflow.workflowId,
+    path: config.sourceWorkflow.path,
+    state: 'active',
+    trustedBaseSha: config.baseSha,
+    blobSha: baseWorkflow.blobSha,
+    fingerprint: baseWorkflowFingerprint
+  });
 
   const baseRequest = buildAuditRequest({
     schemaVersion: 1,
@@ -160,7 +222,7 @@ export function buildTargetCriticalAuditRequest({
     baseSha: config.baseSha,
     headRef: config.headRef,
     materialHeadSha: config.materialHeadSha,
-    mergePreviewSha: config.mergeCommitSha,
+    mergePreviewSha: config.mergePreviewSha,
     risk: {
       profile: 'critical',
       reasons: ['dv2-target-historical-independent-audit', 'candidate-modified-ci-workflow']
@@ -177,14 +239,16 @@ export function buildTargetCriticalAuditRequest({
       status: run.status,
       conclusion: run.conclusion,
       workflowRunId: config.sourceWorkflow.runId,
-      workflowEvidence: {
-        workflowId: config.sourceWorkflow.workflowId,
-        path: config.sourceWorkflow.path,
-        state: 'active',
-        trustedBaseSha: config.baseSha,
-        blobSha: baseWorkflow.blobSha,
-        fingerprint: baseWorkflowFingerprint
-      }
+      workflowEvidence
+    }, {
+      name: config.sourceWorkflow.bindingJobName,
+      required: true,
+      scope: 'merge-preview',
+      subjectSha: config.mergePreviewSha,
+      status: binding.status,
+      conclusion: binding.conclusion,
+      workflowRunId: config.sourceWorkflow.runId,
+      workflowEvidence
     }],
     changedPaths,
     implementationAttempt: 1,
@@ -203,14 +267,17 @@ export function buildTargetCriticalAuditRequest({
       id: config.id,
       purpose: config.purpose,
       historicalMergedCandidate: true,
+      mergePreviewSha: config.mergePreviewSha,
       mergeCommitSha: config.mergeCommitSha,
       sourceCiTrust: 'candidate-workflow-under-independent-review',
+      runtime,
       sourceWorkflow: Object.freeze({
         runId: config.sourceWorkflow.runId,
         workflowId: config.sourceWorkflow.workflowId,
         name: config.sourceWorkflow.name,
         path: config.sourceWorkflow.path,
         event: config.sourceWorkflow.event,
+        bindingEvidence: binding,
         candidate: Object.freeze({
           ref: candidateWorkflow.ref,
           blobSha: candidateWorkflow.blobSha,
@@ -223,7 +290,7 @@ export function buildTargetCriticalAuditRequest({
         }),
         candidateDiffersFromBase: candidateWorkflow.blobSha !== baseWorkflow.blobSha || candidateWorkflowFingerprint !== baseWorkflowFingerprint,
         pullRequestAssociationsObserved: Array.isArray(run.pull_requests) ? run.pull_requests.length : 0,
-        historicalAssociationPolicy: 'empty-run-pr-associations-allowed-identity-bound-by-trusted-config-and-run-head'
+        historicalAssociationPolicy: 'source-job-log-pr-ref-required'
       })
     })
   };
