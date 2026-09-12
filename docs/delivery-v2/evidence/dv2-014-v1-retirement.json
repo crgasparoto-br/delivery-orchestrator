@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "requirement": "DV2-014",
+  "baseMainSha": "65364eae35ed4889c9a62d09116056dff5da05d4",
+  "decision": "retire-v1-active-paths",
+  "openLegacyControlIssuesAtRetirement": 0,
+  "v2DefaultEntrypoint": ".github/workflows/delivery-v2-dispatch.yml",
+  "removedActivePaths": [
+    ".github/workflows/delivery-loop.yml",
+    "scripts/normalize-delivery-request.mjs",
+    "scripts/pump-control-queue.mjs",
+    "scripts/resolve-bound-pr.mjs",
+    "src/control-queue.mjs",
+    "src/delivery-request.mjs",
+    "src/orchestrator.mjs",
+    "src/state-machine.mjs",
+    "src/config.mjs",
+    "src/release-finalizer.mjs",
+    "src/pr-release-signal.mjs",
+    "src/skill-catalog-sync.mjs",
+    "src/skill-homes.mjs",
+    "src/git-workspace.mjs",
+    "src/github-ci.mjs",
+    "src/fingerprint.mjs",
+    "src/prompts.mjs",
+    "src/schemas.mjs",
+    "src/constants.mjs",
+    "src/pull-request-binding.mjs",
+    "schemas/run-state.schema.json",
+    "prompts/implementer.md",
+    "prompts/auditor.md",
+    "skills/orquestrar-entrega/SKILL.md",
+    "docs/persistent-delivery-queue.md",
+    "docs/delivery-completion-contract.md"
+  ],
+  "retainedForTraceability": [
+    ".audit/entregar-issue/**",
+    "skills/catalog/**"
+  ],
+  "invariants": [
+    "normal delivery no longer accepts delivery-request control issues",
+    "normal delivery no longer exposes max_cycles or a recursive implement-audit loop",
+    "normal delivery no longer requires nested Skills or .audit/entregar-issue certificates",
+    "Delivery V2 remains bounded by deterministic risk, CI, audit and remediation policy"
+  ],
+  "validation": {
+    "test": "test/v2-retirement.test.mjs",
+    "exactHeadCiRunId": null,
+    "status": "awaiting-exact-head-ci"
+  }
+}
