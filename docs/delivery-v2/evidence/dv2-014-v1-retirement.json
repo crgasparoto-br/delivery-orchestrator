@@ -37,7 +37,9 @@
   ],
   "retainedForTraceability": [
     ".audit/entregar-issue/**",
-    "skills/catalog/**"
+    "skills/catalog/**",
+    "docs/delivery-v2/history/v1/trusted-auditors.json",
+    "docs/delivery-v2/history/v1/skills-catalog-sync-manifest.json"
   ],
   "postRetirementHardening": {
     "issueNumber": 59,
@@ -62,6 +64,11 @@
       "skills/catalog.sync-manifest.json",
       "trust/trusted-auditors.json"
     ],
+    "archivedResidualMetadata": {
+      "trustedAuditors": "docs/delivery-v2/history/v1/trusted-auditors.json",
+      "skillCatalogSyncManifest": "docs/delivery-v2/history/v1/skills-catalog-sync-manifest.json"
+    },
+    "archivedResidualMetadataRuntimeActive": false,
     "capabilityManifestSchemaVersion": 2,
     "activeRuntimeMarkerScan": true,
     "historicalDependencyScan": true,
@@ -72,6 +79,7 @@
     "normal delivery no longer exposes max_cycles or a recursive implement-audit loop",
     "normal delivery no longer requires nested Skills or .audit/entregar-issue certificates",
     "active executable surfaces do not depend on historical .audit or skills/catalog snapshots",
+    "V1 trust and Skill snapshot verification metadata is retained only under docs/delivery-v2/history/v1 for historical verification",
     "compiled gh-aw workers retain raw usage artifacts for token and AI-credit observability",
     "Delivery V2 remains bounded by deterministic risk, CI, audit and remediation policy"
   ],
