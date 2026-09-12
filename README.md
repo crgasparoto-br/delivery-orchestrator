@@ -50,6 +50,7 @@ Other V2 control-plane commands:
 npm run resume:v2 -- --state-file /path/state.json --repo owner/repo --pr 123 --head-ref branch --remote-head <sha>
 npm run metrics:v2 -- --metrics-file /path/metrics.json
 npm run normalize-usage:v2 -- --json /path/agent_usage.json
+npm run verify:v2
 npm run verify:v2:complete
 ```
 
@@ -110,7 +111,8 @@ For control-plane changes run:
 ```bash
 npm test
 npm run validate
+npm run verify:v2
 npm run verify:v2:complete
 ```
 
-`verify:v2:complete` is the terminal contract gate. `gh-aw` worker compilation is a separate exact-candidate workflow (`Delivery V2 - Compile gh-aw`) and is not duplicated inside `Delivery V2 CI`.
+`verify:v2` runs the regular completeness and target-policy checks. `verify:v2:complete` adds the strict terminal-completeness assertion without repeating the target-policy scan. `Delivery V2 CI` remains the trusted automatic exact-head gate and performs the single automatic `gh-aw` compile; `Delivery V2 - Compile gh-aw` is retained only as a manual preflight.
