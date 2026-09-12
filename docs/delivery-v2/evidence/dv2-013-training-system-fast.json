@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "requirement": "DV2-013",
+  "exercise": "training-system-real-fast-ui-pilot",
+  "repository": "crgasparoto-br/training-system",
+  "migration": {
+    "pullRequestNumber": 435,
+    "materialHeadSha": "ae0fade7be03c6c66f00fbd605bd85d9259aa622",
+    "mergeCommitSha": "0fba4d2870e087775433b844e22f04c0daa84bcf",
+    "criticalWorkflowRunId": 34664164768,
+    "criticalWorkflowStartedAt": "2026-09-12T01:13:21Z",
+    "criticalWorkflowCompletedAt": "2026-09-12T01:29:54Z",
+    "criticalWorkflowEndToEndSeconds": 993,
+    "classifierFingerprint": "35914f89844e0a6c35a436af1a1856e6a2b37ab7f5e0f3d3c1749e7a89d3ad24",
+    "generatedClassifierSourceCommit": "1d6185de16e3a30378a810132bb4e3cf9483f98c"
+  },
+  "priorAuditDisposition": {
+    "persistedIndependentFindingsFound": false,
+    "sourcesChecked": [
+      "github:training-system#435:conversation",
+      "github:training-system#435:reviews",
+      "github:training-system#431:comments",
+      "personal-context:prior-dv2-013-audit-record",
+      "github-code-search:pr435-audit"
+    ],
+    "observedPr435ReviewState": "Only a Copilot quota-limit COMMENTED review is persisted on PR #435; no independent audit finding object is present in the PR conversation/reviews.",
+    "issue431CommentsObserved": 0,
+    "disposition": "no-machine-verifiable-pr435-independent-finding-was-persisted",
+    "claimBoundary": "This evidence does not relabel an unavailable prior audit as approved or resolved. DV2-013 validation relies on the merged generated classifier migration plus the new real FAST pilot evidence below."
+  },
+  "fastPilot": {
+    "pullRequestNumber": 436,
+    "stateAtEvidenceFreeze": "open",
+    "merged": false,
+    "headRef": "test/431-delivery-v2-fast-a11y-pilot",
+    "baseRef": "develop",
+    "baseSha": "0fba4d2870e087775433b844e22f04c0daa84bcf",
+    "materialHeadSha": "ed59660e0a5cbe8b202491b105e36614770dfac6",
+    "changedFiles": [
+      "apps/web/src/components/AppErrorBoundary.tsx"
+    ],
+    "diff": {
+      "files": 1,
+      "additions": 10,
+      "deletions": 3
+    },
+    "changeIntent": "Low-risk accessibility semantics for the global render-error fallback: role=alert with explicit title/description relationships; no business logic, auth, API, database, navigation or reload behavior changes.",
+    "classification": {
+      "requestedRisk": "auto",
+      "effectiveRisk": "fast",
+      "promoted": false,
+      "reason": "repository-fast-safe-root:apps/web/src/components:apps/web/src/components/apperrorboundary.tsx",
+      "codeChanged": true,
+      "webChanged": true,
+      "apiChanged": false,
+      "databaseRequired": false,
+      "docsRequired": false
+    },
+    "workflow": {
+      "name": "Validate PR",
+      "workflowRunId": 34693145142,
+      "status": "completed",
+      "conclusion": "success",
+      "createdAt": "2026-09-12T12:14:45Z",
+      "completedAt": "2026-09-12T12:17:29Z",
+      "endToEndSeconds": 164,
+      "jobs": {
+        "risk": {
+          "jobId": 103551891296,
+          "conclusion": "success",
+          "startedAt": "2026-09-12T12:14:48Z",
+          "completedAt": "2026-09-12T12:14:53Z",
+          "executionSeconds": 5
+        },
+        "mergePreview": {
+          "jobId": 103551907872,
+          "conclusion": "success",
+          "startedAt": "2026-09-12T12:14:56Z",
+          "completedAt": "2026-09-12T12:15:30Z",
+          "executionSeconds": 34,
+          "skippedSteps": [
+            "Run pnpm --filter @corrida/api exec prisma generate",
+            "STANDARD or CRITICAL type compatibility"
+          ],
+          "executedGate": "FAST web type compatibility"
+        },
+        "fastValidation": {
+          "jobId": 103551993275,
+          "conclusion": "success",
+          "createdAt": "2026-09-12T12:15:31Z",
+          "startedAt": "2026-09-12T12:16:09Z",
+          "completedAt": "2026-09-12T12:17:23Z",
+          "queueSeconds": 38,
+          "executionSeconds": 74,
+          "successfulSteps": [
+            "Create exact-head evidence",
+            "Run node --test scripts/delivery-v2-ci-classifier.test.mjs",
+            "Web type check",
+            "Web lint",
+            "FAST related tests",
+            "Web build",
+            "Architecture checks",
+            "Run actions/upload-artifact@v4"
+          ],
+          "skippedSteps": [
+            "Documentation checks"
+          ]
+        },
+        "standardValidation": {
+          "jobId": 103551994059,
+          "conclusion": "skipped"
+        },
+        "criticalValidation": {
+          "jobId": 103551993882,
+          "conclusion": "skipped"
+        },
+        "aggregate": {
+          "jobId": 103552234733,
+          "conclusion": "success"
+        }
+      }
+    },
+    "exactHeadArtifact": {
+      "artifactId": 10298051005,
+      "name": "validate-pr-fast-ed59660e0a5cbe8b202491b105e36614770dfac6",
+      "digest": "sha256:bc7c2382e4a941a86b271ff6c56ae12db0cfc550a2c1ec736b4b8dadd074298a",
+      "payload": {
+        "schemaVersion": 1,
+        "kind": "validate-pr-evidence",
+        "repository": "crgasparoto-br/training-system",
+        "workflow": "Validate PR",
+        "runId": "34693145142",
+        "eventName": "pull_request",
+        "riskProfile": "fast",
+        "headSha": "ed59660e0a5cbe8b202491b105e36614770dfac6",
+        "checkoutSha": "ed59660e0a5cbe8b202491b105e36614770dfac6",
+        "baseSha": "0fba4d2870e087775433b844e22f04c0daa84bcf",
+        "mergePreviewSha": "c513d5b3349c3c4085c2f585ffe4df2b971e15c1"
+      }
+    },
+    "benchmark": {
+      "baselineProfile": "critical",
+      "baselineWorkflowRunId": 34664164768,
+      "baselineEndToEndSeconds": 993,
+      "fastEndToEndSeconds": 164,
+      "observedReductionPercent": 83.48,
+      "observedSpeedup": 6.05,
+      "comparisonBoundary": "Profile benchmark only; PR #435 and PR #436 have different diffs, so this is not an apples-to-apples workload comparison."
+    },
+    "humanDisposition": {
+      "mergePerformedByController": false,
+      "reason": "Automatic merge authorization is scoped to crgasparoto-br/delivery-orchestrator, not training-system.",
+      "prCommentId": 5645838765
+    }
+  },
+  "statusDecision": {
+    "status": "validated",
+    "rolledOut": false,
+    "reason": "The generated classifier migration is already merged on develop and a real low-risk UI PR independently proved the FAST route, exact-head artifact, focused gates, skipped STANDARD/CRITICAL jobs and benchmark timing. The pilot PR remains unmerged, so rolled-out is intentionally not claimed."
+  }
+}
