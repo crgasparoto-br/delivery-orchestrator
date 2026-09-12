@@ -5,6 +5,8 @@ import { executionPolicyFor } from './execution-policy.mjs';
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/i;
 const TARGET_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+const JOB_CONCLUSIONS = new Set(['success', 'skipped']);
+const CHECK_SCOPES = new Set(['material-head', 'merge-preview']);
 
 function object(value, label) {
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be an object`);
@@ -37,6 +39,9 @@ function repository(value) {
 function fingerprint(content) {
   return createHash('sha256').update(string(content, 'evidence content')).digest('hex');
 }
+function sameStringArray(actual, expected) {
+  return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
+}
 function fileEvidence(value, label, expectedPath, expectedRef) {
   const evidence = object(value, label);
   const path = string(evidence.path, `${label}.path`);
@@ -50,8 +55,22 @@ function fileEvidence(value, label, expectedPath, expectedRef) {
     content: string(evidence.content, `${label}.content`)
   });
 }
-function sameStringArray(actual, expected) {
-  return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
+function normalizeRequiredJob(value, index) {
+  const job = object(value, `sourceWorkflow.requiredJobs[${index}]`);
+  const scope = string(job.scope, `sourceWorkflow.requiredJobs[${index}].scope`).toLowerCase();
+  if (!CHECK_SCOPES.has(scope)) throw new Error(`sourceWorkflow.requiredJobs[${index}].scope is unsupported`);
+  const expectedConclusion = string(job.expectedConclusion, `sourceWorkflow.requiredJobs[${index}].expectedConclusion`).toLowerCase();
+  if (!JOB_CONCLUSIONS.has(expectedConclusion)) throw new Error(`sourceWorkflow.requiredJobs[${index}].expectedConclusion is unsupported`);
+  if (!Array.isArray(job.requiredSteps)) throw new Error(`sourceWorkflow.requiredJobs[${index}].requiredSteps must be an array`);
+  const requiredSteps = job.requiredSteps.map((entry, stepIndex) => string(entry, `sourceWorkflow.requiredJobs[${index}].requiredSteps[${stepIndex}]`));
+  if (new Set(requiredSteps).size !== requiredSteps.length) throw new Error(`sourceWorkflow.requiredJobs[${index}] contains duplicate required steps`);
+  if (expectedConclusion === 'skipped' && requiredSteps.length > 0) throw new Error(`sourceWorkflow.requiredJobs[${index}] cannot require steps when the job must be skipped`);
+  return Object.freeze({
+    name: string(job.name, `sourceWorkflow.requiredJobs[${index}].name`),
+    scope,
+    expectedConclusion,
+    requiredSteps: Object.freeze(requiredSteps)
+  });
 }
 
 export function normalizeTargetAuditConfig(raw) {
@@ -65,6 +84,15 @@ export function normalizeTargetAuditConfig(raw) {
   const mergePreviewSha = sha(value.mergePreviewSha, 'mergePreviewSha');
   const mergeCommitSha = sha(value.mergeCommitSha, 'mergeCommitSha');
   if (mergePreviewSha === mergeCommitSha) throw new Error('mergePreviewSha and mergeCommitSha must represent distinct identities');
+  if (!Array.isArray(workflow.requiredJobs) || workflow.requiredJobs.length === 0) throw new Error('sourceWorkflow.requiredJobs must be a non-empty array');
+  const requiredJobs = workflow.requiredJobs.map(normalizeRequiredJob);
+  const jobNames = requiredJobs.map((job) => job.name);
+  if (new Set(jobNames).size !== jobNames.length) throw new Error('sourceWorkflow.requiredJobs contains duplicate job names');
+  const bindingJobName = string(workflow.bindingJobName, 'sourceWorkflow.bindingJobName');
+  if (!jobNames.includes(bindingJobName)) throw new Error('sourceWorkflow.bindingJobName must be declared in sourceWorkflow.requiredJobs');
+  if (!requiredJobs.some((job) => job.scope === 'material-head' && job.expectedConclusion === 'success')) {
+    throw new Error('sourceWorkflow.requiredJobs must include at least one successful material-head gate');
+  }
   return Object.freeze({
     schemaVersion: 1,
     id,
@@ -84,7 +112,8 @@ export function normalizeTargetAuditConfig(raw) {
       name: string(workflow.name, 'sourceWorkflow.name'),
       path: string(workflow.path, 'sourceWorkflow.path'),
       event,
-      bindingJobName: string(workflow.bindingJobName, 'sourceWorkflow.bindingJobName')
+      bindingJobName,
+      requiredJobs: Object.freeze(requiredJobs)
     }),
     purpose: string(value.purpose, 'purpose')
   });
@@ -104,6 +133,7 @@ export function normalizeTargetSourceBindingEvidence(raw, configInput) {
   if (mergePreviewSha !== config.mergePreviewSha) throw new Error('source workflow binding evidence does not match configured merge preview');
   const materialHeadSha = sha(value.materialHeadSha, 'sourceWorkflowBindingEvidence.materialHeadSha');
   if (materialHeadSha !== config.materialHeadSha) throw new Error('source workflow binding evidence does not match configured material head');
+  if (value.refMappingObserved !== true || value.checkoutObserved !== true) throw new Error('source workflow binding evidence must positively corroborate PR merge ref and checkout');
   return Object.freeze({
     jobId: positiveInt(value.jobId, 'sourceWorkflowBindingEvidence.jobId'),
     jobName,
@@ -113,9 +143,64 @@ export function normalizeTargetSourceBindingEvidence(raw, configInput) {
     mergePreviewSha,
     materialHeadSha,
     logFingerprint: fingerprintValue(value.logFingerprint, 'sourceWorkflowBindingEvidence.logFingerprint'),
-    refMappingObserved: value.refMappingObserved === true,
-    checkoutObserved: value.checkoutObserved === true
+    refMappingObserved: true,
+    checkoutObserved: true
   });
+}
+
+export function normalizeTargetSourceGateEvidence(raw, configInput) {
+  const config = normalizeTargetAuditConfig(configInput);
+  const value = object(raw, 'sourceWorkflowGateEvidence');
+  if (positiveInt(value.runId, 'sourceWorkflowGateEvidence.runId') !== config.sourceWorkflow.runId) throw new Error('source workflow gate evidence run id does not match config');
+  if (!Array.isArray(value.jobs)) throw new Error('sourceWorkflowGateEvidence.jobs must be an array');
+  if (value.jobs.length !== config.sourceWorkflow.requiredJobs.length) throw new Error('source workflow job inventory does not exactly match configured required jobs');
+  const actualByName = new Map();
+  for (const [index, rawJob] of value.jobs.entries()) {
+    const job = object(rawJob, `sourceWorkflowGateEvidence.jobs[${index}]`);
+    const name = string(job.name, `sourceWorkflowGateEvidence.jobs[${index}].name`);
+    if (actualByName.has(name)) throw new Error(`duplicate source workflow job evidence: ${name}`);
+    actualByName.set(name, job);
+  }
+  const jobs = config.sourceWorkflow.requiredJobs.map((expected, index) => {
+    const actual = actualByName.get(expected.name);
+    if (!actual) throw new Error(`required source workflow job is missing: ${expected.name}`);
+    const status = string(actual.status, `sourceWorkflowGateEvidence job ${expected.name} status`).toLowerCase();
+    const conclusion = string(actual.conclusion, `sourceWorkflowGateEvidence job ${expected.name} conclusion`).toLowerCase();
+    if (status !== 'completed') throw new Error(`required source workflow job is not terminal: ${expected.name}`);
+    if (conclusion !== expected.expectedConclusion) throw new Error(`required source workflow job ${expected.name} concluded ${conclusion}; expected ${expected.expectedConclusion}`);
+    const rawSteps = actual.steps == null ? [] : actual.steps;
+    if (!Array.isArray(rawSteps)) throw new Error(`source workflow job ${expected.name} steps must be an array`);
+    const steps = rawSteps.map((rawStep, stepIndex) => {
+      const step = object(rawStep, `sourceWorkflowGateEvidence job ${expected.name} steps[${stepIndex}]`);
+      return Object.freeze({
+        name: string(step.name, `sourceWorkflowGateEvidence job ${expected.name} step name`),
+        status: string(step.status, `sourceWorkflowGateEvidence job ${expected.name} step status`).toLowerCase(),
+        conclusion: step.conclusion == null ? null : string(step.conclusion, `sourceWorkflowGateEvidence job ${expected.name} step conclusion`).toLowerCase()
+      });
+    });
+    for (const requiredStepName of expected.requiredSteps) {
+      const matches = steps.filter((step) => step.name === requiredStepName);
+      if (matches.length !== 1) throw new Error(`required source workflow step ${expected.name} / ${requiredStepName} was not reached exactly once`);
+      if (matches[0].status !== 'completed' || matches[0].conclusion !== 'success') {
+        throw new Error(`required source workflow step ${expected.name} / ${requiredStepName} did not pass`);
+      }
+    }
+    return Object.freeze({
+      id: positiveInt(actual.id, `sourceWorkflowGateEvidence.jobs[${index}].id`),
+      name: expected.name,
+      scope: expected.scope,
+      expectedConclusion: expected.expectedConclusion,
+      status,
+      conclusion,
+      requiredSteps: expected.requiredSteps,
+      steps: Object.freeze(steps)
+    });
+  });
+  const canonical = { runId: config.sourceWorkflow.runId, jobs };
+  const expectedFingerprint = fingerprint(JSON.stringify(canonical));
+  const suppliedFingerprint = fingerprintValue(value.fingerprint, 'sourceWorkflowGateEvidence.fingerprint');
+  if (suppliedFingerprint !== expectedFingerprint) throw new Error('source workflow gate evidence fingerprint is invalid');
+  return Object.freeze({ ...canonical, fingerprint: suppliedFingerprint });
 }
 
 export function normalizeMergePreviewCommitEvidence(raw, configInput) {
@@ -155,13 +240,13 @@ export function normalizeTargetDiffEvidence(raw, changedPaths) {
   const evidencePaths = value.paths.map((entry, index) => string(entry, `diffEvidence.paths[${index}]`));
   if (!sameStringArray(evidencePaths, normalizedPaths)) throw new Error('diff evidence paths do not exactly match changedPaths inventory');
   if (positiveInt(value.fileCount, 'diffEvidence.fileCount') !== normalizedPaths.length) throw new Error('diff evidence fileCount does not match changedPaths inventory');
-  if (value.allPatchesPresent !== true) throw new Error('diff evidence requires a patch for every changed file');
+  if (value.allSnapshotsPresent !== true) throw new Error('diff evidence requires complete base/head snapshots for every changed file');
   return Object.freeze({
     fileCount: normalizedPaths.length,
     paths: Object.freeze(evidencePaths),
-    allPatchesPresent: true,
+    allSnapshotsPresent: true,
     inventoryFingerprint: fingerprintValue(value.inventoryFingerprint, 'diffEvidence.inventoryFingerprint'),
-    diffFingerprint: fingerprintValue(value.diffFingerprint, 'diffEvidence.diffFingerprint')
+    snapshotFingerprint: fingerprintValue(value.snapshotFingerprint, 'diffEvidence.snapshotFingerprint')
   });
 }
 
@@ -192,11 +277,12 @@ export function assertTargetPullRequest(configInput, pullRequest) {
   return Object.freeze({ config, pullRequest: pr });
 }
 
-export function assertTargetSourceWorkflow(configInput, pullRequest, sourceWorkflowRun, sourceWorkflowDefinition, sourceWorkflowBindingEvidence) {
+export function assertTargetSourceWorkflow(configInput, pullRequest, sourceWorkflowRun, sourceWorkflowDefinition, sourceWorkflowBindingEvidence, sourceWorkflowGateEvidence) {
   const { config, pullRequest: pr } = assertTargetPullRequest(configInput, pullRequest);
   const run = object(sourceWorkflowRun, 'sourceWorkflowRun');
   const definition = object(sourceWorkflowDefinition, 'sourceWorkflowDefinition');
   const binding = normalizeTargetSourceBindingEvidence(sourceWorkflowBindingEvidence, config);
+  const gates = normalizeTargetSourceGateEvidence(sourceWorkflowGateEvidence, config);
   if (positiveInt(run.id, 'sourceWorkflowRun.id') !== config.sourceWorkflow.runId) throw new Error('source workflow run id does not match target audit config');
   if (positiveInt(run.workflow_id, 'sourceWorkflowRun.workflow_id') !== config.sourceWorkflow.workflowId) throw new Error('source workflow id does not match target audit config');
   if (string(run.name, 'sourceWorkflowRun.name') !== config.sourceWorkflow.name) throw new Error('source workflow name does not match target audit config');
@@ -216,7 +302,7 @@ export function assertTargetSourceWorkflow(configInput, pullRequest, sourceWorkf
     const conflicting = run.pull_requests.some((candidate) => Number(candidate.number) !== config.pullRequestNumber);
     if (conflicting) throw new Error('source workflow run contains a conflicting pull request association');
   }
-  return Object.freeze({ config, pullRequest: pr, run, definition, binding });
+  return Object.freeze({ config, pullRequest: pr, run, definition, binding, gates });
 }
 
 export function buildTargetCriticalAuditRequest({
@@ -226,6 +312,7 @@ export function buildTargetCriticalAuditRequest({
   sourceWorkflowRun,
   sourceWorkflowDefinition,
   sourceWorkflowBindingEvidence,
+  sourceWorkflowGateEvidence,
   mergePreviewCommitEvidence,
   diffEvidence,
   candidateWorkflowEvidence,
@@ -236,12 +323,13 @@ export function buildTargetCriticalAuditRequest({
   implementationAttempt = 1,
   priorFindings = []
 } = {}) {
-  const { config, pullRequest: pr, run, binding } = assertTargetSourceWorkflow(
+  const { config, pullRequest: pr, run, binding, gates } = assertTargetSourceWorkflow(
     configInput,
     pullRequest,
     sourceWorkflowRun,
     sourceWorkflowDefinition,
-    sourceWorkflowBindingEvidence
+    sourceWorkflowBindingEvidence,
+    sourceWorkflowGateEvidence
   );
   const runtime = normalizeTargetAuditRuntimeEvidence(auditRuntimeEvidence);
   const mergePreview = normalizeMergePreviewCommitEvidence(mergePreviewCommitEvidence, config);
@@ -256,18 +344,8 @@ export function buildTargetCriticalAuditRequest({
   if (normalizedImplementationAttempt > policy.maxImplementationAttempts) throw new Error('target implementation attempt exceeds CRITICAL implementation budget');
   if (!Array.isArray(priorFindings)) throw new Error('priorFindings must be an array');
 
-  const candidateWorkflow = fileEvidence(
-    candidateWorkflowEvidence,
-    'candidateWorkflowEvidence',
-    config.sourceWorkflow.path,
-    config.materialHeadSha
-  );
-  const baseWorkflow = fileEvidence(
-    baseWorkflowEvidence,
-    'baseWorkflowEvidence',
-    config.sourceWorkflow.path,
-    config.baseSha
-  );
+  const candidateWorkflow = fileEvidence(candidateWorkflowEvidence, 'candidateWorkflowEvidence', config.sourceWorkflow.path, config.materialHeadSha);
+  const baseWorkflow = fileEvidence(baseWorkflowEvidence, 'baseWorkflowEvidence', config.sourceWorkflow.path, config.baseSha);
   const candidateWorkflowFingerprint = fingerprint(candidateWorkflow.content);
   const baseWorkflowFingerprint = fingerprint(baseWorkflow.content);
   const classifierFingerprint = fingerprint(classifierSource);
@@ -279,6 +357,17 @@ export function buildTargetCriticalAuditRequest({
     blobSha: baseWorkflow.blobSha,
     fingerprint: baseWorkflowFingerprint
   });
+
+  const checks = gates.jobs.map((job) => Object.freeze({
+    name: job.name,
+    required: true,
+    scope: job.scope,
+    subjectSha: job.scope === 'merge-preview' ? config.mergePreviewSha : config.materialHeadSha,
+    status: job.status,
+    conclusion: job.conclusion,
+    workflowRunId: config.sourceWorkflow.runId,
+    workflowEvidence
+  }));
 
   const baseRequest = buildAuditRequest({
     schemaVersion: 1,
@@ -298,25 +387,7 @@ export function buildTargetCriticalAuditRequest({
       version: 'target-candidate-risk-profile-source-sha256',
       fingerprint: classifierFingerprint
     },
-    checks: [{
-      name: config.sourceWorkflow.name,
-      required: true,
-      scope: 'material-head',
-      subjectSha: config.materialHeadSha,
-      status: run.status,
-      conclusion: run.conclusion,
-      workflowRunId: config.sourceWorkflow.runId,
-      workflowEvidence
-    }, {
-      name: config.sourceWorkflow.bindingJobName,
-      required: true,
-      scope: 'merge-preview',
-      subjectSha: config.mergePreviewSha,
-      status: binding.status,
-      conclusion: binding.conclusion,
-      workflowRunId: config.sourceWorkflow.runId,
-      workflowEvidence
-    }],
+    checks,
     changedPaths: normalizedChangedPaths,
     implementationAttempt: normalizedImplementationAttempt,
     implementer: {
@@ -351,6 +422,7 @@ export function buildTargetCriticalAuditRequest({
         path: config.sourceWorkflow.path,
         event: config.sourceWorkflow.event,
         corroborationEvidence: binding,
+        gateEvidence: gates,
         candidate: Object.freeze({
           ref: candidateWorkflow.ref,
           blobSha: candidateWorkflow.blobSha,
