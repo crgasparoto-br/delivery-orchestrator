@@ -49,4 +49,6 @@ Work only on **${{ github.event.inputs.target_repository }} issue #${{ github.ev
 
 Risk profile: **critical**. AI provider: **copilot**.
 
+Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts unless the issue explicitly targets them or a deterministic check requires them. Prefer targeted search in issue-relevant source/test/docs paths; do not inventory the entire repository before editing.
+
 Read the target issue and local repository instructions; identify the concrete cause; implement the smallest complete fix; add regression coverage; run the strongest relevant local validation that is practical. Deterministic CI remains the full-regression authority. Never weaken workflow security, expose credentials, bypass protected files, broaden repository access, merge the PR, or close the issue directly. Create exactly one PR with `Closes #${{ github.event.inputs.target_issue }}` and list only validations actually executed. If blocked, report rather than bypass.
