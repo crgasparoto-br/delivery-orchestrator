@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solverit.local/schemas/delivery-v2-metrics.schema.json",
+  "title": "Delivery V2 Metrics Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "deliveryId", "repository", "pullRequestNumber", "materialHeadSha",
+    "risk", "provider", "classifier", "providerCalls", "attempts", "aiUsage", "providerCost",
+    "durationsMs", "terminalReason", "change", "escalated", "evidenceRefs"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "deliveryId": { "type": "string", "minLength": 1 },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    "issueNumber": { "type": ["integer", "null"], "minimum": 1 },
+    "pullRequestNumber": { "type": "integer", "minimum": 1 },
+    "materialHeadSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+    "risk": { "enum": ["fast", "standard", "critical"] },
+    "provider": { "type": "string", "minLength": 1 },
+    "classifier": { "type": "object" },
+    "providerCalls": { "type": "integer", "minimum": 0 },
+    "attempts": { "type": "object" },
+    "aiUsage": { "type": "object" },
+    "providerCost": { "type": "object" },
+    "durationsMs": { "type": "object" },
+    "terminalReason": { "type": "string", "minLength": 1 },
+    "change": { "type": "object" },
+    "escalated": { "type": "boolean" },
+    "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+  }
+}

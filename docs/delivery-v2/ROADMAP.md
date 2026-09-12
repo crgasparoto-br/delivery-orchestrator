@@ -155,6 +155,8 @@ Exit condition: another process/chat can resume the same PR using repository/Git
 
 ### DV2-011 — Observability and cost accounting
 
+Status: **implemented; validation pending measured live V2 deliveries**.
+
 Can progress in parallel with DV2-016.
 
 Required work:
@@ -167,7 +169,15 @@ Required work:
 - terminal reason;
 - benchmark reporting by risk/repository/provider.
 
-Exit condition: V2 performance/cost comparisons no longer depend on manual timing from chat transcripts.
+Implementation evidence:
+
+- versioned metrics records capture repository/issue/PR/risk/provider/classifier, provider calls, attempts, AI usage, safe provider cost, CI/audit/end-to-end timing, terminal reason, diff size and escalation;
+- unavailable tokens/cost remain explicit `null` rather than invented zeroes; provider cost rejects unexpected fields that could carry secrets;
+- idempotent metrics storage keys records by repository/PR/material SHA;
+- summaries provide cross-repository grouping by repository/risk/provider with averages, p50/p95, attempts, calls, escalations and cost totals by currency;
+- baseline comparison derives reduction and speedup from measured timings; `npm run metrics:v2 -- --metrics-file ...` reports stored evidence.
+
+Exit condition: V2 performance/cost comparisons no longer depend on manual timing from chat transcripts. Live multi-delivery evidence still required before `validated`.
 
 ## Phase E — prove the design in real repositories
 
@@ -261,8 +271,8 @@ That means every required item below is terminal:
 
 Unless a production incident changes priority, continue in this order:
 
-1. DV2-011
-2. validate DV2-016 with a live cross-process resume exercise
+1. validate DV2-016 with a live cross-process resume exercise
+2. validate DV2-011 with measured live deliveries
 3. validate DV2-008 with a real CRITICAL pilot
 4. validate DV2-009 with bounded CI/audit remediation evidence
 5. validate DV2-010 with a live exact-head release exercise
