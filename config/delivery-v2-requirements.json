@@ -309,11 +309,23 @@
     {
       "id": "DV2-014",
       "title": "V1 and nested-Skill retirement",
-      "status": "planned",
+      "status": "validated",
       "requiredForV2Default": true,
-      "summary": "Disable legacy delivery-request loops and remove normal-path dependence on nested Skills only after V2 audit, release, observability and both pilots are validated.",
-      "implementationRefs": [],
-      "validationRefs": [],
+      "summary": "Delivery V2 is the only active normal-path entrypoint; the legacy delivery-request queue, recursive max-cycle controller, nested-Skill orchestration and mandatory V1 handoff/certificate path are retired, while historical evidence/catalog snapshots remain traceability-only.",
+      "implementationRefs": [
+        "file:src/cli.mjs",
+        "file:package.json",
+        "file:README.md",
+        "file:docs/SECURITY.md",
+        "file:docs/delivery-v2/evidence/dv2-014-v1-retirement.json",
+        "github:delivery-orchestrator#58"
+      ],
+      "validationRefs": [
+        "file:test/v2-retirement.test.mjs",
+        "file:docs/delivery-v2/evidence/dv2-014-v1-retirement.json",
+        "commit:298ec6b1af23f9ddc14c95447926364a2150e753",
+        "github-actions:34704146442"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },
