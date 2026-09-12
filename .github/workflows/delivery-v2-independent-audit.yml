@@ -54,6 +54,7 @@ jobs:
 
             const lines = String(pr.body || '').split(/\r?\n/).map((line) => line.trim());
             const criticalMarked = lines.includes('DV2-AUDIT-PILOT: critical');
+            const marked = criticalMarked;
             const targetMarkers = lines
               .map((line) => line.match(/^DV2-TARGET-AUDIT:\s*([a-z0-9][a-z0-9._-]*)$/))
               .filter(Boolean)
@@ -67,7 +68,7 @@ jobs:
               core.setFailed('audit trigger PR must contain at most one DV2-TARGET-AUDIT marker');
               return;
             }
-            if (criticalMarked) core.setOutput('should_audit', 'true');
+            if (marked) core.setOutput('should_audit', sameRepository && marked ? 'true' : 'false');
             if (targetMarkers.length === 1) {
               core.setOutput('should_target_audit', 'true');
               core.setOutput('target_audit_id', targetMarkers[0]);
