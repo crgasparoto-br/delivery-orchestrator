@@ -62,7 +62,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-      issues: write
+      issues: read
     env:
       TARGET_REPOSITORY: ${{ github.repository }}
       TARGET_ISSUE: '27'
@@ -140,6 +140,7 @@ jobs:
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
           AUDIT_RESULT_PATH: ${{ env.AUDIT_RESULT_PATH }}
         with:
+          github-token: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
           script: |
             const fs = require('node:fs');
             const payload = JSON.parse(fs.readFileSync(process.env.AUDIT_RESULT_PATH, 'utf8'));
