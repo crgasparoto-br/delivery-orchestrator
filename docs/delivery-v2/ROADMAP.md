@@ -157,7 +157,7 @@ Exit condition: another process/chat can resume the same PR using repository/Git
 
 ### DV2-011 — Observability and cost accounting
 
-Status: **implemented; validation pending measured live V2 deliveries**.
+Status: **validated**.
 
 Can progress in parallel with DV2-016.
 
@@ -179,7 +179,16 @@ Implementation evidence:
 - summaries provide cross-repository grouping by repository/risk/provider with averages, p50/p95, attempts, calls, escalations and cost totals by currency;
 - baseline comparison derives reduction and speedup from measured timings; `npm run metrics:v2 -- --metrics-file ...` reports stored evidence.
 
-Exit condition: V2 performance/cost comparisons no longer depend on manual timing from chat transcripts. Live multi-delivery evidence still required before `validated`.
+Validation evidence:
+
+- `docs/delivery-v2/evidence/dv2-011-live-metrics.json` records two real merged target deliveries with exact material SHA, classifier fingerprint, risk, GitHub Actions timing, PR end-to-end timing and diff size;
+- `controle_calorias#1069` was observed as CRITICAL on `0f0cf57ab5c541093d2b7928b3cdac998620ee1e`; Actions run `34664118578` completed green with 567,000 ms CI execution;
+- `training-system#435` was observed as CRITICAL on `ae0fade7be03c6c66f00fbd605bd85d9259aa622`; Actions run `34664164768` completed green with 993,000 ms CI execution;
+- both locks carry canonical classifier fingerprint `35914f89844e0a6c35a436af1a1856e6a2b37ab7f5e0f3d3c1749e7a89d3ad24`;
+- unavailable AI usage/cost is represented as null/unavailable rather than reconstructed from chat history;
+- `test/v2-metrics-live-evidence.test.mjs` normalizes those records and proves cross-repository summaries through the production metrics implementation; PR #41 and CI run `34669122471` validated the evidence file itself.
+
+Exit condition: V2 performance/cost comparisons no longer depend on manual timing from chat transcripts. **Satisfied.**
 
 ## Phase E — prove the design in real repositories
 
@@ -273,11 +282,10 @@ That means every required item below is terminal:
 
 Unless a production incident changes priority, continue in this order:
 
-1. validate DV2-011 with measured live deliveries
-2. validate DV2-008 with a real CRITICAL pilot
-3. validate DV2-009 with bounded CI/audit remediation evidence
-4. validate DV2-010 with a live exact-head release exercise
-5. close DV2-013
-6. DV2-014
+1. validate DV2-008 with a real CRITICAL pilot
+2. validate DV2-009 with bounded CI/audit remediation evidence
+3. validate DV2-010 with a live exact-head release exercise
+4. close DV2-013
+5. DV2-014
 
 Every PR should name the `DV2-*` IDs it advances and update the manifest only when the evidence justifies the new status.
