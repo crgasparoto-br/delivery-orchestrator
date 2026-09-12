@@ -43,7 +43,7 @@ Exit condition: the core policy and target-repository policy contract make the a
 
 ### DV2-007 — Versioned classifier distribution
 
-Status: **implemented; rollout pending target merges**.
+Status: **validated**.
 
 Depends on DV2-006.
 
@@ -60,19 +60,22 @@ Required work:
 - orchestrator-driven update PR flow;
 - migrate `controle_calorias` and `training-system` away from hand-maintained classifier copies.
 
-Current rollout evidence:
+Terminal validation evidence:
 
 - orchestrator generator/distribution merged by PR #31;
 - target-specific `RoleGuard` promotion preserved by PR #32;
-- `controle_calorias` migration: PR #1069, generated package pinned to orchestrator commit `1d6185de16e3a30378a810132bb4e3cf9483f98c`;
-- `training-system` migration: PR #435, generated package pinned to the same orchestrator commit;
-- do not promote DV2-007 to `validated` until both target repositories actually consume the generated package after merge.
+- `controle_calorias` PR #1069 merged into `develop` as `6507bdc0dc14ebc744de75393e5dc0c6bda8b112`;
+- `training-system` PR #435 merged into `develop` as `0fba4d2870e087775433b844e22f04c0daa84bcf`;
+- both merged packages are pinned to orchestrator commit `1d6185de16e3a30378a810132bb4e3cf9483f98c`;
+- both locks carry canonical classifier fingerprint `35914f89844e0a6c35a436af1a1856e6a2b37ab7f5e0f3d3c1749e7a89d3ad24`.
 
-Exit condition: public and private target repositories consume traceable generated policy without directly requiring private reusable actions.
+Exit condition: public and private target repositories consume traceable generated policy without directly requiring private reusable actions. **Satisfied.**
 
 ## Phase C — replace V1 audit/remediation ceremony
 
 ### DV2-008 — GitHub-native independent audit
+
+Status: **implemented; validation pending CRITICAL pilot**.
 
 Depends on DV2-006 and the exact evidence contract.
 
@@ -89,6 +92,8 @@ Required work:
 Exit condition: a CRITICAL pilot can be approved/rejected on its actual candidate without requiring `.audit/entregar-issue/handoff-ready.json`.
 
 ### DV2-009 — Bounded remediation state machine
+
+Status: **implemented; validation pending bounded failure exercise**.
 
 Depends on DV2-008 findings contract.
 
@@ -166,7 +171,7 @@ Existing evidence:
 - real FAST accessibility change executed related tests instead of the full 24-shard suite;
 - observed FAST runtime ~128 seconds versus ~1,255-second historical full baseline.
 
-Follow-up after DV2-007: replace the manually localized classifier with the generated versioned package. PR #1069 carries that migration and DV2-007 remains non-terminal until it is merged.
+Follow-up after DV2-007: completed. PR #1069 is merged in `develop` with the generated versioned package active.
 
 ### DV2-013 — `training-system`
 
@@ -174,14 +179,11 @@ Status: **implemented, not rolled out**.
 
 Required closure:
 
-- finish classifier hardening findings from PR #435;
-- correct operational visual-artifact documentation;
-- pass full CRITICAL gate on exact head;
-- receive V2-compatible independent approval;
-- merge manually/human-authorized;
+- record the disposition of any remaining independent-audit findings from PR #435 against the merged candidate;
 - run one real low-risk UI FAST PR;
-- record duration and skipped/executed gates;
-- migrate to generated classifier package after DV2-007; this migration is included in PR #435.
+- record duration and skipped/executed gates.
+
+Generated classifier package migration is complete in merged PR #435.
 
 Do not mark rolled-out based only on a CRITICAL migration PR.
 
@@ -248,13 +250,12 @@ That means every required item below is terminal:
 
 Unless a production incident changes priority, continue in this order:
 
-1. complete DV2-007 rollout by merging the generated packages in both target repositories and recording terminal evidence;
-2. DV2-008
-3. DV2-009
-4. DV2-010
-5. DV2-016
-6. DV2-011
-7. close DV2-013
-8. DV2-014
+1. DV2-010
+2. DV2-016
+3. DV2-011
+4. validate DV2-008 with a real CRITICAL pilot
+5. validate DV2-009 with bounded CI/audit remediation evidence
+6. close DV2-013
+7. DV2-014
 
 Every PR should name the `DV2-*` IDs it advances and update the manifest only when the evidence justifies the new status.
