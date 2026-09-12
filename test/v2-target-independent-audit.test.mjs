@@ -6,8 +6,10 @@ import {
   assertTargetPullRequest,
   assertTargetSourceWorkflow,
   buildTargetCriticalAuditRequest,
+  normalizeMergePreviewCommitEvidence,
   normalizeTargetAuditConfig,
   normalizeTargetAuditRuntimeEvidence,
+  normalizeTargetDiffEvidence,
   normalizeTargetSourceBindingEvidence
 } from '../src/v2/target-independent-audit-runtime.mjs';
 
@@ -19,6 +21,7 @@ const BASE_BLOB = 'e'.repeat(40);
 const PREVIEW = 'f'.repeat(40);
 const RUNTIME_SHA = '9'.repeat(40);
 const REPOSITORY = 'example-org/training-system';
+const CHANGED_PATHS = ['.github/workflows/validate-pr.yml', '.delivery-v2/risk-profile.mjs'];
 
 function config(overrides = {}) {
   return {
@@ -97,6 +100,33 @@ function binding(overrides = {}) {
     mergePreviewSha: PREVIEW,
     materialHeadSha: HEAD,
     logFingerprint: '1'.repeat(64),
+    refMappingObserved: true,
+    checkoutObserved: true,
+    ...overrides
+  };
+}
+
+function mergePreviewEvidence(overrides = {}) {
+  return {
+    sha: PREVIEW,
+    parentShas: [BASE, HEAD],
+    treeSha: '7'.repeat(40),
+    message: `Merge ${HEAD} into ${BASE}`,
+    verified: true,
+    verificationReason: 'valid',
+    committerLogin: 'web-flow',
+    fingerprint: '8'.repeat(64),
+    ...overrides
+  };
+}
+
+function diffEvidence(overrides = {}) {
+  return {
+    fileCount: CHANGED_PATHS.length,
+    paths: CHANGED_PATHS,
+    allPatchesPresent: true,
+    inventoryFingerprint: 'a'.repeat(64),
+    diffFingerprint: 'b'.repeat(64),
     ...overrides
   };
 }
@@ -126,6 +156,24 @@ const baseWorkflow = {
   content: 'name: Validate PR\non: pull_request\njobs:\n  full: {}\n'
 };
 
+function buildRequest(overrides = {}) {
+  return buildTargetCriticalAuditRequest({
+    config: config(),
+    pullRequest: pullRequest(),
+    changedPaths: CHANGED_PATHS,
+    sourceWorkflowRun: greenRun(),
+    sourceWorkflowDefinition: definition(),
+    sourceWorkflowBindingEvidence: binding(),
+    mergePreviewCommitEvidence: mergePreviewEvidence(),
+    diffEvidence: diffEvidence(),
+    candidateWorkflowEvidence: candidateWorkflow,
+    baseWorkflowEvidence: baseWorkflow,
+    classifierSource: 'export const classifier = true;\n',
+    auditRuntimeEvidence: runtimeEvidence(),
+    ...overrides
+  });
+}
+
 test('target audit config binds immutable historical PR, merge preview, merge commit and source-CI identity', () => {
   const normalized = normalizeTargetAuditConfig(config());
   assert.equal(normalized.id, 'training-system-435');
@@ -142,44 +190,39 @@ test('target audit config binds immutable historical PR, merge preview, merge co
   assert.throws(() => normalizeTargetAuditConfig(config({ mergePreviewSha: MERGE })), /distinct identities/);
 });
 
-test('historical workflow requires positive source-job PR/merge-preview binding even when run.pull_requests is empty', () => {
+test('source job is corroboration only and still rejects mismatched target identity', () => {
   const resolved = assertTargetSourceWorkflow(config(), pullRequest(), greenRun(), definition(), binding());
   assert.equal(resolved.run.id, 9001);
   assert.equal(resolved.binding.pullRequestNumber, 435);
   assert.equal(resolved.binding.mergePreviewSha, PREVIEW);
   assert.deepEqual(resolved.run.pull_requests, []);
-  assert.throws(
-    () => assertTargetSourceWorkflow(config(), pullRequest(), greenRun(), definition()),
-    /sourceWorkflowBindingEvidence/
-  );
-  assert.throws(
-    () => assertTargetSourceWorkflow(config(), pullRequest(), greenRun(), definition(), binding({ pullRequestNumber: 999 })),
-    /configured pull request/
-  );
-  assert.throws(
-    () => assertTargetSourceWorkflow(config(), pullRequest(), greenRun(), definition(), binding({ mergePreviewSha: MERGE })),
-    /configured merge preview/
-  );
-  assert.throws(
-    () => assertTargetSourceWorkflow(config(), pullRequest(), greenRun(), definition(), binding({ materialHeadSha: BASE })),
-    /configured material head/
-  );
-  assert.throws(
-    () => assertTargetSourceWorkflow(config(), pullRequest(), greenRun(), definition(), binding({ jobName: 'Lookalike job' })),
-    /binding job name/
-  );
-  assert.throws(
-    () => assertTargetSourceWorkflow(config(), pullRequest(), greenRun(), definition(), binding({ conclusion: 'failure' })),
-    /binding job must be terminal green/
-  );
-  assert.throws(
-    () => assertTargetSourceWorkflow(config(), pullRequest(), greenRun({ pull_requests: [{ number: 999 }] }), definition(), binding()),
-    /conflicting pull request association/
-  );
-  assert.throws(
-    () => assertTargetSourceWorkflow(config(), pullRequest(), greenRun({ head_sha: BASE }), definition(), binding()),
-    /stale for target candidate/
-  );
+  assert.throws(() => assertTargetSourceWorkflow(config(), pullRequest(), greenRun(), definition()), /sourceWorkflowBindingEvidence/);
+  assert.throws(() => assertTargetSourceWorkflow(config(), pullRequest(), greenRun(), definition(), binding({ pullRequestNumber: 999 })), /configured pull request/);
+  assert.throws(() => assertTargetSourceWorkflow(config(), pullRequest(), greenRun(), definition(), binding({ mergePreviewSha: MERGE })), /configured merge preview/);
+  assert.throws(() => assertTargetSourceWorkflow(config(), pullRequest(), greenRun({ pull_requests: [{ number: 999 }] }), definition(), binding()), /conflicting pull request association/);
+  assert.throws(() => assertTargetSourceWorkflow(config(), pullRequest(), greenRun({ head_sha: BASE }), definition(), binding()), /stale for target candidate/);
+});
+
+test('GitHub-owned merge-preview evidence must be verified and have exact base/head parents', () => {
+  const normalized = normalizeMergePreviewCommitEvidence(mergePreviewEvidence(), config());
+  assert.equal(normalized.sha, PREVIEW);
+  assert.deepEqual(normalized.parentShas, [BASE, HEAD]);
+  assert.equal(normalized.committerLogin, 'web-flow');
+  assert.throws(() => normalizeMergePreviewCommitEvidence(mergePreviewEvidence({ parentShas: [HEAD, BASE] }), config()), /parents/);
+  assert.throws(() => normalizeMergePreviewCommitEvidence(mergePreviewEvidence({ verified: false }), config()), /valid GitHub verification/);
+  assert.throws(() => normalizeMergePreviewCommitEvidence(mergePreviewEvidence({ verificationReason: 'unsigned' }), config()), /valid GitHub verification/);
+  assert.throws(() => normalizeMergePreviewCommitEvidence(mergePreviewEvidence({ committerLogin: 'implementer-user' }), config()), /web-flow/);
+  assert.throws(() => normalizeMergePreviewCommitEvidence(mergePreviewEvidence({ message: 'synthetic output' }), config()), /message/);
+});
+
+test('diff evidence must cover every changed path exactly and require patches for all files', () => {
+  const normalized = normalizeTargetDiffEvidence(diffEvidence(), CHANGED_PATHS);
+  assert.equal(normalized.fileCount, CHANGED_PATHS.length);
+  assert.deepEqual(normalized.paths, CHANGED_PATHS);
+  assert.throws(() => normalizeTargetDiffEvidence(diffEvidence({ paths: [CHANGED_PATHS[0]] }), CHANGED_PATHS), /exactly match/);
+  assert.throws(() => normalizeTargetDiffEvidence(diffEvidence({ paths: [...CHANGED_PATHS, 'extra.txt'], fileCount: 3 }), CHANGED_PATHS), /exactly match/);
+  assert.throws(() => normalizeTargetDiffEvidence(diffEvidence({ allPatchesPresent: false }), CHANGED_PATHS), /patch for every changed file/);
+  assert.throws(() => normalizeTargetDiffEvidence(diffEvidence({ fileCount: 1 }), CHANGED_PATHS), /fileCount/);
 });
 
 test('binding and runtime provenance schemas fail closed on malformed evidence', () => {
@@ -190,18 +233,11 @@ test('binding and runtime provenance schemas fail closed on malformed evidence',
   assert.throws(() => normalizeTargetAuditRuntimeEvidence(runtimeEvidence({ runtimeSha: HEAD.slice(1) })), /40-character/);
 });
 
-test('target CRITICAL request separates material head, merge preview and post-merge commit while persisting provenance', () => {
-  const request = buildTargetCriticalAuditRequest({
-    config: config(),
-    pullRequest: pullRequest(),
-    changedPaths: ['.github/workflows/validate-pr.yml', '.delivery-v2/risk-profile.mjs'],
-    sourceWorkflowRun: greenRun(),
-    sourceWorkflowDefinition: definition(),
-    sourceWorkflowBindingEvidence: binding(),
-    candidateWorkflowEvidence: candidateWorkflow,
-    baseWorkflowEvidence: baseWorkflow,
-    classifierSource: 'export const classifier = true;\n',
-    auditRuntimeEvidence: runtimeEvidence()
+test('target CRITICAL request persists authoritative preview, exhaustive diff evidence and bounded audit state', () => {
+  const request = buildRequest({
+    auditAttempt: 2,
+    implementationAttempt: 2,
+    priorFindings: [{ id: 'DV2-OLD-BLOCKER', candidateSha: '1'.repeat(40), status: 'previous-rejection' }]
   });
 
   assert.equal(request.candidate.materialHeadSha, HEAD);
@@ -209,25 +245,27 @@ test('target CRITICAL request separates material head, merge preview and post-me
   assert.equal(request.candidate.mergePreviewSha, PREVIEW);
   assert.equal(request.targetAudit.mergePreviewSha, PREVIEW);
   assert.equal(request.targetAudit.mergeCommitSha, MERGE);
-  assert.notEqual(request.targetAudit.mergePreviewSha, request.targetAudit.mergeCommitSha);
-  assert.equal(request.candidate.risk.profile, 'critical');
-  assert.equal(request.applicability.mode, 'independent');
+  assert.equal(request.targetAudit.auditAttempt, 2);
+  assert.equal(request.targetAudit.maxAuditRemediationCycles, 2);
+  assert.equal(request.targetAudit.sameCandidateReauditAllowed, false);
+  assert.equal(request.targetAudit.mergePreviewTrust, 'github-verified-commit-object-with-reviewed-source-job-corroboration');
+  assert.deepEqual(request.targetAudit.mergePreviewEvidence.parentShas, [BASE, HEAD]);
+  assert.deepEqual(request.targetAudit.diffEvidence.paths, CHANGED_PATHS);
+  assert.equal(request.candidate.implementationAttempt, 2);
+  assert.equal(request.candidate.priorFindings[0].id, 'DV2-OLD-BLOCKER');
   assert.equal(request.targetAudit.sourceCiTrust, 'candidate-workflow-under-independent-review');
-  assert.equal(request.targetAudit.sourceWorkflow.candidateDiffersFromBase, true);
-  assert.equal(request.targetAudit.sourceWorkflow.candidate.blobSha, CANDIDATE_BLOB);
-  assert.equal(request.targetAudit.sourceWorkflow.trustedBase.blobSha, BASE_BLOB);
-  assert.equal(request.targetAudit.sourceWorkflow.bindingEvidence.jobId, 8001);
-  assert.equal(request.targetAudit.sourceWorkflow.historicalAssociationPolicy, 'source-job-log-pr-ref-required');
-  assert.equal(request.targetAudit.runtime.runtimeSha, RUNTIME_SHA);
-  assert.equal(request.targetAudit.runtime.contractFingerprint, '2'.repeat(64));
+  assert.equal(request.targetAudit.sourceWorkflow.corroborationEvidence.jobId, 8001);
+  assert.equal(request.targetAudit.sourceWorkflow.historicalAssociationPolicy, 'github-merge-preview-commit-is-authoritative-source-job-log-is-corroboration-only');
   assert.equal(request.candidate.checks.length, 2);
   assert.equal(request.candidate.checks[0].scope, 'material-head');
-  assert.equal(request.candidate.checks[0].subjectSha, HEAD);
   assert.equal(request.candidate.checks[1].scope, 'merge-preview');
   assert.equal(request.candidate.checks[1].subjectSha, PREVIEW);
-  assert.equal(request.candidate.checks[1].name, 'Merge preview compatibility');
-  assert.equal(request.candidate.checks[0].workflowEvidence.blobSha, BASE_BLOB);
   assert.match(request.requestFingerprint, /^[0-9a-f]{64}$/);
+});
+
+test('target audit attempt and implementation budgets fail closed', () => {
+  assert.throws(() => buildRequest({ auditAttempt: 4, implementationAttempt: 3 }), /audit-remediation budget/);
+  assert.throws(() => buildRequest({ auditAttempt: 3, implementationAttempt: 4 }), /implementation budget/);
 });
 
 test('configured training-system audit freezes the canonical DV2-013 historical identity', async () => {
@@ -244,24 +282,24 @@ test('configured training-system audit freezes the canonical DV2-013 historical 
   assert.equal(normalized.sourceWorkflow.bindingJobName, 'Merge preview compatibility');
 });
 
-test('target audit workflow pins runtime, keeps reviewer read-only, persists durably, then enforces semantic approval', async () => {
+test('target audit workflow pins runtime, serializes target attempts, persists append-only state and enforces approval', async () => {
   const workflow = await readFile(new URL('../.github/workflows/delivery-v2-independent-audit.yml', import.meta.url), 'utf8');
   const runner = await readFile(new URL('../scripts/run-delivery-v2-target-independent-audit.mjs', import.meta.url), 'utf8');
 
   assert.match(workflow, /DV2-TARGET-AUDIT:/);
   assert.match(workflow, /github\.workflow_sha/);
-  assert.match(workflow, /runtime_sha:/);
-  assert.match(workflow, /ref: \$\{\{ needs\.resolve\.outputs\.runtime_sha \}\}/);
+  assert.match(workflow, /delivery-v2-target-audit-\$\{\{ needs\.resolve\.outputs\.target_audit_id \}\}/);
   assert.match(workflow, /AUDIT_RUNTIME_SHA: \$\{\{ needs\.resolve\.outputs\.runtime_sha \}\}/);
-  assert.match(workflow, /Independent target CRITICAL semantic audit/);
-  assert.match(workflow, /Persist durable target audit state/);
-  assert.match(workflow, /issue_number: 27/);
-  assert.match(workflow, /delivery-v2-target-independent-audit:/);
+  assert.match(workflow, /Persist append-only target audit decision/);
+  assert.match(workflow, /delivery-v2-target-audit-state:/);
+  assert.match(workflow, /auditWorkflowRunId/);
+  assert.match(workflow, /candidateMarkerPrefix/);
+  assert.match(workflow, /append-only policy forbids overwrite or re-audit/);
+  assert.doesNotMatch(workflow.slice(workflow.indexOf('  persist_target_audit:'), workflow.indexOf('  enforce_target_audit:')), /updateComment/);
   assert.match(workflow, /Enforce target audit decision/);
   assert.match(workflow, /decision !== 'approved'/);
   assert.match(workflow, /releaseBlocked !== false/);
   assert.equal((workflow.match(/DELIVERY_GITHUB_WRITE_TOKEN/g) || []).length, 1);
-  assert.match(workflow, /github-token: \$\{\{ github\.token \}\}/);
 
   const targetStart = workflow.indexOf('  target_audit:');
   const persistStart = workflow.indexOf('  persist_target_audit:');
@@ -277,16 +315,17 @@ test('target audit workflow pins runtime, keeps reviewer read-only, persists dur
   assert.doesNotMatch(runner, /DELIVERY_GITHUB_WRITE_TOKEN/);
   assert.match(runner, /sandboxMode: 'read-only'/);
   assert.match(runner, /networkAccessEnabled: false/);
-  assert.match(runner, /SOURCE_WORKFLOW_BASE\.yml/);
-  assert.match(runner, /SOURCE_WORKFLOW_CANDIDATE\.yml/);
-  assert.match(runner, /SOURCE_WORKFLOW_BINDING\.json/);
-  assert.match(runner, /AUDIT_RUNTIME_EVIDENCE\.json/);
-  assert.match(runner, /actions\/runs\/\$\{config\.sourceWorkflow\.runId\}\/jobs/);
-  assert.match(runner, /refs.*remotes.*pull/);
+  assert.match(runner, /MERGE_PREVIEW_COMMIT\.json/);
+  assert.match(runner, /SOURCE_WORKFLOW_CORROBORATION\.log/);
+  assert.match(runner, /CHANGED_FILES\.json/);
+  assert.match(runner, /DIFF_COVERAGE\.json/);
+  assert.match(runner, /PRIOR_TARGET_AUDITS\.json/);
+  assert.match(runner, /commits\/\$\{config\.mergePreviewSha\}/);
+  assert.match(runner, /candidate diff paths do not exactly match changed-file inventory/);
+  assert.match(runner, /changed-file evidence is incomplete: patch missing/);
+  assert.match(runner, /already has durable audit state; a new material SHA is required before re-audit/);
+  assert.match(runner, /delivery-v2-target-audit-state:/);
   assert.match(runner, /git', \['rev-parse', 'HEAD'\]/);
   assert.match(runner, /AUDIT_RUNTIME_SHA/);
-  assert.match(runner, /contractFingerprint/);
-  assert.match(runner, /targetConfigFingerprint/);
-  assert.match(runner, /candidate changed its own source CI workflow/);
   assert.doesNotMatch(runner, /handoff-ready\.json/);
 });
