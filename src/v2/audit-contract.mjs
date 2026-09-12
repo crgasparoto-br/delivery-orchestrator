@@ -3,6 +3,7 @@ import { executionPolicyFor } from './execution-policy.mjs';
 
 export const DELIVERY_V2_AUDIT_SCHEMA_VERSION = 1;
 const SHA_RE = /^[0-9a-f]{40}$/i;
+const FINGERPRINT_RE = /^[0-9a-f]{64}$/i;
 const FINDING_ID_RE = /^DV2-[A-Z0-9][A-Z0-9._-]*$/;
 const TERMINAL_CHECK_CONCLUSIONS = new Set(['success', 'failure', 'cancelled', 'skipped', 'neutral', 'timed_out', 'action_required', 'stale']);
 const SEVERITIES = new Set(['info', 'low', 'medium', 'high', 'critical']);
@@ -35,7 +36,24 @@ function normalizePaths(paths) {
   if (!Array.isArray(paths) || paths.length === 0) throw new Error('changedPaths must be a non-empty array');
   return [...new Set(paths.map((value) => requireString(value, 'changedPaths entry').replaceAll('\\', '/').replace(/^\.\//, '')))];
 }
-function normalizeCheck(check, index, materialHeadSha, mergePreviewSha) {
+function normalizeWorkflowEvidence(evidence, index, baseSha) {
+  const value = requireObject(evidence, `checks[${index}].workflowEvidence`);
+  const state = requireString(value.state, `checks[${index}].workflowEvidence.state`).toLowerCase();
+  if (state !== 'active') throw new Error(`checks[${index}].workflowEvidence.state must be active`);
+  const fingerprint = requireString(value.fingerprint, `checks[${index}].workflowEvidence.fingerprint`).toLowerCase();
+  if (!FINGERPRINT_RE.test(fingerprint)) throw new Error(`checks[${index}].workflowEvidence.fingerprint must be a 64-character SHA-256 fingerprint`);
+  const trustedBaseSha = requireSha(value.trustedBaseSha, `checks[${index}].workflowEvidence.trustedBaseSha`);
+  if (trustedBaseSha !== baseSha) throw new Error(`checks[${index}].workflowEvidence.trustedBaseSha does not match audit baseSha`);
+  return Object.freeze({
+    workflowId: requirePositiveInteger(value.workflowId, `checks[${index}].workflowEvidence.workflowId`),
+    path: requireString(value.path, `checks[${index}].workflowEvidence.path`),
+    state,
+    trustedBaseSha,
+    blobSha: requireSha(value.blobSha, `checks[${index}].workflowEvidence.blobSha`),
+    fingerprint
+  });
+}
+function normalizeCheck(check, index, materialHeadSha, mergePreviewSha, baseSha) {
   const value = requireObject(check, `checks[${index}]`);
   const scope = requireString(value.scope, `checks[${index}].scope`).toLowerCase();
   if (!['material-head', 'merge-preview'].includes(scope)) throw new Error(`checks[${index}].scope must be material-head or merge-preview`);
@@ -48,6 +66,7 @@ function normalizeCheck(check, index, materialHeadSha, mergePreviewSha) {
   if (status === 'completed' && (!conclusion || !TERMINAL_CHECK_CONCLUSIONS.has(conclusion))) {
     throw new Error(`checks[${index}] completed status requires a supported conclusion`);
   }
+  const workflowEvidence = normalizeWorkflowEvidence(value.workflowEvidence, index, baseSha);
   return Object.freeze({
     name: requireString(value.name, `checks[${index}].name`),
     required: value.required !== false,
@@ -55,7 +74,8 @@ function normalizeCheck(check, index, materialHeadSha, mergePreviewSha) {
     subjectSha,
     status,
     conclusion,
-    workflowRunId: requirePositiveInteger(value.workflowRunId, `checks[${index}].workflowRunId`)
+    workflowRunId: requirePositiveInteger(value.workflowRunId, `checks[${index}].workflowRunId`),
+    workflowEvidence
   });
 }
 function normalizePriorFinding(finding, index, materialHeadSha) {
@@ -72,6 +92,7 @@ export function normalizeAuditInput(input) {
   const value = requireObject(input, 'audit input');
   if (value.schemaVersion !== DELIVERY_V2_AUDIT_SCHEMA_VERSION) throw new Error(`audit input schemaVersion must be ${DELIVERY_V2_AUDIT_SCHEMA_VERSION}`);
   const materialHeadSha = requireSha(value.materialHeadSha, 'materialHeadSha');
+  const baseSha = requireSha(value.baseSha, 'baseSha');
   const mergePreviewSha = value.mergePreviewSha == null ? null : requireSha(value.mergePreviewSha, 'mergePreviewSha');
   const risk = requireObject(value.risk, 'risk');
   const profile = requireString(risk.profile, 'risk.profile').toLowerCase();
@@ -80,7 +101,7 @@ export function normalizeAuditInput(input) {
   const implementer = requireObject(value.implementer, 'implementer');
   const checks = value.checks;
   if (!Array.isArray(checks) || checks.length === 0) throw new Error('checks must be a non-empty array');
-  const normalizedChecks = checks.map((check, index) => normalizeCheck(check, index, materialHeadSha, mergePreviewSha));
+  const normalizedChecks = checks.map((check, index) => normalizeCheck(check, index, materialHeadSha, mergePreviewSha, baseSha));
   if (!normalizedChecks.some((check) => check.scope === 'material-head' && check.required)) {
     throw new Error('at least one required material-head check is required');
   }
@@ -90,7 +111,7 @@ export function normalizeAuditInput(input) {
     issueNumber: requirePositiveInteger(value.issueNumber, 'issueNumber'),
     pullRequestNumber: requirePositiveInteger(value.pullRequestNumber, 'pullRequestNumber'),
     baseRef: requireString(value.baseRef, 'baseRef'),
-    baseSha: requireSha(value.baseSha, 'baseSha'),
+    baseSha,
     headRef: requireString(value.headRef, 'headRef'),
     materialHeadSha,
     mergePreviewSha,

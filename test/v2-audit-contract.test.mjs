@@ -5,11 +5,25 @@ import { auditApplicability, buildAuditRequest, evaluateAuditOutcome, normalizeA
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 const C = 'c'.repeat(40);
+const D = 'd'.repeat(40);
+const E = 'e'.repeat(64);
+
+function workflowEvidence(overrides = {}) {
+  return {
+    workflowId: 123,
+    path: '.github/workflows/canonical-ci.yml',
+    state: 'active',
+    trustedBaseSha: B,
+    blobSha: D,
+    fingerprint: E,
+    ...overrides
+  };
+}
 
 function input(profile = 'critical') {
   return {
     schemaVersion: 1,
-    repository: 'crgasparoto-br/training-system',
+    repository: 'example-org/training-system',
     issueNumber: 431,
     pullRequestNumber: 435,
     baseRef: 'develop',
@@ -20,8 +34,8 @@ function input(profile = 'critical') {
     risk: { profile, reasons: ['core-sensitive-boundary:apps/web/src/pages/login.tsx'] },
     classifier: { version: '1', fingerprint: 'classifier-fingerprint' },
     checks: [
-      { name: 'Validate repository', required: true, scope: 'material-head', subjectSha: A, status: 'completed', conclusion: 'success', workflowRunId: 10 },
-      { name: 'Merge preview integration', required: true, scope: 'merge-preview', subjectSha: C, status: 'completed', conclusion: 'success', workflowRunId: 10 }
+      { name: 'Validate repository', required: true, scope: 'material-head', subjectSha: A, status: 'completed', conclusion: 'success', workflowRunId: 10, workflowEvidence: workflowEvidence() },
+      { name: 'Merge preview integration', required: true, scope: 'merge-preview', subjectSha: C, status: 'completed', conclusion: 'success', workflowRunId: 10, workflowEvidence: workflowEvidence() }
     ],
     changedPaths: ['apps/web/src/pages/Login.tsx'],
     implementationAttempt: 1,
@@ -68,6 +82,34 @@ test('rejects stale required check evidence before audit can start', () => {
   const candidate = input();
   candidate.checks[0].subjectSha = B;
   assert.throws(() => normalizeAuditInput(candidate), /stale/);
+});
+
+test('every check requires durable workflow identity evidence', () => {
+  const candidate = input();
+  delete candidate.checks[0].workflowEvidence;
+  assert.throws(() => normalizeAuditInput(candidate), /workflowEvidence must be an object/);
+
+  const explicitNull = input();
+  explicitNull.checks[0].workflowEvidence = null;
+  assert.throws(() => normalizeAuditInput(explicitNull), /workflowEvidence must be an object/);
+});
+
+test('workflow check evidence is active, base-bound and fingerprint-validated', () => {
+  const normalized = normalizeAuditInput(input());
+  assert.equal(normalized.checks[0].workflowEvidence.workflowId, 123);
+  assert.equal(normalized.checks[0].workflowEvidence.trustedBaseSha, B);
+
+  const malformed = input();
+  malformed.checks[0].workflowEvidence = workflowEvidence({ fingerprint: 'not-a-sha256' });
+  assert.throws(() => normalizeAuditInput(malformed), /64-character SHA-256/);
+
+  const missingState = input();
+  missingState.checks[0].workflowEvidence = workflowEvidence({ state: undefined });
+  assert.throws(() => normalizeAuditInput(missingState), /workflowEvidence.state is required/);
+
+  const wrongBase = input();
+  wrongBase.checks[0].workflowEvidence = workflowEvidence({ trustedBaseSha: A });
+  assert.throws(() => normalizeAuditInput(wrongBase), /does not match audit baseSha/);
 });
 
 test('rejects CRITICAL approval produced by the implementation worker or run', () => {
