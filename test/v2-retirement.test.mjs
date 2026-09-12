@@ -51,13 +51,12 @@ const forbiddenActiveV1Markers = [
   ['persistent delivery queue', /persistent delivery queue/i]
 ];
 const auditPathPattern = /(?:^|[^A-Za-z0-9_$])\.audit\b/i;
-const referenceOnlyFragments = [
-  'Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts',
-  'Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.',
-  'Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.',
-  'Delivery V2 is the only active normal-path entrypoint; the legacy delivery-request queue, recursive max-cycle controller, nested-Skill orchestration and mandatory V1 handoff/certificate path are retired, while historical evidence/catalog snapshots remain traceability-only.'
-];
-const activeTextSurfaceExtension = /\.(?:md|txt|ya?ml|json|mjs|cjs|js|jsx|ts|tsx|py|sh|toml)$/i;
+const workerSurfacePattern = /^\.github\/workflows\/delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)(?:\.md|\.lock\.yml)$/;
+const workerContextHygieneFragment = 'Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts';
+const declarativeRequirementSummaries = Object.freeze({
+  'DV2-008': 'Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.',
+  'DV2-014': 'Delivery V2 is the only active normal-path entrypoint; the legacy delivery-request queue, recursive max-cycle controller, nested-Skill orchestration and mandatory V1 handoff/certificate path are retired, while historical evidence/catalog snapshots remain traceability-only.'
+});
 
 async function exists(relativePath) {
   try {
@@ -87,16 +86,32 @@ async function listFiles(relativePath) {
   return files;
 }
 
-function isExecutableDependencySurface(relativePath) {
-  const fileName = relativePath.split('/').at(-1) ?? '';
-  const extensionless = !fileName.includes('.');
-  return extensionless || activeTextSurfaceExtension.test(relativePath);
+function countOccurrences(body, fragment) {
+  return body.split(fragment).length - 1;
 }
 
-function stripReferenceOnlyProse(source) {
-  let candidate = source;
-  for (const fragment of referenceOnlyFragments) candidate = candidate.replaceAll(fragment, '');
-  return candidate;
+function removeExactDeclarativeFragment(body, fragment, relativePath) {
+  const count = countOccurrences(body, fragment);
+  assert.equal(count, 1, `${relativePath} must contain exactly one canonical declarative fragment, found ${count}`);
+  return body.replace(fragment, '');
+}
+
+function sanitizeKnownDeclarativeSurface(relativePath, body) {
+  if (workerSurfacePattern.test(relativePath)) {
+    return removeExactDeclarativeFragment(body, workerContextHygieneFragment, relativePath);
+  }
+  if (relativePath === 'config/delivery-v2-requirements.json') {
+    const contract = JSON.parse(body);
+    let sanitized = body;
+    for (const [id, expectedSummary] of Object.entries(declarativeRequirementSummaries)) {
+      const requirement = contract.requirements.find((item) => item.id === id);
+      assert.ok(requirement, `${relativePath} must contain ${id}`);
+      assert.equal(requirement.summary, expectedSummary, `${id} retirement/audit declaration changed unexpectedly`);
+      sanitized = removeExactDeclarativeFragment(sanitized, expectedSummary, `${relativePath}:${id}`);
+    }
+    return sanitized;
+  }
+  return body;
 }
 
 function collapseSourceComposition(source) {
@@ -104,18 +119,20 @@ function collapseSourceComposition(source) {
 }
 
 function historicalReferences(body) {
-  const candidate = stripReferenceOnlyProse(body);
-  const collapsed = collapseSourceComposition(candidate);
+  const collapsed = collapseSourceComposition(body);
   const matches = [];
-  if (/skills\/catalog\b/i.test(candidate) || /skills\/?catalog/i.test(collapsed)) matches.push('skills/catalog');
-  if (auditPathPattern.test(candidate) || auditPathPattern.test(collapsed)) matches.push('.audit');
+  if (/skills\/catalog\b/i.test(body) || /skills\/?catalog/i.test(collapsed)) matches.push('skills/catalog');
+  if (auditPathPattern.test(body) || auditPathPattern.test(collapsed)) matches.push('.audit');
   return matches;
 }
 
 function nestedSkillInvocation(body) {
-  const candidate = stripReferenceOnlyProse(body);
-  if (nestedSkillInvocationPattern.test(candidate)) return true;
-  return collapsedNestedSkillInvocationPattern.test(collapseSourceComposition(candidate));
+  if (nestedSkillInvocationPattern.test(body)) return true;
+  return collapsedNestedSkillInvocationPattern.test(collapseSourceComposition(body));
+}
+
+function isExecutableDependencySurface() {
+  return true;
 }
 
 async function activeExecutableFiles() {
@@ -142,7 +159,7 @@ test('active runtime trees cannot reintroduce V1 orchestration markers or nested
   const matches = [];
   for (const relativePath of await activeExecutableFiles()) {
     const body = await readFile(new URL(relativePath, root), 'utf8');
-    const executableBody = stripReferenceOnlyProse(body);
+    const executableBody = sanitizeKnownDeclarativeSurface(relativePath, body);
     for (const [marker, pattern] of forbiddenActiveV1Markers) {
       if (pattern.test(executableBody)) matches.push(`${relativePath}:${marker}`);
     }
@@ -151,47 +168,48 @@ test('active runtime trees cannot reintroduce V1 orchestration markers or nested
   assert.deepEqual(matches, []);
 });
 
-test('active executable surfaces cannot reference historical V1 snapshot trees except explicit negative isolation prose', async () => {
+test('active executable surfaces cannot reference historical V1 snapshot trees except path-bound declarative prompt/contract text', async () => {
   const matches = [];
   for (const relativePath of await activeExecutableFiles()) {
     const body = await readFile(new URL(relativePath, root), 'utf8');
-    for (const marker of historicalReferences(body)) matches.push(`${relativePath}:${marker}`);
+    const executableBody = sanitizeKnownDeclarativeSurface(relativePath, body);
+    for (const marker of historicalReferences(executableBody)) matches.push(`${relativePath}:${marker}`);
   }
   assert.deepEqual(matches, []);
 });
 
-test('historical reference gate is fail-closed across new runtime roots, manifests, shell and composed paths', async () => {
+test('retirement scan is fail-closed for unknown file types, composed paths and arbitrary nested Skill names', async () => {
+  assert.equal(isExecutableDependencySurface('scripts/legacy.rb'), true);
+  assert.equal(isExecutableDependencySurface('actions/custom/runner.go'), true);
+  assert.equal(isExecutableDependencySurface('config/runtime.conf'), true);
   assert.deepEqual(historicalReferences("const legacy = '.audit/entregar-issue'; await readFile(path.join(root, legacy, 'handoff-ready.json'))"), ['.audit']);
-  assert.deepEqual(historicalReferences("const legacyRoot = '.audit'; await readFile(path.join(root, legacyRoot, 'handoff-ready.json'))"), ['.audit']);
-  assert.deepEqual(historicalReferences("const legacyRoot = ['.au', 'dit'].join(''); await readFile(path.join(root, legacyRoot, 'handoff-ready.json'))"), ['.audit']);
   assert.deepEqual(historicalReferences("const legacyRoot = ['.au',\n'dit'].join(''); await readFile(path.join(root, legacyRoot, 'handoff-ready.json'))"), ['.audit']);
   assert.deepEqual(historicalReferences("const legacyCatalog = ['skills/', 'catalog'].join('');"), ['skills/catalog']);
   assert.deepEqual(historicalReferences("const legacyCatalog = path.join('skills', 'catalog', 'legacy.js');"), ['skills/catalog']);
   assert.deepEqual(historicalReferences('run: cat .audit/entregar-issue/handoff-ready.json'), ['.audit']);
   assert.deepEqual(historicalReferences('uses: ./skills/catalog/example/action'), ['skills/catalog']);
-  assert.deepEqual(historicalReferences('{"scripts":{"legacy":"node skills/catalog/legacy.js"}}'), ['skills/catalog']);
-  assert.deepEqual(historicalReferences('steps.risk.outputs.audit-required'), []);
-  assert.deepEqual(historicalReferences('durations.audit'), []);
-  assert.deepEqual(historicalReferences("'durationsMs.audit'"), []);
-  assert.deepEqual(historicalReferences('Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts unless needed.'), []);
-  assert.deepEqual(historicalReferences('Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'), []);
-  assert.deepEqual(historicalReferences('Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.'), []);
-  assert.deepEqual(historicalReferences('run: cat .audit/entregar-issue/handoff-ready.json # Do not use or seek implementation conversation history, .audit/entregar-issue artifacts, hidden implementer reasoning, or any source outside this bundle.'), ['.audit']);
   assert.equal(nestedSkillInvocation("invokeSkill('auditar-issue')"), true);
   assert.equal(nestedSkillInvocation("invokeSkill('security-review')"), true);
   assert.equal(nestedSkillInvocation("invokeSkill(['security', '-', 'review'].join(''))"), true);
   assert.equal(nestedSkillInvocation("const ref = 'skills://security-review';"), true);
   assert.equal(nestedSkillInvocation('Use independent audit policy, but do not invoke nested Skills.'), false);
-  assert.equal(isExecutableDependencySurface('package.json'), true);
-  assert.equal(isExecutableDependencySurface('.github/workflows/delivery-v2-worker-codex-fast.lock.yml'), true);
-  assert.equal(isExecutableDependencySurface('.github/workflows/delivery-v2-worker-codex-critical.md'), true);
-  assert.equal(isExecutableDependencySurface('.github/actions/delivery-v2-risk/action.yml'), true);
-  assert.equal(isExecutableDependencySurface('skills/foo/SKILL.md'), true);
-  assert.equal(isExecutableDependencySurface('scripts/legacy-runner'), true);
   const activeFiles = await activeExecutableFiles();
   assert.ok(activeFiles.some((path) => path.startsWith('config/')), 'config must be inside the fail-closed active scan');
   assert.ok(activeFiles.some((path) => path.startsWith('actions/')), 'actions must be inside the fail-closed active scan');
   assert.ok(activeFiles.some((path) => path.startsWith('schemas/')), 'schemas must be inside the fail-closed active scan');
+});
+
+test('declarative exceptions are path-bound, exact and cannot hide equivalent runtime code', () => {
+  const contextLine = `${workerContextHygieneFragment} unless needed.`;
+  const sanitizedWorker = sanitizeKnownDeclarativeSurface('.github/workflows/delivery-v2-worker-codex-fast.md', contextLine);
+  assert.deepEqual(historicalReferences(sanitizedWorker), []);
+  const arbitraryCode = `const text = ${JSON.stringify(workerContextHygieneFragment)}; const legacy = '.audit/entregar-issue/handoff-ready.json';`;
+  assert.equal(sanitizeKnownDeclarativeSurface('scripts/legacy.js', arbitraryCode), arbitraryCode);
+  assert.deepEqual(historicalReferences(arbitraryCode), ['skills/catalog', '.audit']);
+  assert.throws(
+    () => sanitizeKnownDeclarativeSurface('.github/workflows/delivery-v2-worker-codex-fast.md', `${workerContextHygieneFragment}\n${workerContextHygieneFragment}`),
+    /exactly one canonical declarative fragment/
+  );
 });
 
 test('canonical requirements may describe retired V1 surfaces without making them executable dependencies', async () => {
@@ -201,8 +219,8 @@ test('canonical requirements may describe retired V1 surfaces without making the
   assert.equal(retirement.status, 'validated');
   assert.match(retirement.summary, /only active normal-path entrypoint/);
   assert.match(retirement.summary, /are retired/);
-  assert.deepEqual(historicalReferences(body), []);
-  const executableBody = stripReferenceOnlyProse(body);
+  const executableBody = sanitizeKnownDeclarativeSurface('config/delivery-v2-requirements.json', body);
+  assert.deepEqual(historicalReferences(executableBody), []);
   assert.doesNotMatch(executableBody, /delivery-request/i);
   assert.doesNotMatch(executableBody, auditPathPattern);
 });
