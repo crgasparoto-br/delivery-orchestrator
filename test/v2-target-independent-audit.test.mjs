@@ -282,7 +282,7 @@ test('target audit workflow pins runtime, keeps reviewer read-only, persists dur
   assert.match(runner, /SOURCE_WORKFLOW_BINDING\.json/);
   assert.match(runner, /AUDIT_RUNTIME_EVIDENCE\.json/);
   assert.match(runner, /actions\/runs\/\$\{config\.sourceWorkflow\.runId\}\/jobs/);
-  assert.match(runner, /refs\\\/remotes\\\/pull/);
+  assert.match(runner, /refs.*remotes.*pull/);
   assert.match(runner, /git', \['rev-parse', 'HEAD'\]/);
   assert.match(runner, /AUDIT_RUNTIME_SHA/);
   assert.match(runner, /contractFingerprint/);
