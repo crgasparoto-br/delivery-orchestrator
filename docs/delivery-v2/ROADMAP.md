@@ -132,6 +132,8 @@ Exit condition: `ready-for-human-merge` can be derived entirely from current Git
 
 ### DV2-016 — Persistent resumable delivery state
 
+Status: **implemented; validation pending live cross-process resume exercise**.
+
 Required work:
 
 - durable state schema;
@@ -142,7 +144,14 @@ Required work:
 - resume command/API;
 - stale-state protection.
 
-Exit condition: another process/chat can resume the same PR using repository/GitHub state only.
+Implementation evidence:
+
+- versioned persistent state schema retains target identity, material SHA, risk/classifier, provider, state, counters, checks/findings/evidence and last reason;
+- checkpoint IDs make repeated updates idempotent; attempt counters are monotonic and risk-bounded;
+- remote PR/head identity is re-read at resume time and a fresher remote head invalidates candidate-bound evidence and returns to `queued`;
+- `npm run resume:v2 -- --state-file ... --repo ... --pr ... --head-ref ... --remote-head ...` exposes the resume command/API and requires fresh GitHub identity as input.
+
+Exit condition: another process/chat can resume the same PR using repository/GitHub state only. Live cross-process exercise still required before `validated`.
 
 ### DV2-011 — Observability and cost accounting
 
@@ -252,8 +261,8 @@ That means every required item below is terminal:
 
 Unless a production incident changes priority, continue in this order:
 
-1. DV2-016
-2. DV2-011
+1. DV2-011
+2. validate DV2-016 with a live cross-process resume exercise
 3. validate DV2-008 with a real CRITICAL pilot
 4. validate DV2-009 with bounded CI/audit remediation evidence
 5. validate DV2-010 with a live exact-head release exercise

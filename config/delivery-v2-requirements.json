@@ -296,11 +296,18 @@
     {
       "id": "DV2-016",
       "title": "Persistent resumable delivery state",
-      "status": "planned",
+      "status": "implemented",
       "requiredForV2Default": true,
       "summary": "The deterministic controller persists candidate identity, state transitions, attempt counters and evidence pointers so a new process/chat resumes without reconstructing orchestration history from prose.",
-      "implementationRefs": [],
-      "validationRefs": [],
+      "implementationRefs": [
+        "file:src/v2/persistent-state.mjs",
+        "file:schemas/delivery-v2-persistent-state.schema.json",
+        "file:src/cli.mjs",
+        "file:package.json"
+      ],
+      "validationRefs": [
+        "file:test/v2-persistent-state.test.mjs"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     }

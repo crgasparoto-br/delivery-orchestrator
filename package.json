@@ -14,6 +14,7 @@
     "test": "node --test test/*.test.mjs",
     "validate": "node src/cli.mjs validate",
     "plan:v2": "node src/cli.mjs plan-v2",
+    "resume:v2": "node src/cli.mjs resume-v2",
     "export:v2:classifier": "node scripts/export-delivery-v2-classifier.mjs",
     "verify:v2": "node scripts/verify-delivery-v2-completeness.mjs && node scripts/verify-delivery-v2-targets.mjs",
     "verify:v2:complete": "node scripts/verify-delivery-v2-completeness.mjs --require-complete && node scripts/verify-delivery-v2-targets.mjs",

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solverit.local/schemas/delivery-v2-persistent-state.schema.json",
+  "title": "Delivery V2 Persistent State",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "revision",
+    "repository",
+    "pullRequestNumber",
+    "baseRef",
+    "baseSha",
+    "headRef",
+    "materialHeadSha",
+    "effectiveRisk",
+    "classifier",
+    "provider",
+    "status",
+    "attempts",
+    "workflowChecks",
+    "blockingFindings",
+    "evidenceRefs",
+    "lastReason",
+    "appliedTransitionIds"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    "issueNumber": { "type": ["integer", "null"], "minimum": 1 },
+    "pullRequestNumber": { "type": "integer", "minimum": 1 },
+    "baseRef": { "type": "string", "minLength": 1 },
+    "baseSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+    "headRef": { "type": "string", "minLength": 1 },
+    "materialHeadSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+    "effectiveRisk": { "enum": ["fast", "standard", "critical"] },
+    "classifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectSha", "version", "fingerprint", "current"],
+      "properties": {
+        "subjectSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+        "version": { "type": "string", "minLength": 1 },
+        "fingerprint": { "type": "string", "minLength": 1 },
+        "current": { "type": "boolean" }
+      }
+    },
+    "provider": { "type": "string", "minLength": 1 },
+    "status": {
+      "enum": [
+        "queued",
+        "classified",
+        "implementing",
+        "ci-pending",
+        "ci-failed-remediable",
+        "audit-pending",
+        "audit-failed-remediable",
+        "ready-for-human-merge",
+        "escalated",
+        "terminal"
+      ]
+    },
+    "attempts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation", "audit", "auditRemediation"],
+      "properties": {
+        "implementation": { "type": "integer", "minimum": 0 },
+        "audit": { "type": "integer", "minimum": 0 },
+        "auditRemediation": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "workflowChecks": { "type": "array", "items": { "type": "object" } },
+    "blockingFindings": { "type": "array", "items": { "type": "object" } },
+    "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "lastReason": { "type": ["string", "null"] },
+    "appliedTransitionIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+  }
+}
