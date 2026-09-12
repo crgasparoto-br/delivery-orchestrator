@@ -11,12 +11,16 @@ on:
       - 'src/cli.mjs'
       - 'package.json'
       - 'package-lock.json'
+      - 'config/delivery-v2-requirements.json'
+      - 'schemas/delivery-v2-requirements.schema.json'
+      - 'scripts/verify-delivery-v2-completeness.mjs'
       - '.github/delivery-orchestrator-capabilities.json'
       - '.github/aw/actions-lock.json'
       - '.github/workflows/delivery-v2-*.yml'
       - '.github/workflows/delivery-v2-*.md'
       - '.github/workflows/delivery-v2-*.lock.yml'
       - 'docs/delivery-v2.md'
+      - 'docs/delivery-v2/**'
 
 permissions:
   contents: read
@@ -47,6 +51,9 @@ jobs:
       - name: V2 unit tests
         run: node --test test/v2-*.test.mjs
 
+      - name: Verify Delivery V2 contract
+        run: npm run verify:v2
+
       - name: Syntax checks
         shell: bash
         run: |
@@ -55,6 +62,7 @@ jobs:
             node --check "$file"
           done
           node --check actions/delivery-v2-risk/index.cjs
+          node --check scripts/verify-delivery-v2-completeness.mjs
 
       - name: Install pinned gh-aw
         uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c

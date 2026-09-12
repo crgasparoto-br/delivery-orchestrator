@@ -1,151 +1,134 @@
 # Delivery V2: GitHub-native, risk-adaptive delivery
 
-## Goal
+> **Quick guide only.** The canonical architecture is `docs/delivery-v2/MASTER_SPEC.md`. Machine-readable requirement status is `config/delivery-v2-requirements.json`; implementation order is `docs/delivery-v2/ROADMAP.md`; GitHub issue #27 is the operational umbrella. This file must not be used to override those sources.
 
-Move orchestration decisions out of the coding model. GitHub Actions owns deterministic state, CI, budgets, SHA identity and release gates. An AI engine is invoked only for work that needs reasoning or code generation.
+## Core idea
 
-V1 remains available during migration. V2 does not silently fall back to V1 or to a different AI provider.
+Delivery V2 moves orchestration decisions out of the coding model:
 
-## Provider selection
+> deterministic software controls AI; AI does not control the delivery system.
 
-V2 accepts these providers:
+GitHub owns repository/issue/PR identity, exact SHAs, risk, budgets, checks and release state. AI providers are bounded workers for implementation or independent semantic review.
 
-- `copilot` — GitHub Copilot CLI engine;
-- `codex` — OpenAI Codex engine;
-- `claude` — Anthropic Claude Code engine.
+## Providers
 
-Invalid providers fail closed. There is no automatic provider fallback.
+Supported providers:
 
-GitHub Agentic Workflows (`gh-aw`) is the execution runtime. Conventional GitHub Actions remain responsible for builds, tests, linting and other deterministic checks.
+- `codex`
+- `claude`
+- `copilot`
+
+Provider+risk resolves to exactly one compiled `gh-aw` worker. Invalid configuration, missing authentication or provider failure fails closed. There is no silent provider fallback.
+
+Agent shell execution receives read access only. Privileged write capability is exposed through constrained safe outputs, not a general write token.
 
 ## Risk profiles
 
-`DELIVERY_RISK_PROFILE` accepts `auto`, `fast`, `standard`, or `critical`.
-
 ### FAST
-- focused CI;
-- max 2 implementation attempts;
-- 20 AI turns / 100 AI Credits;
-- no mandatory LLM audit by default;
-- full regression after merge.
 
-FAST workers use a safe-output file allowlist. If broader paths are required, publication fails closed.
+- strict low-risk allowlist;
+- focused/related tests and affected build;
+- max 2 implementation attempts;
+- 20 AI turns / 100 credits;
+- no mandatory LLM audit;
+- full regression after merge or scheduled safety net.
 
 ### STANDARD
-- affected tests plus build;
+
+- ordinary application/business/API changes outside critical boundaries;
+- affected/non-database tests plus build;
 - max 2 implementation attempts;
-- 40 AI turns / 250 AI Credits;
-- focused independent audit.
+- 40 AI turns / 250 credits;
+- focused independent audit when policy requires it.
 
 ### CRITICAL
-- full PR regression;
-- independent audit;
-- max 3 implementation attempts;
-- 80 AI turns / 500 AI Credits;
-- human escalation instead of unbounded retries.
 
-Protected governance files remain blocked from agent publication in this migration phase.
+- database/migrations;
+- authentication/authorization/session/security;
+- financial/billing;
+- shared contracts;
+- CI/workflows/config/dependencies/infrastructure;
+- privileged integrations;
+- unknown or uncertain paths.
 
-## Provider execution
+CRITICAL keeps the complete repository safety gate, requires independent semantic audit, allows max 3 implementation attempts / 2 audit-remediation attempts, and uses 80 turns / 500 credits.
 
-The user-facing selection remains **provider + risk**. Internally the dispatcher resolves that pair to one compiled worker. There are three provider families and three risk variants because `max-ai-credits` is a compile-time gh-aw guardrail:
+Requested risk can promote but never downgrade observed risk.
 
-```text
-copilot × fast|standard|critical
-codex   × fast|standard|critical
-claude  × fast|standard|critical
+## Adaptive CI
+
+`actions/delivery-v2-risk` and the V2 CI plan provide deterministic risk outputs. Target repositories keep their own build/test commands.
+
+FAST is a strict safe-root allowlist. Static extensions do not grant FAST outside trusted roots. Repository-specific policy can add sensitive boundaries and promote risk, but cannot weaken core CRITICAL invariants. Unknown paths fail closed.
+
+Public target repositories cannot directly consume private reusable workflows from this private repository. The canonical master spec defines generated, fingerprinted vendoring as the official distribution direction.
+
+## Audit and release direction
+
+The normal V2 audit contract is GitHub-native. It binds review to:
+
+- repository + issue/PR;
+- base SHA;
+- exact material head SHA;
+- merge-preview SHA when applicable;
+- observed risk and classifier fingerprint;
+- required checks/workflow evidence;
+- actionable audit findings for that same candidate.
+
+A stale legacy `.audit/entregar-issue/handoff-ready.json` must not be mandatory for a normal V2 delivery.
+
+The exact-head release gate is deterministic. Any material SHA drift invalidates prior CI/audit evidence.
+
+## Current program state
+
+Validated foundation:
+
+- deterministic plan/risk/execution policy;
+- provider dispatch;
+- safe-output provider workers;
+- risk budgets;
+- adaptive CI core.
+
+Real pilot evidence:
+
+- `controle_calorias` adaptive migration is merged;
+- a real FAST PR completed in about 128 seconds versus an earlier ~1,255-second full baseline.
+
+Still required before V2 becomes the default:
+
+- classifier hardening and target-specific sensitive-boundary policy;
+- versioned distribution to public/private repos;
+- GitHub-native audit;
+- bounded remediation state machine;
+- exact-head release gate;
+- observability/cost accounting;
+- persistent resumable state;
+- completed `training-system` FAST pilot;
+- V1/nested-Skill retirement.
+
+Run:
+
+```bash
+npm run verify:v2
 ```
 
-`Delivery V2 - Dispatch` builds the deterministic plan and dispatches exactly one `.lock.yml` worker. Failed provider dispatches never fall back to another provider.
+to validate the contract structure and show pending required items.
 
-Workers use a compact contract: read the issue, identify the smallest cause, make the smallest cohesive fix, add regression coverage when practical, run profile-appropriate checks, and create one reviewable PR. They do not invoke full orchestration Skills.
+Run:
 
-### Credential isolation
-
-The agent receives `DELIVERY_GITHUB_READ_TOKEN` for cross-repository checkout and reads. `DELIVERY_GITHUB_WRITE_TOKEN` is referenced only by `safe-outputs`, so agent shell access does not receive the write credential.
-
-Provider inference prerequisites in `delivery-orchestrator`:
-- Copilot: `copilot-requests: write` or supported Copilot token configuration;
-- Codex: `CODEX_API_KEY` or `OPENAI_API_KEY`;
-- Claude: `ANTHROPIC_API_KEY` or Anthropic WIF.
-
-Missing provider authentication is a hard failure; there is no provider substitution.
-
-## gh-aw compilation
-
-Worker Markdown sources are compiled with pinned `gh-aw v0.88.7` into `.lock.yml`. The setup action is pinned to `bde367913adeb3132f0a171594c88a17f4b7d08c`.
-
-Branch automation compiles changed worker sources and commits generated locks. PR CI recompiles in strict mode and requires zero diff.
-
-## Adaptive CI classification
-
-`actions/delivery-v2-risk` classifies a pull request without invoking an AI model. It reads the PR changed-file list through the GitHub API and delegates the decision to the same `risk-profile.mjs` and `execution-policy.mjs` used by the Delivery V2 planner.
-
-The classifier fails closed:
-
-- a requested profile can keep or increase the observed risk, never reduce it;
-- workflow, migration, authentication/security, finance, database, lockfile and shared/domain changes are critical;
-- unknown paths are critical;
-- a known low-risk web component can remain FAST;
-- empty or unavailable evidence never implies FAST.
-
-The reusable workflow `.github/workflows/delivery-v2-classify-ci.yml` exposes these outputs to caller repositories:
-
-- `risk_profile`;
-- `ci_mode`;
-- `audit_required` and `audit_mode`;
-- `full_regression_on_pr` and `full_regression_after_merge`;
-- `promoted`;
-- `changed_paths_json` and `reasons_json`.
-
-Caller repositories keep their own concrete commands. The central classifier decides **how much CI is required**, not how a product builds or tests itself. This keeps repository-specific commands deterministic and versioned with the product.
-
-### Pilot contract for controle_calorias
-
-The first pilot will call the reusable classifier from the PR workflow and route existing checks according to the returned profile:
-
-```text
-FAST
-  -> affected lint/typecheck
-  -> focused regression tests
-  -> affected build/checks
-
-STANDARD
-  -> affected lint/typecheck/tests
-  -> full build
-  -> focused independent audit when required
-
-CRITICAL
-  -> current full PR regression
-  -> independent audit
+```bash
+npm run verify:v2:complete
 ```
 
-The full regression suite remains required after merge for FAST and STANDARD. During the pilot, the existing full path remains available as fallback; no automatic merge is enabled.
+only as the strict completion/retirement gate; it must remain red while required roadmap items are non-terminal.
 
-Private caller repositories must be allowed to consume the private reusable workflow/action from `delivery-orchestrator` before the pilot is enabled.
+## New-context continuation
 
-## Execution architecture
+A new agent/chat should read, in order:
 
-```text
-Issue
-  -> deterministic risk plan
-  -> exact provider×risk gh-aw worker
-  -> safe-output PR
-  -> deterministic adaptive CI classification
-  -> focused / affected / full product CI
-  -> optional or required independent audit
-  -> exact-head release gate
-  -> human merge
-```
+1. `docs/delivery-v2/MASTER_SPEC.md`
+2. `config/delivery-v2-requirements.json`
+3. `docs/delivery-v2/ROADMAP.md`
+4. GitHub issue #27
 
-No worker exposes a merge safe output.
-
-## Migration sequence
-1. **Done:** provider/risk contract, budgets and plan workflow.
-2. **Done:** provider×risk gh-aw workers, deterministic dispatcher and compiled-lock verification.
-3. **Current:** adaptive CI classifier and reusable workflow.
-4. Pilot `controle_calorias` with FAST fixes while V1 remains available.
-5. Migrate SolverFin and training-system after measured improvement.
-6. Retire V1 only after V2 is proven.
-
-No phase enables automatic merge.
+Then run `npm run verify:v2` and continue the next non-terminal requirement. Conversation history is not a source-of-truth dependency.
