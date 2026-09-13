@@ -3,6 +3,8 @@ import { appendFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
+import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
+import { expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
@@ -85,13 +87,17 @@ export function parseBootstrapLease(comments) {
     baseBranch: String(value.baseBranch ?? ''),
     provider: String(value.provider ?? '').toLowerCase(),
     requestedRisk: String(value.requestedRisk ?? '').toLowerCase(),
+    effectiveRisk: String(value.effectiveRisk ?? 'critical').toLowerCase(),
     implementationAttempts: Number(value.implementationAttempts),
     status: String(value.status ?? ''),
-    controllerRunId: value.controllerRunId == null ? null : Number(value.controllerRunId)
+    controllerRunId: value.controllerRunId == null ? null : Number(value.controllerRunId),
+    workerRunId: value.workerRunId == null ? null : Number(value.workerRunId),
+    workerWorkflow: String(value.workerWorkflow ?? ''),
+    dispatchNonce: String(value.dispatchNonce ?? '')
   });
 }
 
-export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider } = {}) {
+export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, recoveredWorkerRun = null } = {}) {
   const resolvedIssue = positiveInteger(issueNumber, 'issueNumber');
   const resolvedProvider = String(provider ?? '').toLowerCase();
 
@@ -139,16 +145,17 @@ export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, ta
   if (bootstrapLease) {
     if (bootstrapLease.repository !== targetRepository || bootstrapLease.issueNumber !== resolvedIssue) throw new Error('bootstrap lease target does not match requested delivery');
     if (bootstrapLease.baseBranch !== String(baseBranch ?? '') || bootstrapLease.provider !== resolvedProvider) throw new Error('bootstrap lease policy does not match requested delivery');
-    return Object.freeze({
-      runController: false,
-      resumePr: null,
-      status: 'blocked-initial-attempt-already-reserved',
-      pullRequestNumber: null,
-      materialHeadSha: null,
-      staleStateDetected: false,
-      nextAction: 'recover-initial-attempt',
-      attempts: { implementation: bootstrapLease.implementationAttempts }
-    });
+    const policy = executionPolicyFor(bootstrapLease.effectiveRisk || 'critical');
+    if (recoveredWorkerRun && !['completed'].includes(String(recoveredWorkerRun.status ?? ''))) {
+      return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
+    }
+    if (recoveredWorkerRun?.status === 'completed' && recoveredWorkerRun?.conclusion === 'success') {
+      return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
+    }
+    if (bootstrapLease.implementationAttempts >= policy.maxImplementationAttempts) {
+      return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-budget-exhausted', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
+    }
+    return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: null, status: 'retry-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'retry-initial-worker', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
   }
 
   return Object.freeze({
@@ -183,6 +190,17 @@ async function listIssueComments(repository, issueNumber, token) {
   return comments;
 }
 
+async function recoverBootstrapWorkerRun(lease, orchestratorRepository, orchestratorRef, token) {
+  if (!lease) return null;
+  if (lease.workerRunId) {
+    const run = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${lease.workerRunId}`, token);
+    return run;
+  }
+  if (!lease.workerWorkflow || !lease.dispatchNonce) return null;
+  const payload = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/workflows/${encodeURIComponent(lease.workerWorkflow)}/runs?event=workflow_dispatch&per_page=100`, token);
+  return selectCorrelatedWorkflowRun(payload.workflow_runs ?? [], { kind: 'worker', nonce: lease.dispatchNonce, ref: orchestratorRef });
+}
+
 async function writeGithubOutput(decision) {
   const outputPath = String(process.env.GITHUB_OUTPUT ?? '').trim();
   if (!outputPath) return;
@@ -191,7 +209,10 @@ async function writeGithubOutput(decision) {
     `resume_pr=${decision.resumePr ?? ''}`,
     `status=${decision.status}`,
     `pr_number=${decision.pullRequestNumber ?? ''}`,
-    `next_action=${decision.nextAction}`
+    `next_action=${decision.nextAction}`,
+    `prior_initial_attempts=${decision.priorInitialAttempts ?? 0}`,
+    `recover_worker_run_id=${decision.recoverWorkerRunId ?? ''}`,
+    `dispatch_nonce=${decision.dispatchNonce ?? ''}`
   ].join('\n');
   await appendFile(outputPath, `${lines}\n`, 'utf8');
 }
@@ -202,6 +223,9 @@ async function main() {
   const baseBranch = requiredEnv('BASE_BRANCH');
   const provider = requiredEnv('DELIVERY_AI_PROVIDER');
   const readToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
+  const actionsToken = requiredEnv('GITHUB_TOKEN');
+  const orchestratorRepository = requiredEnv('GITHUB_REPOSITORY');
+  const orchestratorRef = requiredEnv('ORCHESTRATOR_WORKER_REF');
   const resultPath = String(process.env.CONTROLLER_RESULT_PATH ?? '').trim();
 
   const pulls = await listOpenPullRequests(targetRepository, baseBranch, readToken);
@@ -211,7 +235,8 @@ async function main() {
   if (pullRequest) stateEnvelope = parsePersistentStateEnvelope(await listIssueComments(targetRepository, pullRequest.number, readToken));
   else bootstrapLease = parseBootstrapLease(await listIssueComments(targetRepository, issueNumber, readToken));
 
-  const decision = evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider });
+  const recoveredWorkerRun = bootstrapLease ? await recoverBootstrapWorkerRun(bootstrapLease, orchestratorRepository, orchestratorRef, actionsToken) : null;
+  const decision = evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, recoveredWorkerRun });
   await writeGithubOutput(decision);
 
   if (!decision.runController && resultPath) {

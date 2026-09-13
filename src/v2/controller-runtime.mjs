@@ -1,28 +1,4 @@
-#!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
-
-async function read(path) { return readFile(path, 'utf8'); }
-async function write(path, content) { await writeFile(path, content, 'utf8'); }
-function replaceOnce(text, from, to, label) {
-  const first = text.indexOf(from);
-  if (first < 0) throw new Error(`missing replacement anchor: ${label}`);
-  if (text.indexOf(from, first + from.length) >= 0) throw new Error(`ambiguous replacement anchor: ${label}`);
-  return text.slice(0, first) + to + text.slice(first + from.length);
-}
-function replaceAllChecked(text, from, to, expected, label) {
-  const count = text.split(from).length - 1;
-  if (count !== expected) throw new Error(`${label}: expected ${expected} occurrences, found ${count}`);
-  return text.split(from).join(to);
-}
-async function edit(path, transform) {
-  const before = await read(path);
-  const after = transform(before);
-  if (after === before) throw new Error(`no material change produced for ${path}`);
-  await write(path, after);
-}
-
-const runtime = `import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -34,30 +10,30 @@ const STATUS_STATES = new Set(['error', 'failure', 'pending', 'success']);
 
 function requiredString(value, label) {
   const result = String(value ?? '').trim();
-  if (!result) throw new Error(\`\${label} is required\`);
+  if (!result) throw new Error(`${label} is required`);
   return result;
 }
 function requiredPositiveInteger(value, label) {
   const result = Number(value);
-  if (!Number.isInteger(result) || result < 1) throw new Error(\`\${label} must be a positive integer\`);
+  if (!Number.isInteger(result) || result < 1) throw new Error(`${label} must be a positive integer`);
   return result;
 }
 function requiredSha(value, label) {
   const result = requiredString(value, label).toLowerCase();
-  if (!SHA_RE.test(result)) throw new Error(\`\${label} must be a 40-character Git SHA\`);
+  if (!SHA_RE.test(result)) throw new Error(`${label} must be a 40-character Git SHA`);
   return result;
 }
 function githubHeaders(token) {
   return {
     Accept: 'application/vnd.github+json',
-    Authorization: \`Bearer \${requiredString(token, 'token')}\`,
+    Authorization: `Bearer ${requiredString(token, 'token')}`,
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'delivery-v2-controller-runtime'
   };
 }
 async function fetchJson(url, token) {
   const response = await fetch(url, { headers: githubHeaders(token) });
-  if (!response.ok) throw new Error(\`GitHub API \${response.status} GET \${url}: \${await response.text()}\`);
+  if (!response.ok) throw new Error(`GitHub API ${response.status} GET ${url}: ${await response.text()}`);
   return response.json();
 }
 
@@ -72,7 +48,7 @@ export function createDispatchNonce() {
 export function expectedDispatchTitle(kind, nonce) {
   const normalizedKind = requiredString(kind, 'dispatch kind').toLowerCase();
   if (!['worker', 'audit'].includes(normalizedKind)) throw new Error('dispatch kind must be worker or audit');
-  return \`Delivery V2 \${normalizedKind} \${requiredString(nonce, 'dispatch nonce')}\`;
+  return `Delivery V2 ${normalizedKind} ${requiredString(nonce, 'dispatch nonce')}`;
 }
 
 export function selectCorrelatedWorkflowRun(runs, { kind, nonce, ref } = {}) {
@@ -84,7 +60,7 @@ export function selectCorrelatedWorkflowRun(runs, { kind, nonce, ref } = {}) {
     && String(run?.display_title ?? '') === expectedTitle
     && String(run?.head_branch ?? '') === expectedRef
   );
-  if (matches.length > 1) throw new Error(\`ambiguous correlated workflow run for \${expectedTitle}\`);
+  if (matches.length > 1) throw new Error(`ambiguous correlated workflow run for ${expectedTitle}`);
   return matches[0] ?? null;
 }
 
@@ -137,15 +113,15 @@ export async function loadAuthoritativeAuditResult({
   if (String(run.head_branch ?? '') !== requiredString(trustedRef, 'trustedRef')) throw new Error('audit run control-plane ref mismatch');
   if (run.status !== 'completed' || run.conclusion !== 'success') throw new Error('audit run must be terminal green');
 
-  const artifacts = await fetchJson(\`https://api.github.com/repos/\${repository}/actions/runs/\${runId}/artifacts?per_page=100\`, token);
-  const expectedName = \`delivery-v2-audit-\${requiredPositiveInteger(pullRequestNumber, 'pullRequestNumber')}-\${runId}\`;
+  const artifacts = await fetchJson(`https://api.github.com/repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`, token);
+  const expectedName = `delivery-v2-audit-${requiredPositiveInteger(pullRequestNumber, 'pullRequestNumber')}-${runId}`;
   const matches = (artifacts.artifacts ?? []).filter((artifact) => artifact.name === expectedName && artifact.expired !== true);
-  if (matches.length !== 1) throw new Error(\`expected exactly one authoritative audit artifact \${expectedName}\`);
+  if (matches.length !== 1) throw new Error(`expected exactly one authoritative audit artifact ${expectedName}`);
   const artifact = matches[0];
   if (artifact.workflow_run?.id != null && Number(artifact.workflow_run.id) !== runId) throw new Error('audit artifact provenance run mismatch');
 
-  const response = await fetch(\`https://api.github.com/repos/\${repository}/actions/artifacts/\${artifact.id}/zip\`, { headers: githubHeaders(token) });
-  if (!response.ok) throw new Error(\`audit artifact download failed: \${response.status}\`);
+  const response = await fetch(`https://api.github.com/repos/${repository}/actions/artifacts/${artifact.id}/zip`, { headers: githubHeaders(token) });
+  if (!response.ok) throw new Error(`audit artifact download failed: ${response.status}`);
   const root = await mkdtemp(path.join(tmpdir(), 'dv2-audit-result-'));
   try {
     const zipPath = path.join(root, 'audit.zip');
@@ -168,3 +144,29 @@ export async function loadAuthoritativeAuditResult({
       targetRepository,
       issueNumber,
       pullRequestNumber,
+      candidateSha,
+      auditRunId: runId,
+      sourceWorkflowRunId
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+export async function publishReleaseStatus({ repository, sha, context, state, description, token, targetUrl = null } = {}) {
+  const status = requiredString(state, 'status state').toLowerCase();
+  if (!STATUS_STATES.has(status)) throw new Error('status state must be error, failure, pending, or success');
+  const body = {
+    state: status,
+    context: requiredString(context, 'status context'),
+    description: requiredString(description, 'status description').slice(0, 140)
+  };
+  if (targetUrl) body.target_url = requiredString(targetUrl, 'targetUrl');
+  const response = await fetch(`https://api.github.com/repos/${requiredString(repository, 'repository')}/statuses/${requiredSha(sha, 'status sha')}`, {
+    method: 'POST',
+    headers: { ...githubHeaders(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(`GitHub API ${response.status} POST commit status: ${await response.text()}`);
+  return response.json();
+}

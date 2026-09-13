@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { loadV2Config } from '../src/v2/config.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { createDispatchDecision } from '../src/v2/dispatch-policy.mjs';
+import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
+import { createDispatchNonce } from '../src/v2/controller-runtime.mjs';
 
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
 
@@ -90,8 +92,11 @@ function makePlan({ repository, issueNumber, provider, requestedRisk, changedPat
   }, {}));
 }
 
-export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, requestedRisk, runId } = {}) {
+export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce() } = {}) {
   if (!decision?.dispatchAllowed) return null;
+  const policy = executionPolicyFor(decision.securityProfile);
+  const nextAttempt = Number(priorImplementationAttempts) + 1;
+  if (!Number.isInteger(nextAttempt) || nextAttempt < 1 || nextAttempt > policy.maxImplementationAttempts) throw new Error('initial implementation attempt budget exhausted');
   return Object.freeze({
     schemaVersion: 1,
     repository,
@@ -100,9 +105,12 @@ export function bootstrapLeaseForDecision({ decision, repository, issueNumber, b
     provider: String(provider).toLowerCase(),
     requestedRisk: String(requestedRisk).toLowerCase(),
     effectiveRisk: decision.securityProfile,
-    implementationAttempts: 1,
+    implementationAttempts: nextAttempt,
     status: 'reserved-initial-attempt',
-    controllerRunId: Number(runId)
+    controllerRunId: Number(runId),
+    workerRunId: null,
+    workerWorkflow: String(workerWorkflow ?? ''),
+    dispatchNonce: String(dispatchNonce)
   });
 }
 
@@ -115,6 +123,7 @@ async function main() {
   const readToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const writeToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
   const runId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
+  const priorImplementationAttempts = Number.parseInt(String(process.env.DELIVERY_V2_PRIOR_INITIAL_ATTEMPTS ?? '0'), 10);
 
   const issue = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}`, readToken);
   let changedPaths = splitPaths(process.env.DELIVERY_CHANGED_PATHS);
@@ -122,15 +131,18 @@ async function main() {
   const repositoryPolicy = await loadRepositoryRiskPolicy(repository);
   const plan = makePlan({ repository, issueNumber, provider, requestedRisk, changedPaths, repositoryPolicy });
   const decision = createDispatchDecision(plan);
-  const lease = bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, requestedRisk, runId });
+  const lease = bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, requestedRisk, runId, priorImplementationAttempts, workerWorkflow: plan.implementation.workflow });
 
   if (lease) {
     const body = `${BOOTSTRAP_MARKER}\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify(lease, null, 2)}\n\`\`\``;
-    await postJson(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`, writeToken, { body });
+    const comments = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=100`, readToken);
+    const existing = comments.find((comment) => String(comment.body ?? '').startsWith(BOOTSTRAP_MARKER));
+    if (existing) await api(`https://api.github.com/repos/${repository}/issues/comments/${existing.id}`, writeToken, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
+    else await postJson(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`, writeToken, { body });
   }
 
   const outputPath = String(process.env.GITHUB_OUTPUT ?? '').trim();
-  if (outputPath) await appendFile(outputPath, `reserved=${lease ? 'true' : 'false'}\n`, 'utf8');
+  if (outputPath) await appendFile(outputPath, `reserved=${lease ? 'true' : 'false'}\nattempts=${lease?.implementationAttempts ?? priorImplementationAttempts}\ndispatch_nonce=${lease?.dispatchNonce ?? ''}\n`, 'utf8');
   process.stdout.write(`${JSON.stringify({ reserved: Boolean(lease), decision, changedPaths })}\n`);
 }
 

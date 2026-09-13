@@ -37,6 +37,12 @@ on:
         required: true
         default: '1'
         type: string
+      dispatch_nonce:
+        description: Deterministic controller dispatch correlation nonce
+        required: true
+        type: string
+
+run-name: Delivery V2 audit ${{ inputs.dispatch_nonce }}
 
 permissions: {}
 

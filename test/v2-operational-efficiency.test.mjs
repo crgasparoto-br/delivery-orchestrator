@@ -7,7 +7,10 @@ test('normal dispatch owns initial and resumed controller paths through one idem
   assert.match(body, /node scripts\/guard-delivery-v2-reentry\.mjs/);
   assert.match(body, /node scripts\/reserve-delivery-v2-initial-attempt\.mjs/);
   assert.match(body, /node scripts\/run-delivery-v2-controller\.mjs/);
-  assert.match(body, /node scripts\/resume-delivery-v2-controller\.mjs/);
+  assert.doesNotMatch(body, /run: node scripts\/resume-delivery-v2-controller\.mjs/);
+  assert.match(body, /DELIVERY_V2_RESUME_PR:/);
+  assert.match(body, /ORCHESTRATOR_WORKER_REF: \$\{\{ github\.event\.repository\.default_branch \}\}/);
+  assert.match(body, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
   assert.match(body, /resume_pr == ''/);
   assert.match(body, /DELIVERY_V2_RESUME_PR: \$\{\{ steps\.reentry\.outputs\.resume_pr \}\}/);
   assert.match(body, /DELIVERY_V2_RECOVER_WORKER_RUN_ID:/);
@@ -49,7 +52,9 @@ test('trusted platform CI remains the single automatic exact-head compile while 
 test('controller target policy binds each rollout repository to one stable required check and trusted workflow', async () => {
   const config = JSON.parse(await readFile('config/delivery-v2-controller-targets.json', 'utf8'));
   assert.equal(config.targets['crgasparoto-br/controle_calorias'].requiredStatusName, 'Agent-first gate');
+  assert.equal(config.targets['crgasparoto-br/controle_calorias'].finalStatusName, 'Delivery V2 release');
   assert.equal(config.targets['crgasparoto-br/controle_calorias'].ciWorkflowPath, '.github/workflows/agent-check.yml');
   assert.equal(config.targets['crgasparoto-br/training-system'].requiredStatusName, 'Validate repository');
+  assert.equal(config.targets['crgasparoto-br/training-system'].finalStatusName, 'Delivery V2 release');
   assert.equal(config.targets['crgasparoto-br/training-system'].ciWorkflowPath, '.github/workflows/validate-pr.yml');
 });

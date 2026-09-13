@@ -6,21 +6,24 @@
       "requiredStatusName": "Agent-first gate",
       "ciWorkflowName": "Agent-first gate",
       "ciWorkflowPath": ".github/workflows/agent-check.yml",
-      "standardAuditRequired": true
+      "standardAuditRequired": true,
+      "finalStatusName": "Delivery V2 release"
     },
     "crgasparoto-br/training-system": {
       "baseBranch": "develop",
       "requiredStatusName": "Validate repository",
       "ciWorkflowName": "Validate PR",
       "ciWorkflowPath": ".github/workflows/validate-pr.yml",
-      "standardAuditRequired": true
+      "standardAuditRequired": true,
+      "finalStatusName": "Delivery V2 release"
     },
     "crgasparoto-br/delivery-orchestrator": {
       "baseBranch": "main",
       "requiredStatusName": "V2 platform checks",
       "ciWorkflowName": "Delivery V2 CI",
       "ciWorkflowPath": ".github/workflows/delivery-v2-ci.yml",
-      "standardAuditRequired": true
+      "standardAuditRequired": true,
+      "finalStatusName": "Delivery V2 release"
     }
   }
 }

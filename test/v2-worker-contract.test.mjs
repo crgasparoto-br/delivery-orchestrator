@@ -33,12 +33,16 @@ for (const provider of ['copilot', 'codex', 'claude']) {
       assert.match(body, /target_ref:/);
       assert.match(body, /target_pr:/);
       assert.match(body, /remediation_context:/);
+      assert.match(body, /dispatch_nonce:/);
+      assert.match(body, /run-name: "Delivery V2 worker \$\{\{ github\.event\.inputs\.dispatch_nonce \}\}"/);
       assert.match(body, /fetch: \["refs\/pulls\/open\/\*"\]/);
       assert.match(body, /github-token: \$\{\{ secrets\.DELIVERY_GITHUB_READ_TOKEN \}\}/);
       assert.match(body, /safe-outputs:[\s\S]*github-token: \$\{\{ secrets\.DELIVERY_GITHUB_WRITE_TOKEN \}\}/);
       assert.match(body, /create-pull-request:/);
       assert.match(body, /title-prefix: "\[delivery-v2\] "/);
       assert.match(body, /push-to-pull-request-branch:/);
+      assert.match(body, /target: "\$\{\{ github\.event\.inputs\.target_pr \}\}"/);
+      assert.doesNotMatch(body, /target: "\*"/);
       assert.match(body, /required-title-prefix: "\[delivery-v2\] "/);
       assert.match(body, /fallback-as-pull-request: false/);
       assert.match(body, /Remediation mode/);

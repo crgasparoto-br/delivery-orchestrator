@@ -8,6 +8,8 @@ on:
       target_ref: {description: Exact base or PR-head ref to inspect, required: false, default: '', type: string}
       target_pr: {description: Existing managed PR number for bounded remediation, required: false, default: '', type: string}
       remediation_context: {description: Controller-provided CI/audit findings for bounded remediation, required: false, default: '', type: string}
+      dispatch_nonce: {description: Deterministic controller dispatch correlation nonce, required: true, type: string}
+run-name: "Delivery V2 worker ${{ github.event.inputs.dispatch_nonce }}"
 permissions:
   contents: read
   issues: read
@@ -49,7 +51,7 @@ safe-outputs:
     protected-files: blocked
     allowed-files: [docs/**, '*.md', '**/*.md', '**/styles/**', '**/assets/**', '**/*.css', '**/*.scss', '**/*.sass', '**/*.less', apps/web/src/components/**, apps/web/src/views/**, apps/web/src/screens/**]
   push-to-pull-request-branch:
-    target: "*"
+    target: "${{ github.event.inputs.target_pr }}"
     target-repo: ${{ github.event.inputs.target_repository }}
     allowed-repos: ["crgasparoto-br/*"]
     required-title-prefix: "[delivery-v2] "

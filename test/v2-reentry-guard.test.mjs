@@ -9,11 +9,8 @@ import {
   selectManagedPullRequest
 } from '../scripts/guard-delivery-v2-reentry.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
-import {
-  ciFailureClassForConclusion,
-  markExistingAuditInFlight,
-  rebuildCiPendingState
-} from '../scripts/resume-delivery-v2-controller.mjs';
+import { markExistingAuditInFlight, rebuildCiPendingState } from '../scripts/resume-delivery-v2-controller.mjs';
+import { ciFailureClassForConclusion } from '../src/v2/controller-runtime.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { operationalStateFromPersistent } from '../src/v2/operational-controller.mjs';
 
@@ -98,9 +95,11 @@ test('initial attempt is reserved only when deterministic dispatch has authorize
 
   const lease = bootstrapLeaseForDecision({
     decision: { dispatchAllowed: true, securityProfile: 'critical' },
-    repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex', requestedRisk: 'critical', runId: 101
+    repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex', requestedRisk: 'critical', runId: 101, workerWorkflow: 'worker.yml', dispatchNonce: 'nonce-1'
   });
   assert.equal(lease.implementationAttempts, 1);
+  assert.equal(lease.workerWorkflow, 'worker.yml');
+  assert.equal(lease.dispatchNonce, 'nonce-1');
   assert.equal(lease.controllerRunId, 101);
   assert.equal(lease.status, 'reserved-initial-attempt');
 });
@@ -157,22 +156,23 @@ test('existing PR without state routes to deterministic PR recovery, never anoth
   assert.equal(decision.nextAction, 'recover-pr-state');
 });
 
-test('a prior pre-PR bootstrap lease blocks a fresh provider call instead of resetting the budget', () => {
+test('a failed pre-PR bootstrap attempt retries within the existing bounded budget instead of resetting it', () => {
   const decision = evaluateReentry({
     pullRequest: null,
     stateEnvelope: null,
     bootstrapLease: {
       repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex',
-      implementationAttempts: 1, status: 'reserved-initial-attempt'
+      implementationAttempts: 1, status: 'reserved-initial-attempt', effectiveRisk: 'critical'
     },
     targetRepository: 'owner/repo',
     issueNumber: 63,
     baseBranch: 'main',
     provider: 'codex'
   });
-  assert.equal(decision.runController, false);
-  assert.equal(decision.status, 'blocked-initial-attempt-already-reserved');
-  assert.equal(decision.nextAction, 'recover-initial-attempt');
+  assert.equal(decision.runController, true);
+  assert.equal(decision.status, 'retry-initial-delivery');
+  assert.equal(decision.nextAction, 'retry-initial-worker');
+  assert.equal(decision.priorInitialAttempts, 1);
   assert.equal(decision.attempts.implementation, 1);
 });
 
@@ -190,7 +190,7 @@ test('state and bootstrap parsers reject ambiguity and preserve one canonical en
   assert.equal(parsedState.persistent.pullRequestNumber, 77);
   assert.throws(() => parsePersistentStateEnvelope([{ id: 1, body: stateBody }, { id: 2, body: stateBody }]), /multiple Delivery V2 state comments/);
 
-  const bootstrapBody = `<!-- delivery-v2-bootstrap-state -->\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify({ schemaVersion: 1, repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex', requestedRisk: 'critical', implementationAttempts: 1, status: 'reserved-initial-attempt', controllerRunId: 99 })}\n\`\`\``;
+  const bootstrapBody = `<!-- delivery-v2-bootstrap-state -->\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify({ schemaVersion: 1, repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex', requestedRisk: 'critical', effectiveRisk: 'critical', implementationAttempts: 1, status: 'reserved-initial-attempt', controllerRunId: 99, workerWorkflow: 'worker.yml', dispatchNonce: 'nonce-1' })}\n\`\`\``;
   const lease = parseBootstrapLease([{ id: 3, body: bootstrapBody }]);
   assert.equal(lease.implementationAttempts, 1);
   assert.equal(lease.controllerRunId, 99);

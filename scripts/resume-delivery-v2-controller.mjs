@@ -11,9 +11,11 @@ import {
   createOperationalDelivery,
   operationalRemediationInput,
   operationalStateFromPersistent,
+  evaluateOperationalRelease,
   persistentStateFromOperational
 } from '../src/v2/operational-controller.mjs';
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
+import { ciFailureClassForConclusion, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const AUDIT_MARKER = '<!-- delivery-v2-independent-audit -->';
@@ -200,17 +202,15 @@ async function listWorkflowRuns(repository, workflow, token) {
   return payload.workflow_runs ?? [];
 }
 
-async function dispatchWorkflowAndResolveRun({ repository, workflow, ref, inputs, token }) {
-  const before = new Set((await listWorkflowRuns(repository, workflow, token)).map((run) => run.id));
-  await postJson(`https://api.github.com/repos/${repository}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, token, { ref, inputs });
+async function dispatchWorkflowAndResolveRun({ repository, workflow, ref, inputs, token, kind, dispatchNonce = createDispatchNonce() }) {
+  await postJson(`https://api.github.com/repos/${repository}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, token, { ref, inputs: { ...inputs, dispatch_nonce: dispatchNonce } });
   const deadline = Date.now() + 2 * 60 * 1000;
   while (Date.now() < deadline) {
-    const fresh = (await listWorkflowRuns(repository, workflow, token)).filter((run) => !before.has(run.id));
-    if (fresh.length === 1) return fresh[0];
-    if (fresh.length > 1) throw new Error(`ambiguous workflow dispatch for ${workflow}: ${fresh.map((run) => run.id).join(', ')}`);
+    const correlated = selectCorrelatedWorkflowRun(await listWorkflowRuns(repository, workflow, token), { kind, nonce: dispatchNonce, ref });
+    if (correlated) return correlated;
     await sleep(Math.min(POLL_MS, 5000));
   }
-  throw new Error(`timed out resolving workflow dispatch: ${workflow}`);
+  throw new Error(`timed out resolving correlated workflow dispatch: ${workflow}`);
 }
 
 async function waitWorkflowRun(repository, runId, token) {
@@ -233,12 +233,14 @@ async function waitHeadChange(repository, prNumber, previousSha, token) {
   throw new Error('in-flight remediation completed without publishing a new material head');
 }
 
-async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef, targetPr, remediationContext, token }) {
+async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef, targetPr, remediationContext, token, dispatchNonce = createDispatchNonce() }) {
   return dispatchWorkflowAndResolveRun({
     repository: orchestratorRepository,
     workflow: plan.implementation.workflow,
     ref: orchestratorRef,
     token,
+    kind: 'worker',
+    dispatchNonce,
     inputs: {
       target_repository: targetRepository,
       target_issue: String(issueNumber),
@@ -250,24 +252,11 @@ async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, t
   });
 }
 
-async function auditResultFromComment({ repository, prNumber, candidateSha, auditRunId, token }) {
-  const comments = await listComments(repository, prNumber, token);
-  for (const comment of comments.toReversed()) {
-    const body = String(comment.body ?? '');
-    if (!body.startsWith(AUDIT_MARKER)) continue;
-    const match = body.match(/<!-- delivery-v2-audit-json:([A-Za-z0-9+/=]+) -->/);
-    if (!match) continue;
-    const payload = JSON.parse(Buffer.from(match[1], 'base64').toString('utf8'));
-    if (String(payload.candidateSha).toLowerCase() === candidateSha.toLowerCase() && Number(payload.auditWorkflowRunId) === Number(auditRunId)) return payload;
-  }
-  throw new Error(`audit run ${auditRunId} completed without exact-head machine-readable PR result`);
+async function auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber, candidateSha, auditRun, sourceWorkflowRunId, token }) {
+  return loadAuthoritativeAuditResult({ orchestratorRepository, trustedRef: orchestratorRef, targetRepository, issueNumber, pullRequestNumber: prNumber, candidateSha, auditRun, sourceWorkflowRunId, token });
 }
 
 function higherRisk(next, current) { return RISK_RANK[next] > RISK_RANK[current]; }
-
-export function ciFailureClassForConclusion(conclusion) {
-  return String(conclusion ?? '').toLowerCase() === 'failure' ? 'actionable' : 'external';
-}
 
 export function rebuildCiPendingState({ plan, materialHeadSha, previousState }) {
   const fresh = createOperationalDelivery({ plan, materialHeadSha });
@@ -284,7 +273,7 @@ export function markExistingAuditInFlight(state) {
   return Object.freeze({ ...state, auditInFlight: true });
 }
 
-async function main() {
+export async function main() {
   const targetRepository = requiredEnv('TARGET_REPOSITORY');
   const issueNumber = positiveInteger(requiredEnv('TARGET_ISSUE'), 'TARGET_ISSUE');
   const baseBranch = requiredEnv('BASE_BRANCH');
@@ -292,7 +281,7 @@ async function main() {
   const requestedRisk = requiredEnv('DELIVERY_RISK_PROFILE').toLowerCase();
   const resumePr = positiveInteger(requiredEnv('DELIVERY_V2_RESUME_PR'), 'DELIVERY_V2_RESUME_PR');
   const orchestratorRepository = requiredEnv('GITHUB_REPOSITORY');
-  const orchestratorRef = process.env.ORCHESTRATOR_WORKER_REF || process.env.GITHUB_REF_NAME || 'main';
+  const orchestratorRef = requiredEnv('ORCHESTRATOR_WORKER_REF');
   const targetReadToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
   const actionsToken = requiredEnv('GITHUB_TOKEN');
@@ -359,14 +348,21 @@ async function main() {
     });
   };
 
+  await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 resumed evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
   await persist({ nextAction: state.status });
 
   for (let cycle = 0; cycle < 8; cycle += 1) {
     if (['ready-for-human-merge', 'escalated', 'terminal'].includes(state.status)) break;
 
     if (state.status === 'implementing') {
-      const workerRunId = Number(controller.workerRunId ?? 0);
-      if (!Number.isInteger(workerRunId) || workerRunId < 1) throw new Error('cannot safely resume an in-flight implementation without persisted workerRunId');
+      let workerRunId = Number(controller.workerRunId ?? 0);
+      if ((!Number.isInteger(workerRunId) || workerRunId < 1) && controller.workerDispatchNonce) {
+        const recovered = selectCorrelatedWorkflowRun(await listWorkflowRuns(orchestratorRepository, plan.implementation.workflow, actionsToken), { kind: 'worker', nonce: controller.workerDispatchNonce, ref: orchestratorRef });
+        if (!recovered) throw new Error('cannot safely recover in-flight implementation by dispatch nonce; refusing duplicate worker');
+        workerRunId = recovered.id;
+        await persist({ nextAction: 'observe-remediation', workerRunId, workerDispatchNonce: controller.workerDispatchNonce });
+      }
+      if (!Number.isInteger(workerRunId) || workerRunId < 1) throw new Error('cannot safely resume an in-flight implementation without persisted worker identity');
       const run = await waitWorkflowRun(orchestratorRepository, workerRunId, actionsToken);
       if (run.conclusion !== 'success') throw new Error(`persisted remediation worker failed: ${run.html_url}`);
       const beforeSha = materialHeadSha;
@@ -429,7 +425,10 @@ async function main() {
         }
       });
       await persist({ nextAction: failureClass === 'actionable' ? state.status : 'external-ci-blocker' });
-      if (failureClass !== 'actionable') throw new Error(`required check ended with external/ambiguous conclusion ${latestCheck.conclusion}; refusing AI remediation`);
+      if (failureClass !== 'actionable') {
+        await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'failure', description: `Delivery V2 blocked by external CI conclusion: ${latestCheck.conclusion}`, token: targetWriteToken });
+        throw new Error(`required check ended with external/ambiguous conclusion ${latestCheck.conclusion}; refusing AI remediation`);
+      }
       continue;
     }
 
@@ -437,7 +436,8 @@ async function main() {
       const remediation = operationalRemediationInput(state);
       const beforeSha = materialHeadSha;
       state = applyOperationalEvent(state, { type: 'start-implementation' });
-      await persist({ nextAction: 'dispatch-remediation', workerRunId: null });
+      const workerDispatchNonce = createDispatchNonce();
+      await persist({ nextAction: 'dispatch-remediation', workerRunId: null, workerDispatchNonce });
       let worker = await dispatchWorker({
         orchestratorRepository,
         orchestratorRef,
@@ -448,10 +448,11 @@ async function main() {
         targetRef: beforeSha,
         targetPr: resumePr,
         remediationContext: JSON.stringify(remediation),
-        token: actionsToken
+        token: actionsToken,
+        dispatchNonce: workerDispatchNonce
       });
       providerCalls += 1;
-      await persist({ nextAction: 'observe-remediation', workerRunId: worker.id });
+      await persist({ nextAction: 'observe-remediation', workerRunId: worker.id, workerDispatchNonce });
       worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
       if (worker.conclusion !== 'success') throw new Error(`remediation worker failed: ${worker.html_url}`);
       pullRequest = await waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken);
@@ -473,46 +474,77 @@ async function main() {
     }
 
     if (state.status === 'audit-pending') {
-      if (state.auditAttempts > 0 && !controller.auditRunId) throw new Error('cannot safely resume audit-pending state without persisted auditRunId; refusing duplicate audit dispatch');
       let auditRun;
       if (controller.auditRunId) {
         state = markExistingAuditInFlight(state);
         auditRun = await waitWorkflowRun(orchestratorRepository, Number(controller.auditRunId), actionsToken);
+      } else if (state.auditAttempts > 0 && controller.auditDispatchNonce) {
+        const recovered = selectCorrelatedWorkflowRun(await listWorkflowRuns(orchestratorRepository, 'delivery-v2-audit.yml', actionsToken), { kind: 'audit', nonce: controller.auditDispatchNonce, ref: orchestratorRef });
+        if (!recovered) throw new Error('cannot safely recover in-flight audit by dispatch nonce; refusing duplicate audit');
+        state = markExistingAuditInFlight(state);
+        auditRun = await waitWorkflowRun(orchestratorRepository, recovered.id, actionsToken);
+        await persist({ nextAction: 'observe-audit', auditRunId: recovered.id, auditDispatchNonce: controller.auditDispatchNonce });
+      } else if (state.auditAttempts > 0) {
+        throw new Error('cannot safely resume audit-pending state without persisted audit identity; refusing duplicate audit');
       } else {
         state = applyOperationalEvent(state, { type: 'start-audit' });
-        await persist({ nextAction: 'dispatch-audit', auditRunId: null });
+        const auditDispatchNonce = createDispatchNonce();
+        await persist({ nextAction: 'dispatch-audit', auditRunId: null, auditDispatchNonce });
         const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
         auditRun = await dispatchWorkflowAndResolveRun({
           repository: orchestratorRepository,
           workflow: 'delivery-v2-audit.yml',
           ref: orchestratorRef,
           token: actionsToken,
+          kind: 'audit',
+          dispatchNonce: auditDispatchNonce,
           inputs: {
-            target_repository: targetRepository,
-            target_issue: String(issueNumber),
-            target_pr: String(resumePr),
-            risk_profile: state.riskProfile,
-            source_workflow_run_id: String(sourceRun.id),
-            source_workflow_name: targetPolicy.ciWorkflowName,
-            source_workflow_path: targetPolicy.ciWorkflowPath,
-            implementation_attempt: String(state.implementationAttempts)
+            target_repository: targetRepository, target_issue: String(issueNumber), target_pr: String(resumePr),
+            risk_profile: state.riskProfile, source_workflow_run_id: String(sourceRun.id), source_workflow_name: targetPolicy.ciWorkflowName,
+            source_workflow_path: targetPolicy.ciWorkflowPath, implementation_attempt: String(state.implementationAttempts)
           }
         });
         providerCalls += 1;
-        await persist({ nextAction: 'observe-audit', auditRunId: auditRun.id });
+        await persist({ nextAction: 'observe-audit', auditRunId: auditRun.id, auditDispatchNonce });
         auditRun = await waitWorkflowRun(orchestratorRepository, auditRun.id, actionsToken);
       }
       if (auditRun.conclusion !== 'success') throw new Error(`independent audit workflow failed: ${auditRun.html_url}`);
-      const result = await auditResultFromComment({ repository: targetRepository, prNumber: resumePr, candidateSha: materialHeadSha, auditRunId: auditRun.id, token: targetReadToken });
-      state = applyOperationalEvent(state, {
-        type: 'audit-result',
-        result: { candidateSha: materialHeadSha, decision: result.decision, findings: result.findings, evidenceRef: auditRun.html_url }
-      });
-      await persist({ nextAction: state.status, auditRunId: null });
+      const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
+      const result = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: sourceRun.id, token: actionsToken });
+      state = applyOperationalEvent(state, { type: 'audit-result', result: { candidateSha: materialHeadSha, decision: result.decision, findings: result.findings, evidenceRef: auditRun.html_url } });
+      await persist({ nextAction: state.status, auditRunId: auditRun.id, auditDispatchNonce: controller.auditDispatchNonce, auditRequestFingerprint: result.requestFingerprint });
       continue;
     }
 
     throw new Error(`unsupported resumed controller state: ${state.status}`);
+  }
+
+  if (state.status === 'ready-for-human-merge') {
+    pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
+    materialHeadSha = String(pullRequest.head.sha).toLowerCase();
+    latestCheck = (await fetchCheckRuns(targetRepository, materialHeadSha, targetReadToken)).find((item) => item.name === targetPolicy.requiredStatusName);
+    if (!latestCheck || latestCheck.status !== 'completed' || latestCheck.conclusion !== 'success') throw new Error('release gate requires exact-head terminal green source CI');
+    latestSourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
+    let audit = null;
+    if (state.auditRequired) {
+      const auditRunId = positiveInteger(controller.auditRunId, 'persisted auditRunId');
+      const auditRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${auditRunId}`, actionsToken);
+      const auditResult = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });
+      if (auditResult.decision !== 'approved') throw new Error('release gate requires approved authoritative audit');
+      audit = { candidateSha: materialHeadSha, decision: 'approved', mode: state.auditMode, requestFingerprint: auditResult.requestFingerprint, evidenceRef: auditRun.html_url };
+    }
+    const releaseInput = {
+      schemaVersion: 1, repository: targetRepository, pullRequestNumber: resumePr, materialHeadSha, currentRemoteHeadSha: materialHeadSha,
+      evidenceCollection: { materialHeadSha, remoteHeadSha: materialHeadSha, evidenceRef: `github:${targetRepository}#${resumePr}@${materialHeadSha}` },
+      classifier: { subjectSha: materialHeadSha, profile: state.riskProfile, version: classifier.version, fingerprint: classifier.fingerprint, expectedFingerprint: classifier.fingerprint, evidenceRef: classifier.evidenceRef },
+      mergePreview: null,
+      checks: [{ name: latestCheck.name, required: true, subjectSha: materialHeadSha, status: latestCheck.status, conclusion: latestCheck.conclusion, workflowRunId: latestSourceRun.id, evidenceRef: latestCheck.details_url ?? latestSourceRun.html_url }],
+      standardAuditRequired: targetPolicy.standardAuditRequired !== false, audit, unresolvedFindings: [], blockers: []
+    };
+    const release = evaluateOperationalRelease({ state, releaseInput });
+    if (!release.readiness) throw new Error(`release gate did not become ready: ${release.reasons.join(', ')}`);
+    await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'success', description: 'Delivery V2 exact-head release gate approved', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
+    await persist({ nextAction: 'human-merge-policy', release });
   }
 
   pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
