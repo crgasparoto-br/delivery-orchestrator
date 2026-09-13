@@ -81,9 +81,9 @@ function auditPrompt(request) {
     '',
     'Your entire allowed context is the sanitized bundle in the current working directory: AUDIT_REQUEST.json, DELIVERY_CONTRACT.md, ISSUE.json, PULL_REQUEST.json, CANDIDATE.diff, DIFF_MANIFEST.json and MATERIAL_CONTEXT.json. ISSUE.json and PULL_REQUEST.json are deterministic bounded projections, not raw GitHub API objects. Do not seek implementation conversation history, hidden implementer reasoning, retired delivery snapshots, generated workflow locks or unrelated repository inventory. Do not modify files or Git state.',
     '',
-    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, lists every changed path, and records included or omitted diff blocks with explicit reasons. MATERIAL_CONTEXT.json contains bounded full contents for prioritized changed source files plus one-hop direct relative dependencies when resolvable. Generated locks never displace source/tests from this semantic budget; every omitted changed path remains explicitly manifested. Respect both manifests and their limits. If a release-blocking conclusion genuinely depends on omitted diff or file context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
+    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, lists every changed path, and records included or omitted diff blocks with explicit reasons. Its fixed byte ceiling is partitioned by semantic class so executable source/tests cannot starve contract/config/evidence/docs/active-prompt changes. MATERIAL_CONTEXT.json is supplemental: it prioritizes bounded full contents for changed paths not already represented in CANDIDATE.diff, then direct relative dependencies, and explicitly marks diff-represented paths instead of duplicating their bytes. Generated locks never displace semantic material; every changed path remains represented by the bounded diff, supplemental context, or an explicit omission reason. Respect both manifests and their limits. If a release-blocking conclusion genuinely depends on still-omitted diff or file context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
     '',
-    `Audit exactly candidate ${request.candidate.materialHeadSha}. Treat AUDIT_REQUEST.json identity/check evidence as authoritative. First verify the issue acceptance contract against the bounded candidate diff and full material context available in the bundle, then apply Delivery V2 invariants. Return all cheap blocking findings in one pass. Findings must identify concrete candidate behavior/configuration and discriminating evidence. Do not reject hypothetical future code that is absent from this candidate.`,
+    `Audit exactly candidate ${request.candidate.materialHeadSha}. Treat AUDIT_REQUEST.json identity/check evidence as authoritative. First verify the issue acceptance contract against the bounded candidate diff and supplemental material context available in the bundle, then apply Delivery V2 invariants. Return all cheap blocking findings in one pass. Findings must identify concrete candidate behavior/configuration and discriminating evidence. Do not reject hypothetical future code that is absent from this candidate.`,
     '',
     'Use decision=approved only when no release-blocking finding exists. Return only the requested JSON object.'
   ].join('\n');
@@ -120,13 +120,15 @@ function auditContextPayload({ budget, diffEvidence, materialContext }) {
       fullDiffSha256: diffEvidence.manifest.fullDiffSha256,
       boundedBytes: diffEvidence.manifest.boundedBytes,
       includedCount: diffEvidence.manifest.included.length,
-      omittedCount: diffEvidence.manifest.omitted.length
+      omittedCount: diffEvidence.manifest.omitted.length,
+      categoryBytes: diffEvidence.manifest.categoryBytes ?? null
     },
     materialContext: {
       strategy: materialContext.strategy,
       limits: materialContext.limits,
       totalBytes: materialContext.totalBytes,
       fileCount: materialContext.files.length,
+      representedPathCount: materialContext.representedPaths?.length ?? 0,
       omittedCount: materialContext.omitted.length
     }
   };
@@ -175,7 +177,8 @@ export async function main() {
     fetchImmutableCompareEvidence(repository, baseSha, candidateSha, token)
   ]);
   const diffEvidence = boundAuditDiff(compareEvidence.diffText, compareEvidence.changedPaths);
-  const materialContext = await fetchBoundedAuditContext(repository, candidateSha, compareEvidence.changedPaths, token);
+  const representedPaths = diffEvidence.manifest.included.map((entry) => entry.path).filter(Boolean);
+  const materialContext = await fetchBoundedAuditContext(repository, candidateSha, compareEvidence.changedPaths, token, { representedPaths });
   const stablePullRequest = await fetchJson(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}`, token);
   assertPullRequestSnapshotStable(pullRequest, stablePullRequest);
 
