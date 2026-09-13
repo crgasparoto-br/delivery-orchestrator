@@ -272,9 +272,9 @@ test('GitHub-native auditor uses one deterministic preflight barrier before supp
   assert.match(script, /const diffPreflightReasons = boundedDiffPreflightReasons\(diffEvidence\.manifest\)/);
   assert.match(script, /required-reservation-not-included:\$\{category\}/);
   assert.match(script, /context-readiness-unproven/);
-  assert.match(script, /const materialContext = boundedDiffPreflightReasons\.length === 0[\s\S]*?fetchBoundedAuditContext[\s\S]*?: blockedMaterialContext/);
+  assert.match(script, /const materialContext = boundedPreflightReasons\.length === 0[\s\S]*?fetchBoundedAuditContext[\s\S]*?: blockedMaterialContext/);
   assert.match(script, /blocked-before-supplemental-context-fetch/);
-  assert.match(script, /preflightReasons: boundedDiffPreflightReasons/);
+  assert.match(script, /preflightReasons: boundedPreflightReasons/);
   assert.match(script, /preflightReasons: diffEvidence\.manifest\.preflightReasons/);
   assert.doesNotMatch(script, /throw new Error\('audit diff path alignment could not be proven/);
   assert.match(script, /providerCalls: 0/);

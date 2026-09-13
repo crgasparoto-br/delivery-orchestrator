@@ -217,13 +217,13 @@ export async function main() {
   ]);
   const diffEvidence = boundAuditDiff(compareEvidence.diffText, compareEvidence.changedPaths);
   const diffPreflightReasons = boundedDiffPreflightReasons(diffEvidence.manifest);
-  const boundedDiffPreflightReasons = diffPreflightReasons.map((reason) => `bounded-diff:${reason}`);
-  const representedPaths = boundedDiffPreflightReasons.length === 0
+  const boundedPreflightReasons = diffPreflightReasons.map((reason) => `bounded-diff:${reason}`);
+  const representedPaths = boundedPreflightReasons.length === 0
     ? diffEvidence.manifest.included.map((entry) => entry.path).filter(Boolean)
     : [];
-  const materialContext = boundedDiffPreflightReasons.length === 0
+  const materialContext = boundedPreflightReasons.length === 0
     ? await fetchBoundedAuditContext(repository, candidateSha, compareEvidence.changedPaths, token, { representedPaths })
-    : blockedMaterialContext(candidateSha, compareEvidence.changedPaths, riskProfile, boundedDiffPreflightReasons);
+    : blockedMaterialContext(candidateSha, compareEvidence.changedPaths, riskProfile, boundedPreflightReasons);
   const stablePullRequest = await fetchJson(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}`, token);
   assertPullRequestSnapshotStable(pullRequest, stablePullRequest);
 
@@ -255,7 +255,7 @@ export async function main() {
     issue,
     pullRequest: stablePullRequest,
     files,
-    preflightReasons: boundedDiffPreflightReasons
+    preflightReasons: boundedPreflightReasons
   });
   const contextPayload = auditContextPayload({ budget, diffEvidence, materialContext });
 
