@@ -23,7 +23,8 @@ import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-pol
 import {
   createControllerDeliveryMetrics,
   createControllerObservability,
-  recordControllerProviderObservation
+  recordControllerProviderObservation,
+  runDurationMs
 } from '../src/v2/controller-observability.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
@@ -284,13 +285,6 @@ async function downloadWorkerUsage(orchestratorRepository, runId, token) {
   }
 }
 
-function runDuration(run) {
-  if (!run) return 0;
-  const started = Date.parse(run.run_started_at ?? run.created_at ?? run.updated_at);
-  const ended = Date.parse(run.updated_at ?? run.run_started_at ?? run.created_at);
-  return Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : 0;
-}
-
 function checkEvidence(check, sourceRun, sha) {
   return [{
     name: check.name,
@@ -536,15 +530,13 @@ export async function main() {
       auditRuns.push(auditRun);
       if (auditRun.conclusion !== 'success') throw new Error(`independent audit workflow failed: ${auditRun.html_url}`);
       lastAudit = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: pullRequest.number, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });
-      if (lastAudit.providerCalls !== 0) {
-        observability = recordControllerProviderObservation(observability, {
-          runId: auditRun.id,
-          stage: 'audit',
-          usage: lastAudit.modelUsage ?? {},
-          durationMs: runDuration(auditRun),
-          evidenceRef: auditRun.html_url
-        });
-      }
+      observability = recordControllerProviderObservation(observability, {
+        runId: auditRun.id,
+        stage: 'audit',
+        usage: lastAudit.providerCalls === 0 ? { providerCalls: 0 } : (lastAudit.modelUsage ?? {}),
+        durationMs: runDurationMs(auditRun),
+        evidenceRef: auditRun.html_url
+      });
       evidenceRefs.push(auditRun.html_url);
       state = applyOperationalEvent(state, {
         type: 'audit-result',

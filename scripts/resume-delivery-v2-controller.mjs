@@ -20,7 +20,9 @@ import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from 
 import { parseTrustedJsonEnvelope, selectTrustedMarkerComment, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-policy.mjs';
 import {
+  ciQueueDurationMs,
   createControllerDeliveryMetrics,
+  createControllerObservability,
   normalizeControllerObservability,
   recordControllerProviderObservation,
   runDurationMs
@@ -299,7 +301,25 @@ export function markExistingAuditInFlight(state) {
   return Object.freeze({ ...state, auditInFlight: true });
 }
 
+export function initializeResumeObservability(controller = {}, { startedAtMs = Date.now() } = {}) {
+  const hasPersistedObservability = Boolean(controller?.observability);
+  const explicitHistoryComplete = controller?.observabilityHistoryComplete;
+  if (explicitHistoryComplete != null && typeof explicitHistoryComplete !== 'boolean') {
+    throw new Error('controller.observabilityHistoryComplete must be boolean when present');
+  }
+  if (explicitHistoryComplete === true && !hasPersistedObservability) {
+    throw new Error('complete observability history requires persisted observability');
+  }
+  return Object.freeze({
+    observability: hasPersistedObservability
+      ? normalizeControllerObservability(controller.observability)
+      : createControllerObservability({ startedAtMs }),
+    historyComplete: explicitHistoryComplete ?? hasPersistedObservability
+  });
+}
+
 export async function main() {
+  const resumeStartedAtMs = Date.now();
   const targetRepository = requiredEnv('TARGET_REPOSITORY');
   const issueNumber = positiveInteger(requiredEnv('TARGET_ISSUE'), 'TARGET_ISSUE');
   const baseBranch = requiredEnv('BASE_BRANCH');
@@ -334,14 +354,22 @@ export async function main() {
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
   const stateEnvelope = parseStateComment(await listComments(targetRepository, resumePr, targetReadToken), trustedLogin);
   if (!stateEnvelope) throw new Error('managed PR is missing authoritative Delivery V2 persistent state');
-  let observability = stateEnvelope.controller?.observability
-    ? normalizeControllerObservability(stateEnvelope.controller.observability)
-    : null;
+  const resumeObservability = initializeResumeObservability(stateEnvelope.controller, { startedAtMs: resumeStartedAtMs });
+  let observability = resumeObservability.observability;
+  const observabilityHistoryComplete = resumeObservability.historyComplete;
   const priorControllerRunId = positiveInteger(stateEnvelope.controller?.controllerRunId, 'persisted controllerRunId');
   const priorControllerRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${priorControllerRunId}`, actionsToken);
   validateControllerRunProvenance(priorControllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
   let state;
-  let controller = { ...stateEnvelope.controller, controllerRunId, controllerRepository: orchestratorRepository, controllerRef: orchestratorRef, controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml' };
+  let controller = {
+    ...stateEnvelope.controller,
+    controllerRunId,
+    controllerRepository: orchestratorRepository,
+    controllerRef: orchestratorRef,
+    controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml',
+    observability,
+    observabilityHistoryComplete
+  };
   if (stateEnvelope) {
     const reconciled = reconcilePersistentState(stateEnvelope.persistent, {
       repository: targetRepository,
@@ -378,7 +406,7 @@ export async function main() {
   });
 
   const persist = async (extra = {}) => {
-    controller = { ...controller, ...(observability ? { observability } : {}), ...extra };
+    controller = { ...controller, observability, observabilityHistoryComplete, ...extra };
     return upsertStateComment({
       repository: targetRepository,
       prNumber: resumePr,
@@ -393,7 +421,6 @@ export async function main() {
   };
 
   const recordWorkerUsage = async (run) => {
-    if (!observability) return;
     const usage = await downloadGhAwUsageArtifact({ repository: orchestratorRepository, runId: run.id, token: actionsToken });
     observability = recordControllerProviderObservation(observability, {
       runId: run.id,
@@ -574,15 +601,13 @@ export async function main() {
       if (auditRun.conclusion !== 'success') throw new Error(`independent audit workflow failed: ${auditRun.html_url}`);
       const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
       const result = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: sourceRun.id, token: actionsToken });
-      if (observability) {
-        observability = recordControllerProviderObservation(observability, {
-          runId: auditRun.id,
-          stage: 'audit',
-          usage: result.modelUsage ?? {},
-          durationMs: runDurationMs(auditRun),
-          evidenceRef: auditRun.html_url
-        });
-      }
+      observability = recordControllerProviderObservation(observability, {
+        runId: auditRun.id,
+        stage: 'audit',
+        usage: result.providerCalls === 0 ? { providerCalls: 0 } : (result.modelUsage ?? {}),
+        durationMs: runDurationMs(auditRun),
+        evidenceRef: auditRun.html_url
+      });
       state = applyOperationalEvent(state, { type: 'audit-result', result: { candidateSha: materialHeadSha, decision: result.decision, findings: result.findings, evidenceRef: auditRun.html_url } });
       const priorFindings = result.findings.map((finding) => ({ id: finding.id, candidateSha: finding.candidateSha, status: finding.blocksRelease ? 'open' : 'non-blocking' }));
       await persist({ nextAction: state.status, auditRunId: auditRun.id, auditDispatchNonce: controller.auditDispatchNonce, auditRequestFingerprint: result.requestFingerprint, priorFindings });
@@ -604,15 +629,13 @@ export async function main() {
       const auditRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${auditRunId}`, actionsToken);
       const auditResult = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });
       if (auditResult.decision !== 'approved') throw new Error('release gate requires approved authoritative audit');
-      if (observability) {
-        observability = recordControllerProviderObservation(observability, {
-          runId: auditRun.id,
-          stage: 'audit',
-          usage: auditResult.modelUsage ?? {},
-          durationMs: runDurationMs(auditRun),
-          evidenceRef: auditRun.html_url
-        });
-      }
+      observability = recordControllerProviderObservation(observability, {
+        runId: auditRun.id,
+        stage: 'audit',
+        usage: auditResult.providerCalls === 0 ? { providerCalls: 0 } : (auditResult.modelUsage ?? {}),
+        durationMs: runDurationMs(auditRun),
+        evidenceRef: auditRun.html_url
+      });
       audit = { candidateSha: materialHeadSha, decision: 'approved', mode: state.auditMode, requestFingerprint: auditResult.requestFingerprint, evidenceRef: auditRun.html_url };
     }
     const finalPullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
@@ -633,7 +656,7 @@ export async function main() {
   }
 
   pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
-  const metrics = observability ? createControllerDeliveryMetrics({
+  const metrics = observabilityHistoryComplete ? createControllerDeliveryMetrics({
     observability,
     repository: targetRepository,
     issueNumber,
@@ -649,6 +672,20 @@ export async function main() {
     escalated: state.status === 'escalated',
     evidenceRefs: [latestCheck?.details_url, latestSourceRun?.html_url].filter(Boolean)
   }) : null;
+  const partialMetrics = observabilityHistoryComplete ? null : {
+    schemaVersion: 1,
+    scope: 'observed-since-legacy-resume',
+    startedAtMs: observability.startedAtMs,
+    providerCalls: observability.providerCalls,
+    aiUsageByStage: observability.aiUsageByStage,
+    auditDurationMs: observability.auditDurationMs,
+    durationsMs: {
+      ciQueue: ciQueueDurationMs(latestSourceRun),
+      ciExecution: runDurationMs(latestSourceRun),
+      endToEnd: Math.max(0, Date.now() - observability.startedAtMs)
+    },
+    evidenceRefs: observability.evidenceRefs
+  };
   const payload = {
     schemaVersion: 1,
     status: state.status,
@@ -658,8 +695,11 @@ export async function main() {
     materialHeadSha: String(pullRequest.head.sha).toLowerCase(),
     risk: state.riskProfile,
     providerCalls: metrics?.providerCalls ?? null,
-    metricsStatus: metrics ? 'complete' : 'legacy-state-missing-observability',
+    observedProviderCalls: observability.providerCalls,
+    observabilityHistoryComplete,
+    metricsStatus: metrics ? 'complete' : 'partial-legacy-observability',
     metrics,
+    partialMetrics,
     resumed: true,
     attempts: {
       implementation: state.implementationAttempts,
