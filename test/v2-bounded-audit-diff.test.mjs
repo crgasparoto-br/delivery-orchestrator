@@ -194,11 +194,13 @@ test('oversized diff blocks are omitted explicitly instead of being silently tru
   assert.ok(bounded.manifest.omitted[0].bytes > 64);
 });
 
-test('GitHub-native auditor suppresses supplemental context only for verified diff-path alignment', async () => {
+test('GitHub-native auditor materializes supplemental context only after verified diff-path alignment', async () => {
   const script = await import('node:fs/promises').then(({ readFile }) => readFile(new URL('../scripts/run-delivery-v2-github-audit.mjs', import.meta.url), 'utf8'));
   assert.match(script, /const diffEvidence = boundAuditDiff\(compareEvidence\.diffText, compareEvidence\.changedPaths\)/);
-  assert.match(script, /const representedPaths = diffEvidence\.manifest\.alignmentExact[\s\S]*?\? diffEvidence\.manifest\.included\.map\(\(entry\) => entry\.path\)\.filter\(Boolean\)[\s\S]*?: \[\];/);
+  assert.match(script, /if \(!diffEvidence\.manifest\.alignmentExact\) throw new Error\('audit diff path alignment could not be proven; refusing semantic audit before model invocation'\);/);
+  assert.match(script, /const representedPaths = diffEvidence\.manifest\.included\.map\(\(entry\) => entry\.path\)\.filter\(Boolean\);/);
   assert.match(script, /fetchBoundedAuditContext\(repository, candidateSha, compareEvidence\.changedPaths, token, \{ representedPaths \}\)/);
+  assert.match(script, /if exact alignment cannot be proven, the runtime fails closed before material context or model invocation/);
   assert.match(script, /reserves one eligible representative from each semantic class before any spillover/);
   assert.match(script, /evaluateAuditBundleBudget/);
   assert.match(script, /providerCalls: 0/);
