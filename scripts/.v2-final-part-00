@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+import { readFile, writeFile } from 'node:fs/promises';
+
+async function load(path) { return readFile(path, 'utf8'); }
+async function save(path, text) { await writeFile(path, text.replace(/\n+$/,'\n'), 'utf8'); }
+function replaceOnce(text, before, after, label) {
+  const first = text.indexOf(before);
+  if (first < 0) throw new Error(`missing anchor: ${label}`);
+  if (text.indexOf(before, first + before.length) >= 0) throw new Error(`ambiguous anchor: ${label}`);
+  return text.slice(0, first) + after + text.slice(first + before.length);
+}
+function insertBeforeOnce(text, anchor, addition, label) {
+  const idx = text.indexOf(anchor);
+  if (idx < 0) throw new Error(`missing anchor: ${label}`);
+  if (text.indexOf(anchor, idx + anchor.length) >= 0) throw new Error(`ambiguous anchor: ${label}`);
+  return text.slice(0, idx) + addition + text.slice(idx);
+}
+
+// 1) Generic audit workflow: private checkout permission + explicit implementer provenance inputs.
+{
+  const path = '.github/workflows/delivery-v2-audit.yml';
+  let s = await load(path);
+  s = replaceOnce(s, 'permissions: {}\n\nconcurrency:', 'permissions:\n  contents: read\n\nconcurrency:', 'audit checkout permission');
+  s = replaceOnce(
+    s,
+    "      implementation_attempt:\n        description: Material implementation/remediation attempt count\n        required: true\n        default: '1'\n        type: string\n      dispatch_nonce:\n",
+    "      implementation_attempt:\n        description: Material implementation/remediation attempt count\n        required: true\n        default: '1'\n        type: string\n      implementer_provider:\n        description: AI provider that produced the audited material head\n        required: true\n        type: string\n      implementer_worker_identity:\n        description: Exact implementation worker workflow identity\n        required: true\n        type: string\n      implementer_run_id:\n        description: Exact implementation worker run that produced the audited material head\n        required: true\n        type: string\n      dispatch_nonce:\n",
+    'audit implementer inputs'
+  );
+  s = replaceOnce(
+    s,
+    "      IMPLEMENTATION_ATTEMPT: ${{ inputs.implementation_attempt }}\n      AUDIT_RESULT_PATH:",
+    "      IMPLEMENTATION_ATTEMPT: ${{ inputs.implementation_attempt }}\n      IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider }}\n      IMPLEMENTER_WORKER_IDENTITY: ${{ inputs.implementer_worker_identity }}\n      IMPLEMENTER_RUN_ID: ${{ inputs.implementer_run_id }}\n      AUDIT_RESULT_PATH:",
+    'audit implementer env'
+  );
+  await save(path, s);
+}
+
+// 2) Audit runner: fail closed without explicit implementation lineage and pass it into the canonical request.
+{
+  const path = 'scripts/run-delivery-v2-github-audit.mjs';
+  let s = await load(path);
+  s = replaceOnce(
+    s,
+    "  const riskProfile = requiredEnv('AUDIT_RISK_PROFILE').toLowerCase();\n  const token = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');",
+    "  const riskProfile = requiredEnv('AUDIT_RISK_PROFILE').toLowerCase();\n  const implementerProvider = requiredEnv('IMPLEMENTER_PROVIDER').toLowerCase();\n  const implementerWorkerIdentity = requiredEnv('IMPLEMENTER_WORKER_IDENTITY');\n  const implementerRunId = positiveInteger('IMPLEMENTER_RUN_ID');\n  const token = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');",
+    'audit runner provenance env'
+  );
+  s = replaceOnce(
+    s,
+    "    workflowName,\n    workflowPath,\n    implementationAttempt: positiveInteger('IMPLEMENTATION_ATTEMPT', '1')\n  });",
+    "    workflowName,\n    workflowPath,\n    implementationAttempt: positiveInteger('IMPLEMENTATION_ATTEMPT', '1'),\n    implementer: { provider: implementerProvider, workerIdentity: implementerWorkerIdentity, runId: implementerRunId }\n  });",
+    'audit runner provenance request'
+  );
+  await save(path, s);
+}
+
+// 3) Shared controller runtime: exact base identity + merge-preview compatibility at release.
+{
+  const path = 'src/v2/controller-runtime.mjs';
+  let s = await load(path);
+  const addition = `\nexport function releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, baseSha } = {}) {\n  if (!pullRequest || Array.isArray(pullRequest) || typeof pullRequest !== 'object') throw new Error('pullRequest is required');\n  const expectedHead = requiredSha(materialHeadSha, 'materialHeadSha');\n  const expectedBase = requiredSha(baseSha, 'baseSha');\n  const currentHead = requiredSha(pullRequest.head?.sha, 'pullRequest.head.sha');\n  const currentBase = requiredSha(pullRequest.base?.sha, 'pullRequest.base.sha');\n  if (currentHead !== expectedHead) throw new Error('release head drift detected');\n  if (currentBase !== expectedBase) throw new Error('release base drift detected');\n  const rawPreview = String(pullRequest.merge_commit_sha ?? '').trim().toLowerCase();\n  const previewSha = SHA_RE.test(rawPreview) ? rawPreview : null;\n  const mergeable = pullRequest.mergeable;\n  const terminal = previewSha != null && mergeable

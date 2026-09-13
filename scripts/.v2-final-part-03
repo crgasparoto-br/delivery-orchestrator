@@ -1,0 +1,51 @@
+st path = 'test/v2-controller-runtime.test.mjs';
+  let s = await load(path);
+  s = replaceOnce(
+    s,
+    "import { ciFailureClassForConclusion, expectedDispatchTitle, selectCorrelatedWorkflowRun, validateAuditArtifactPayload } from '../src/v2/controller-runtime.mjs';",
+    "import { ciFailureClassForConclusion, expectedDispatchTitle, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload } from '../src/v2/controller-runtime.mjs';",
+    'runtime test release helper import'
+  );
+  s += `\n\ntest('release identity fails closed on base drift and requires a mergeable preview', () => {\n  const baseSha = 'c'.repeat(40);\n  const previewSha = 'd'.repeat(40);\n  const pr = { number: 64, html_url: 'https://github.com/owner/target/pull/64', head: { sha: SHA }, base: { sha: baseSha }, merge_commit_sha: previewSha, mergeable: true };\n  const identity = releaseIdentityFromPullRequest(pr, { materialHeadSha: SHA, baseSha });\n  assert.equal(identity.currentBaseSha, baseSha);\n  assert.equal(identity.mergePreview.required, true);\n  assert.equal(identity.mergePreview.previewSha, previewSha);\n  assert.equal(identity.mergePreview.conclusion, 'success');\n  assert.throws(() => releaseIdentityFromPullRequest({ ...pr, base: { sha: 'e'.repeat(40) } }, { materialHeadSha: SHA, baseSha }), /base drift/);\n  const pending = releaseIdentityFromPullRequest({ ...pr, merge_commit_sha: null, mergeable: null }, { materialHeadSha: SHA, baseSha });\n  assert.equal(pending.mergePreview.status, 'pending');\n  assert.equal(pending.mergePreview.conclusion, null);\n});`;
+  await save(path, s);
+}
+
+{
+  const path = 'test/v2-persistent-state.test.mjs';
+  let s = await load(path);
+  s = replaceOnce(
+    s,
+    "    headRef: 'feat/example',\n    remoteHeadSha,",
+    "    headRef: 'feat/example',\n    baseSha: BASE,\n    remoteHeadSha,",
+    'persistent test observed base'
+  );
+  s += `\n\ntest('base drift invalidates candidate-bound evidence even when the material head is unchanged', () => {\n  const state = createPersistentDeliveryState(stateInput({\n    status: 'ready-for-human-merge',\n    workflowChecks: [{ name: 'Validate repository', subjectSha: SHA_A, status: 'completed', conclusion: 'success', workflowRunId: 1001, evidenceRef: 'github:check/1001' }],\n    evidenceRefs: ['github:check/1001']\n  }));\n  const nextBase = 'd'.repeat(40);\n  const result = reconcilePersistentState(state, observed(SHA_A, { baseSha: nextBase }));\n  assert.equal(result.staleStateDetected, true);\n  assert.equal(result.nextAction, 'classify');\n  assert.equal(result.state.baseSha, nextBase);\n  assert.equal(result.state.materialHeadSha, SHA_A);\n  assert.equal(result.state.status, 'queued');\n  assert.deepEqual(result.state.workflowChecks, []);\n  assert.deepEqual(result.state.evidenceRefs, []);\n  assert.equal(result.state.lastReason, 'remote-base-drift');\n});`;
+  await save(path, s);
+}
+
+{
+  const path = 'test/v2-github-native-audit-runtime.test.mjs';
+  let s = await load(path);
+  s = replaceOnce(
+    s,
+    "    sourceWorkflowEvidence: evidence,\n    workflowName: 'Validate PR',\n    workflowPath: PATH\n  });",
+    "    sourceWorkflowEvidence: evidence,\n    workflowName: 'Validate PR',\n    workflowPath: PATH,\n    implementer: { provider: 'codex', workerIdentity: 'delivery-v2-worker-codex-critical.md', runId: 1234 }\n  });",
+    'audit runtime explicit implementer fixture'
+  );
+  s = replaceOnce(
+    s,
+    "  assert.equal(value.candidate.checks[0].workflowEvidence.path, PATH);\n  assert.equal(value.applicability.mode, 'independent');",
+    "  assert.equal(value.candidate.checks[0].workflowEvidence.path, PATH);\n  assert.equal(value.candidate.implementer.provider, 'codex');\n  assert.equal(value.candidate.implementer.workerIdentity, 'delivery-v2-worker-codex-critical.md');\n  assert.equal(value.candidate.implementer.runId, 1234);\n  assert.equal(value.applicability.mode, 'independent');",
+    'audit runtime lineage assertions'
+  );
+  await save(path, s);
+}
+
+{
+  const path = 'test/v2-reentry-guard.test.mjs';
+  let s = await load(path);
+  s += `\n\ntest('base drift routes resume back through deterministic classification', () => {\n  const nextBase = 'd'.repeat(40);\n  const decision = evaluateReentry({\n    pullRequest: pr({ base: { ref: 'main', sha: nextBase } }),\n    stateEnvelope: envelope(),\n    bootstrapLease: null,\n    targetRepository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex'\n  });\n  assert.equal(decision.runController, true);\n  assert.equal(decision.staleStateDetected, true);\n  assert.equal(decision.nextAction, 'classify');\n});`;
+  await save(path, s);
+}
+
+process.stdout.write(JSON.stringify({ ok: true, remediations: ['audit-checkout-permission','base-and-merge-preview-release-binding','implementer-lineage'] }) + '\n');
