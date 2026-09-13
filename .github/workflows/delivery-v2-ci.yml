@@ -8,7 +8,7 @@ on:
       - '**'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: delivery-v2-ci-${{ github.event.pull_request.number }}
@@ -81,8 +81,12 @@ jobs:
           git diff --exit-code -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
           git diff --check
 
-      - name: Publish one cohesive remediation commit
+      - name: Create validated detached GitHub commit
+        id: publish
         shell: bash
+        env:
+          GH_OBJECT_TOKEN: ${{ github.token }}
+          REMOTE_PARENT: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           git config user.name "delivery-v2-remediator"
@@ -93,4 +97,56 @@ jobs:
             exit 2
           fi
           git commit -m "fix(v2): close cumulative audit escape controls"
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const repo = process.env.GITHUB_REPOSITORY;
+          const token = process.env.GH_OBJECT_TOKEN;
+          const parent = process.env.REMOTE_PARENT;
+          if (!repo || !token || !/^[0-9a-f]{40}$/.test(parent || '')) throw new Error('Missing detached-commit identity');
+          const api = async (path, init = {}) => {
+            const response = await fetch(`https://api.github.com/repos/${repo}${path}`, {
+              ...init,
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+                'Content-Type': 'application/json',
+                ...(init.headers || {}),
+              },
+            });
+            const text = await response.text();
+            if (!response.ok) throw new Error(`${init.method || 'GET'} ${path}: ${response.status} ${text}`);
+            return text ? JSON.parse(text) : {};
+          };
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+          const gitBuffer = (...args) => execFileSync('git', args);
+          const changed = git('diff', '--name-only', '-z', 'HEAD^', 'HEAD').split('\0').filter(Boolean);
+          const parentCommit = await api(`/git/commits/${parent}`);
+          const entries = [];
+          for (const path of changed) {
+            let exists = true;
+            try { execFileSync('git', ['cat-file', '-e', `HEAD:${path}`], { stdio: 'ignore' }); } catch { exists = false; }
+            if (!exists) {
+              let mode = '100644';
+              try { mode = git('ls-tree', 'HEAD^', '--', path).split(/\s+/)[0] || mode; } catch {}
+              entries.push({ path, mode, type: 'blob', sha: null });
+              continue;
+            }
+            const mode = git('ls-tree', 'HEAD', '--', path).split(/\s+/)[0];
+            const content = gitBuffer('show', `HEAD:${path}`).toString('base64');
+            const blob = await api('/git/blobs', { method: 'POST', body: JSON.stringify({ content, encoding: 'base64' }) });
+            entries.push({ path, mode, type: 'blob', sha: blob.sha });
+          }
+          const tree = await api('/git/trees', { method: 'POST', body: JSON.stringify({ base_tree: parentCommit.tree.sha, tree: entries }) });
+          const commit = await api('/git/commits', {
+            method: 'POST',
+            body: JSON.stringify({ message: 'fix(v2): close cumulative audit escape controls', tree: tree.sha, parents: [parent] }),
+          });
+          console.log(`VALIDATED_FINAL_COMMIT_SHA=${commit.sha}`);
+          require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, `sha=${commit.sha}\n`);
+          NODE
+
+      - name: Record detached candidate
+        shell: bash
+        run: |
+          echo "Validated detached candidate: ${{ steps.publish.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
