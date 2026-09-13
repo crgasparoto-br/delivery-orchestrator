@@ -1,0 +1,87 @@
+{ inputs.prior_findings_json }}\n      AUDIT_RESULT_PATH:",
+    'audit prior findings env'
+  );
+  await save(path, s);
+}
+
+// 3) Audit runner consumes the controller-provided prior finding lineage and fails closed on malformed input.
+{
+  const path = 'scripts/run-delivery-v2-github-audit.mjs';
+  let s = await load(path);
+  const helper = [
+    '',
+    'function priorFindingsFromEnv() {',
+    "  const raw = String(process.env.PRIOR_FINDINGS_JSON ?? '[]').trim() || '[]';",
+    '  const parsed = JSON.parse(raw);',
+    "  if (!Array.isArray(parsed)) throw new Error('PRIOR_FINDINGS_JSON must be a JSON array');",
+    '  return parsed.map((finding, index) => {',
+    "    if (!finding || Array.isArray(finding) || typeof finding !== 'object') throw new Error(`PRIOR_FINDINGS_JSON[${index}] must be an object`);",
+    "    const id = String(finding.id ?? '').trim();",
+    "    const candidateSha = String(finding.candidateSha ?? '').trim().toLowerCase();",
+    "    const status = String(finding.status ?? '').trim();",
+    "    if (!id || !/^[0-9a-f]{40}$/.test(candidateSha) || !status) throw new Error(`PRIOR_FINDINGS_JSON[${index}] is incomplete`);",
+    '    return Object.freeze({ id, candidateSha, status });',
+    '  });',
+    '}',
+    ''
+  ].join('\n');
+  s = insertBeforeOnce(s, '\nasync function main() {', helper, 'prior findings parser');
+  s = replaceOnce(
+    s,
+    "  const implementerRunId = positiveInteger('IMPLEMENTER_RUN_ID');\n  const token = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');",
+    "  const implementerRunId = positiveInteger('IMPLEMENTER_RUN_ID');\n  const priorFindings = priorFindingsFromEnv();\n  const token = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');",
+    'audit prior findings load'
+  );
+  s = replaceOnce(
+    s,
+    "    implementationAttempt: positiveInteger('IMPLEMENTATION_ATTEMPT', '1'),\n    implementer: { provider: implementerProvider, workerIdentity: implementerWorkerIdentity, runId: implementerRunId }\n  });",
+    "    implementationAttempt: positiveInteger('IMPLEMENTATION_ATTEMPT', '1'),\n    implementer: { provider: implementerProvider, workerIdentity: implementerWorkerIdentity, runId: implementerRunId },\n    priorFindings\n  });",
+    'audit request prior findings'
+  );
+  await save(path, s);
+}
+
+// 4) Reentry with a managed PR but no canonical state fails closed instead of resetting unknown budgets.
+{
+  const path = 'scripts/guard-delivery-v2-reentry.mjs';
+  let s = await load(path);
+  s = replaceOnce(
+    s,
+    "    if (!stateEnvelope) {\n      return Object.freeze({\n        runController: true,\n        resumePr: prNumber,\n        status: 'resume-existing-delivery',\n        pullRequestNumber: prNumber,\n        materialHeadSha: remoteHeadSha,\n        staleStateDetected: true,\n        nextAction: 'recover-pr-state'\n      });\n    }",
+    "    if (!stateEnvelope) {\n      return Object.freeze({\n        runController: false,\n        resumePr: null,\n        status: 'escalated-missing-persistent-state',\n        pullRequestNumber: prNumber,\n        materialHeadSha: remoteHeadSha,\n        staleStateDetected: true,\n        nextAction: 'human-escalation',\n        attempts: null\n      });\n    }",
+    'missing state fail closed'
+  );
+  await save(path, s);
+}
+
+// 5) Initial controller uses deterministic failure evidence, carries prior findings, and clears stale audit metadata after new material.
+{
+  const path = 'scripts/run-delivery-v2-controller.mjs';
+  let s = await load(path);
+  s = replaceOnce(
+    s,
+    "import { ciFailureClassForConclusion, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';",
+    "import { ciFailureClassForEvidence, collectCiFailureEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';",
+    'initial controller failure evidence imports'
+  );
+  s = replaceOnce(
+    s,
+    "      const failureClass = ciFailureClassForConclusion(latestCheck.conclusion);\n      state = applyOperationalEvent(state, {",
+    "      const failureEvidence = await collectCiFailureEvidence({ repository: targetRepository, check: latestCheck, token: targetReadToken });\n      const failureClass = ciFailureClassForEvidence({ conclusion: latestCheck.conclusion, failedJobs: failureEvidence.failedJobs });\n      state = applyOperationalEvent(state, {",
+    'initial controller failure classification'
+  );
+  s = replaceOnce(
+    s,
+    "          cause: `${latestCheck.name}:${latestCheck.conclusion}`,\n          evidenceRef: latestCheck.details_url ?? `github:check:${latestCheck.id}`",
+    "          cause: `${latestCheck.name}:${latestCheck.conclusion}:${failureClass}`,\n          evidenceRef: failureEvidence.workflowUrl ?? latestCheck.details_url ?? `github:check:${latestCheck.id}`",
+    'initial controller failure evidence ref'
+  );
+  s = replaceOnce(
+    s,
+    "          implementer_worker_identity: plan.implementation.workflow,\n          implementer_run_id: String(worker.id)\n        }",
+    "          implementer_worker_identity: plan.implementation.workflow,\n          implementer_run_id: String(worker.id),\n          prior_findings_json: JSON.stringify(controller.priorFindings ?? [])\n        }",
+    'initial audit prior findings dispatch'
+  );
+  s = replaceOnce(
+    s,
+    "      await persist({ nextAction: state.s

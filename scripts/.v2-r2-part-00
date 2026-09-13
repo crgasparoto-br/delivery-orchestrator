@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+import { readFile, writeFile } from 'node:fs/promises';
+
+async function load(path) { return readFile(path, 'utf8'); }
+async function save(path, text) { await writeFile(path, text.replace(/\n+$/, '\n'), 'utf8'); }
+function replaceOnce(text, before, after, label) {
+  const first = text.indexOf(before);
+  if (first < 0) throw new Error(`missing anchor: ${label}`);
+  if (text.indexOf(before, first + before.length) >= 0) throw new Error(`ambiguous anchor: ${label}`);
+  return text.slice(0, first) + after + text.slice(first + before.length);
+}
+function insertBeforeOnce(text, anchor, addition, label) {
+  const first = text.indexOf(anchor);
+  if (first < 0) throw new Error(`missing anchor: ${label}`);
+  if (text.indexOf(anchor, first + anchor.length) >= 0) throw new Error(`ambiguous anchor: ${label}`);
+  return text.slice(0, first) + addition + text.slice(first);
+}
+
+// 1) Deterministic CI cause classification: only explicit repository failure evidence is actionable.
+{
+  const path = 'src/v2/controller-runtime.mjs';
+  let s = await load(path);
+  s = replaceOnce(
+    s,
+    "export function ciFailureClassForConclusion(conclusion) {\n  return String(conclusion ?? '').toLowerCase() === 'failure' ? 'actionable' : 'external';\n}\n",
+    [
+      "const EXTERNAL_CI_FAILURE_RE = /(runner.{0,40}(?:lost|offline|unavailable|disconnect)|no (?:hosted )?runner|timed out waiting for (?:a )?runner|startup_failure|service unavailable|bad gateway|gateway timeout|rate limit|artifact storage quota|billing|econnreset|etimedout|enetunreach|connection (?:reset|refused)|network.{0,40}(?:unreachable|timeout|reset)|temporary failure|secret.{0,40}(?:missing|not found))/i;",
+      "const REPOSITORY_CI_FAILURE_RE = /(assertionerror|testinglibraryelementerror|tests? (?:failed|failing)|\\bfail(?:ed|ure)?\\b.{0,80}(?:test|spec|assert)|error TS\\d{4}|eslint|lint(?:ing)? (?:error|failed)|type(?:check| error)|build failed|compilation failed|compile error|migration.{0,40}failed|schema.{0,40}failed)/i;",
+      "",
+      "export function ciFailureClassForEvidence({ conclusion, failedJobs = [] } = {}) {",
+      "  if (String(conclusion ?? '').toLowerCase() !== 'failure') return 'external';",
+      "  if (!Array.isArray(failedJobs) || failedJobs.length === 0) return 'external';",
+      "  const corpus = failedJobs.map((job) => [job?.name, ...(job?.failedStepNames ?? []), job?.log].filter(Boolean).join('\\n')).join('\\n');",
+      "  if (!corpus.trim() || EXTERNAL_CI_FAILURE_RE.test(corpus)) return 'external';",
+      "  return REPOSITORY_CI_FAILURE_RE.test(corpus) ? 'actionable' : 'external';",
+      "}",
+      "",
+      "export async function collectCiFailureEvidence({ repository, check, token } = {}) {",
+      "  const detailsUrl = String(check?.details_url ?? '');",
+      "  const runMatch = detailsUrl.match(/\\/actions\\/runs\\/(\\d+)/);",
+      "  if (!runMatch) return Object.freeze({ workflowRunId: null, workflowUrl: null, failedJobs: Object.freeze([]) });",
+      "  const runId = requiredPositiveInteger(runMatch[1], 'workflow run id from check');",
+      "  const repo = requiredString(repository, 'repository');",
+      "  const payload = await fetchJson(`https://api.github.com/repos/${repo}/actions/runs/${runId}/jobs?per_page=100`, token);",
+      "  const failedJobs = [];",
+      "  for (const job of (payload.jobs ?? []).filter((item) => String(item?.conclusion ?? '').toLowerCase() === 'failure')) {",
+      "    let log = '';",
+      "    try {",
+      "      const response = await fetch(`https://api.github.com/repos/${repo}/actions/jobs/${requiredPositiveInteger(job.id, 'job.id')}/logs`, { headers: githubHeaders(token) });",
+      "      if (response.ok) log = (await response.text()).slice(-200000);",
+      "    } catch {",
+      "      log = '';",
+      "    }",
+      "    failedJobs.push(Object.freeze({",
+      "      id: job.id,",
+      "      name: String(job.name ?? ''),",
+      "      failedStepNames: Object.freeze((job.steps ?? []).filter((step) => String(step?.conclusion ?? '').toLowerCase() === 'failure').map((step) => String(step.name ?? '')).filter(Boolean)),",
+      "      log",
+      "    }));",
+      "  }",
+      "  return Object.freeze({ workflowRunId: runId, workflowUrl: `https://github.com/${repo}/actions/runs/${runId}`, failedJobs: Object.freeze(failedJobs) });",
+      "}",
+      ""
+    ].join('\n'),
+    'evidence-based CI failure classification'
+  );
+  await save(path, s);
+}
+
+// 2) Generic audit workflow carries authoritative prior finding lineage from the controller.
+{
+  const path = '.github/workflows/delivery-v2-audit.yml';
+  let s = await load(path);
+  s = replaceOnce(
+    s,
+    "      implementer_run_id:\n        description: Exact implementation worker run that produced the audited material head\n        required: true\n        type: string\n      dispatch_nonce:\n",
+    "      implementer_run_id:\n        description: Exact implementation worker run that produced the audited material head\n        required: true\n        type: string\n      prior_findings_json:\n        description: Authoritative prior V2 finding lineage from preceding audit attempts\n        required: true\n        default: '[]'\n        type: string\n      dispatch_nonce:\n",
+    'audit prior findings input'
+  );
+  s = replaceOnce(
+    s,
+    "      IMPLEMENTER_RUN_ID: ${{ inputs.implementer_run_id }}\n      AUDIT_RESULT_PATH:",
+    "      IMPLEMENTER_RUN_ID: ${{ inputs.implementer_run_id }}\n      PRIOR_FINDINGS_JSON: ${

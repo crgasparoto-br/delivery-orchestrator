@@ -1,0 +1,62 @@
+ evidenceRef: latestCheck.details_url ?? `github:check:${latestCheck.id}`",
+    "          cause: `${latestCheck.name}:${latestCheck.conclusion}:${failureClass}`,\n          evidenceRef: failureEvidence.workflowUrl ?? latestCheck.details_url ?? `github:check:${latestCheck.id}`",
+    'resume controller failure evidence ref'
+  );
+  s = replaceOnce(
+    s,
+    "      await persist({ nextAction: 'observe-ci', workerRunId: null });\n      continue;\n    }\n\n    if (state.status === 'audit-pending') {",
+    "      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: worker.id, plan }) });\n      continue;\n    }\n\n    if (state.status === 'audit-pending') {",
+    'resume remediation new material metadata'
+  );
+  s = replaceOnce(
+    s,
+    "            implementer_worker_identity: controller.materialWorkerIdentity ?? plan.implementation.workflow,\n            implementer_run_id: String(controller.materialWorkerRunId ?? controller.workerRunId)\n          }",
+    "            implementer_worker_identity: controller.materialWorkerIdentity ?? plan.implementation.workflow,\n            implementer_run_id: String(controller.materialWorkerRunId ?? controller.workerRunId),\n            prior_findings_json: JSON.stringify(controller.priorFindings ?? [])\n          }",
+    'resume audit prior findings dispatch'
+  );
+  s = replaceOnce(
+    s,
+    "      state = applyOperationalEvent(state, { type: 'audit-result', result: { candidateSha: materialHeadSha, decision: result.decision, findings: result.findings, evidenceRef: auditRun.html_url } });\n      await persist({ nextAction: state.status, auditRunId: auditRun.id, auditDispatchNonce: controller.auditDispatchNonce, auditRequestFingerprint: result.requestFingerprint });",
+    "      state = applyOperationalEvent(state, { type: 'audit-result', result: { candidateSha: materialHeadSha, decision: result.decision, findings: result.findings, evidenceRef: auditRun.html_url } });\n      const priorFindings = result.findings.map((finding) => ({ id: finding.id, candidateSha: finding.candidateSha, status: finding.blocksRelease ? 'open' : 'non-blocking' }));\n      await persist({ nextAction: state.status, auditRunId: auditRun.id, auditDispatchNonce: controller.auditDispatchNonce, auditRequestFingerprint: result.requestFingerprint, priorFindings });",
+    'resume persist prior findings'
+  );
+  await save(path, s);
+}
+
+// 7) Focused regressions for evidence classification, fail-closed missing state, and lineage.
+{
+  const path = 'test/v2-controller-runtime.test.mjs';
+  let s = await load(path);
+  s = replaceOnce(
+    s,
+    "import { ciFailureClassForConclusion, expectedDispatchTitle, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload } from '../src/v2/controller-runtime.mjs';",
+    "import { ciFailureClassForEvidence, expectedDispatchTitle, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload } from '../src/v2/controller-runtime.mjs';",
+    'runtime test import'
+  );
+  s = replaceOnce(
+    s,
+    "test('external CI conclusions never become actionable remediation', () => {\n  assert.equal(ciFailureClassForConclusion('failure'), 'actionable');\n  for (const conclusion of ['cancelled', 'timed_out', 'startup_failure', 'stale', 'neutral', 'skipped']) assert.equal(ciFailureClassForConclusion(conclusion), 'external');\n});",
+    "test('CI remediation requires explicit repository-cause evidence and fails closed on infrastructure or ambiguity', () => {\n  assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'tests', failedStepNames: ['unit tests'], log: 'AssertionError: expected true to equal false' }] }), 'actionable');\n  assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'tests', failedStepNames: ['unit tests'], log: 'runner lost communication; connection reset' }] }), 'external');\n  assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'unknown', failedStepNames: [], log: 'Process completed with exit code 1' }] }), 'external');\n  for (const conclusion of ['cancelled', 'timed_out', 'startup_failure', 'stale', 'neutral', 'skipped']) assert.equal(ciFailureClassForEvidence({ conclusion, failedJobs: [] }), 'external');\n});",
+    'runtime evidence classifier test'
+  );
+  await save(path, s);
+}
+
+{
+  const path = 'test/v2-reentry-guard.test.mjs';
+  let s = await load(path);
+  s = replaceOnce(
+    s,
+    "import { ciFailureClassForConclusion } from '../src/v2/controller-runtime.mjs';",
+    "import { ciFailureClassForEvidence } from '../src/v2/controller-runtime.mjs';",
+    'reentry test classifier import'
+  );
+  s = replaceOnce(
+    s,
+    "import { markExistingAuditInFlight, rebuildCiPendingState } from '../scripts/resume-delivery-v2-controller.mjs';",
+    "import { controllerMetadataForNewMaterial, markExistingAuditInFlight, rebuildCiPendingState } from '../scripts/resume-delivery-v2-controller.mjs';",
+    'reentry test material metadata helper import'
+  );
+  s = replaceOnce(
+    s,
+    "test('existing PR without state routes to deterministic PR recovery, never another initial worker', () => {\n  const decision = evaluateReentry({\n    pullRequest: pr(),\n    stateEnvelope: null,\n    bootstrapLease: null,\n    targetRepository: 'owner/repo',\n    issueNumber: 63,\n    baseBranch: 'main',\n    provider: 'codex'\n  });\n  assert.equal(decision.runController, true);
