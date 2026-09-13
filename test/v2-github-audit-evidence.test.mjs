@@ -123,13 +123,13 @@ test('material context supplements diff-represented paths instead of duplicating
   assert.equal(context.files.some((item) => item.path === 'test/v2-core.test.mjs'), false);
   assert.ok(context.files.some((item) => item.path === 'config/delivery-v2-requirements.json'));
   assert.ok(context.files.some((item) => item.path === 'docs/delivery-v2/ADR-0006.md'));
-  assert.ok(context.files.some((item) => item.path.endsWith('-critical.md')));
+  assert.ok(context.files.some((item) => item.path.endsWith('-critical.md'));
   assert.ok(context.files.some((item) => item.path === 'src/v2/dep.mjs' && item.kind === 'direct-relative-dependency'));
   assert.equal(context.omitted.find((item) => item.path === 'src/v2/core.mjs')?.reason, 'represented-in-bounded-diff');
   assert.equal(context.omitted.find((item) => item.path === 'test/v2-core.test.mjs')?.reason, 'represented-in-bounded-diff');
 });
 
-test('material context admits common non-JavaScript source extensions without changing byte ceilings', async (t) => {
+test('material context admits common non-JavaScript source and schema extensions without changing byte ceilings', async (t) => {
   const head = '5'.repeat(40);
   const contents = new Map([
     ['apps/api/main.go', 'package main\n'],
@@ -148,8 +148,10 @@ test('material context admits common non-JavaScript source extensions without ch
   const context = await fetchBoundedAuditContext('crgasparoto-br/example', head, [...contents.keys()], 'token', {
     limits: { maxFiles: 2, maxFileBytes: 4096, maxTotalBytes: 8192, maxDependencyProbes: 1 }
   });
-  assert.equal(context.files.length, 2);
-  assert.ok(context.files.every((item) => item.category === 'executable'));
+  assert.deepEqual(context.files.map((item) => [item.path, item.category]), [
+    ['apps/api/main.go', 'executable'],
+    ['prisma/schema.prisma', 'contract']
+  ]);
 });
 
 test('represented audit paths must belong to the immutable changed-path set', async () => {
