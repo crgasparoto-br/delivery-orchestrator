@@ -108,13 +108,14 @@ export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, ta
 
     if (!stateEnvelope) {
       return Object.freeze({
-        runController: true,
-        resumePr: prNumber,
-        status: 'resume-existing-delivery',
+        runController: false,
+        resumePr: null,
+        status: 'escalated-missing-persistent-state',
         pullRequestNumber: prNumber,
         materialHeadSha: remoteHeadSha,
         staleStateDetected: true,
-        nextAction: 'recover-pr-state'
+        nextAction: 'human-escalation',
+        attempts: null
       });
     }
 

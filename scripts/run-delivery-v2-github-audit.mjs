@@ -98,6 +98,20 @@ function auditPrompt(request) {
   ].join('\n');
 }
 
+function priorFindingsFromEnv() {
+  const raw = String(process.env.PRIOR_FINDINGS_JSON ?? '[]').trim() || '[]';
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error('PRIOR_FINDINGS_JSON must be a JSON array');
+  return parsed.map((finding, index) => {
+    if (!finding || Array.isArray(finding) || typeof finding !== 'object') throw new Error(`PRIOR_FINDINGS_JSON[${index}] must be an object`);
+    const id = String(finding.id ?? '').trim();
+    const candidateSha = String(finding.candidateSha ?? '').trim().toLowerCase();
+    const status = String(finding.status ?? '').trim();
+    if (!id || !/^[0-9a-f]{40}$/.test(candidateSha) || !status) throw new Error(`PRIOR_FINDINGS_JSON[${index}] is incomplete`);
+    return Object.freeze({ id, candidateSha, status });
+  });
+}
+
 async function main() {
   const repository = requiredEnv('TARGET_REPOSITORY');
   const issueNumber = positiveInteger('TARGET_ISSUE');
@@ -109,6 +123,7 @@ async function main() {
   const implementerProvider = requiredEnv('IMPLEMENTER_PROVIDER').toLowerCase();
   const implementerWorkerIdentity = requiredEnv('IMPLEMENTER_WORKER_IDENTITY');
   const implementerRunId = positiveInteger('IMPLEMENTER_RUN_ID');
+  const priorFindings = priorFindingsFromEnv();
   const token = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const reviewerRunId = positiveInteger('GITHUB_RUN_ID');
   const auditorUser = process.env.DELIVERY_AUDITOR_USER || 'delivery-auditor';
@@ -144,7 +159,8 @@ async function main() {
     workflowName,
     workflowPath,
     implementationAttempt: positiveInteger('IMPLEMENTATION_ATTEMPT', '1'),
-    implementer: { provider: implementerProvider, workerIdentity: implementerWorkerIdentity, runId: implementerRunId }
+    implementer: { provider: implementerProvider, workerIdentity: implementerWorkerIdentity, runId: implementerRunId },
+    priorFindings
   });
 
   const contractUrl = repository === process.env.GITHUB_REPOSITORY

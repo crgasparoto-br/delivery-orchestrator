@@ -15,7 +15,7 @@ import {
   persistentStateFromOperational
 } from '../src/v2/operational-controller.mjs';
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
-import { ciFailureClassForConclusion, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForEvidence, collectCiFailureEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const AUDIT_MARKER = '<!-- delivery-v2-independent-audit -->';
@@ -258,6 +258,25 @@ async function auditResultFromArtifact({ orchestratorRepository, orchestratorRef
 
 function higherRisk(next, current) { return RISK_RANK[next] > RISK_RANK[current]; }
 
+export function controllerMetadataForNewMaterial({ controller = {}, workerRunId, plan } = {}) {
+  const resolvedRunId = Number(workerRunId);
+  if (!Number.isInteger(resolvedRunId) || resolvedRunId < 1) throw new Error('workerRunId must identify the material-producing worker run');
+  const workerIdentity = String(plan?.implementation?.workflow ?? '').trim();
+  const workerProvider = String(plan?.implementation?.provider ?? '').trim().toLowerCase();
+  if (!workerIdentity || !workerProvider) throw new Error('material worker plan identity is required');
+  return Object.freeze({
+    workerRunId: null,
+    workerDispatchNonce: null,
+    materialWorkerRunId: resolvedRunId,
+    materialWorkerIdentity: workerIdentity,
+    materialWorkerProvider: workerProvider,
+    auditRunId: null,
+    auditDispatchNonce: null,
+    auditRequestFingerprint: null,
+    priorFindings: (controller.priorFindings ?? []).map((finding) => ({ ...finding, status: 'remediated-pending-verification' }))
+  });
+}
+
 export function rebuildCiPendingState({ plan, materialHeadSha, previousState }) {
   const fresh = createOperationalDelivery({ plan, materialHeadSha });
   return Object.freeze({
@@ -319,11 +338,19 @@ export async function main() {
     state = operationalStateFromPersistent(reconciled.state);
     if (reconciled.staleStateDetected || ['queued', 'classified', 'ci-failed-remediable'].includes(state.status)) {
       state = rebuildCiPendingState({ plan, materialHeadSha, previousState: state });
-      controller = { nextAction: 'observe-ci', resumedFrom: reconciled.nextAction };
+      const materialIdentityStale = String(stateEnvelope.persistent.materialHeadSha).toLowerCase() !== materialHeadSha;
+      controller = {
+        ...controller,
+        nextAction: 'observe-ci',
+        resumedFrom: reconciled.nextAction,
+        auditRunId: null,
+        auditDispatchNonce: null,
+        auditRequestFingerprint: null,
+        ...(materialIdentityStale ? { materialWorkerRunId: null, materialWorkerIdentity: null, materialWorkerProvider: null } : {})
+      };
     }
   } else {
-    state = createOperationalDelivery({ plan, materialHeadSha });
-    controller = { nextAction: 'observe-ci', recoveredMissingState: true };
+    throw new Error('managed PR is missing canonical persistent Delivery V2 state; refusing to reset unknown attempt budgets');
   }
 
   const identity = () => ({
@@ -382,7 +409,7 @@ export async function main() {
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
       latestCheck = null;
       latestSourceRun = null;
-      await persist({ nextAction: 'observe-ci', workerRunId: null });
+      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: run.id, plan }) });
       continue;
     }
 
@@ -415,15 +442,16 @@ export async function main() {
         continue;
       }
 
-      const failureClass = ciFailureClassForConclusion(latestCheck.conclusion);
+      const failureEvidence = await collectCiFailureEvidence({ repository: targetRepository, check: latestCheck, token: targetReadToken });
+      const failureClass = ciFailureClassForEvidence({ conclusion: latestCheck.conclusion, failedJobs: failureEvidence.failedJobs });
       state = applyOperationalEvent(state, {
         type: 'ci-result',
         result: {
           candidateSha: materialHeadSha,
           conclusion: 'failure',
           failureClass,
-          cause: `${latestCheck.name}:${latestCheck.conclusion}`,
-          evidenceRef: latestCheck.details_url ?? `github:check:${latestCheck.id}`
+          cause: `${latestCheck.name}:${latestCheck.conclusion}:${failureClass}`,
+          evidenceRef: failureEvidence.workflowUrl ?? latestCheck.details_url ?? `github:check:${latestCheck.id}`
         }
       });
       await persist({ nextAction: failureClass === 'actionable' ? state.status : 'external-ci-blocker' });
@@ -471,7 +499,7 @@ export async function main() {
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
       latestCheck = null;
       latestSourceRun = null;
-      await persist({ nextAction: 'observe-ci', workerRunId: null });
+      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: worker.id, plan }) });
       continue;
     }
 
@@ -506,7 +534,8 @@ export async function main() {
             source_workflow_path: targetPolicy.ciWorkflowPath, implementation_attempt: String(state.implementationAttempts),
             implementer_provider: controller.materialWorkerProvider ?? provider,
             implementer_worker_identity: controller.materialWorkerIdentity ?? plan.implementation.workflow,
-            implementer_run_id: String(controller.materialWorkerRunId ?? controller.workerRunId)
+            implementer_run_id: String(controller.materialWorkerRunId ?? controller.workerRunId),
+            prior_findings_json: JSON.stringify(controller.priorFindings ?? [])
           }
         });
         providerCalls += 1;
@@ -517,7 +546,8 @@ export async function main() {
       const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
       const result = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: sourceRun.id, token: actionsToken });
       state = applyOperationalEvent(state, { type: 'audit-result', result: { candidateSha: materialHeadSha, decision: result.decision, findings: result.findings, evidenceRef: auditRun.html_url } });
-      await persist({ nextAction: state.status, auditRunId: auditRun.id, auditDispatchNonce: controller.auditDispatchNonce, auditRequestFingerprint: result.requestFingerprint });
+      const priorFindings = result.findings.map((finding) => ({ id: finding.id, candidateSha: finding.candidateSha, status: finding.blocksRelease ? 'open' : 'non-blocking' }));
+      await persist({ nextAction: state.status, auditRunId: auditRun.id, auditDispatchNonce: controller.auditDispatchNonce, auditRequestFingerprint: result.requestFingerprint, priorFindings });
       continue;
     }
 

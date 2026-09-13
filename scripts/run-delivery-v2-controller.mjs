@@ -17,7 +17,7 @@ import {
 } from '../src/v2/operational-controller.mjs';
 import { createDeliveryMetrics } from '../src/v2/metrics.mjs';
 import { mergeGhAwUsage, normalizeGhAwUsage, parseGhAwUsageJsonl } from '../src/v2/usage-telemetry.mjs';
-import { ciFailureClassForConclusion, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForEvidence, collectCiFailureEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const AUDIT_MARKER = '<!-- delivery-v2-independent-audit -->';
@@ -434,15 +434,16 @@ export async function main() {
     latestCheck = observed.check;
     latestSourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken }).catch(() => null);
     if (latestCheck.conclusion !== 'success') {
-      const failureClass = ciFailureClassForConclusion(latestCheck.conclusion);
+      const failureEvidence = await collectCiFailureEvidence({ repository: targetRepository, check: latestCheck, token: targetReadToken });
+      const failureClass = ciFailureClassForEvidence({ conclusion: latestCheck.conclusion, failedJobs: failureEvidence.failedJobs });
       state = applyOperationalEvent(state, {
         type: 'ci-result',
         result: {
           candidateSha: materialHeadSha,
           conclusion: 'failure',
           failureClass,
-          cause: `${latestCheck.name}:${latestCheck.conclusion}`,
-          evidenceRef: latestCheck.details_url ?? `github:check:${latestCheck.id}`
+          cause: `${latestCheck.name}:${latestCheck.conclusion}:${failureClass}`,
+          evidenceRef: failureEvidence.workflowUrl ?? latestCheck.details_url ?? `github:check:${latestCheck.id}`
         }
       });
       evidenceRefs.push(latestCheck.details_url ?? `github:check:${latestCheck.id}`);
@@ -521,7 +522,8 @@ export async function main() {
           implementation_attempt: String(state.implementationAttempts),
           implementer_provider: plan.implementation.provider,
           implementer_worker_identity: plan.implementation.workflow,
-          implementer_run_id: String(worker.id)
+          implementer_run_id: String(worker.id),
+          prior_findings_json: JSON.stringify(controller.priorFindings ?? [])
         }
       });
       await persist({ nextAction: 'observe-audit', auditRunId: auditRun.id, auditDispatchNonce });
@@ -544,7 +546,8 @@ export async function main() {
           evidenceRef: auditRun.html_url
         }
       });
-      await persist({ nextAction: state.status, auditRunId: auditRun.id, auditRequestFingerprint: lastAudit.requestFingerprint });
+      const priorFindings = lastAudit.findings.map((finding) => ({ id: finding.id, candidateSha: finding.candidateSha, status: finding.blocksRelease ? 'open' : 'non-blocking' }));
+      await persist({ nextAction: state.status, auditRunId: auditRun.id, auditRequestFingerprint: lastAudit.requestFingerprint, priorFindings });
 
       if (state.status === 'audit-failed-remediable') {
         const remediation = operationalRemediationInput(state);
@@ -583,7 +586,7 @@ export async function main() {
         latestCheck = null;
         latestSourceRun = null;
         lastAudit = null;
-        await persist({ nextAction: 'observe-ci', workerRunId: worker.id, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider });
+        await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: null, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider, auditRunId: null, auditDispatchNonce: null, auditRequestFingerprint: null, priorFindings: (controller.priorFindings ?? []).map((finding) => ({ ...finding, status: 'remediated-pending-verification' })) });
         continue;
       }
     }

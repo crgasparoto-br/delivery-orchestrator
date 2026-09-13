@@ -46,7 +46,8 @@ function request(riskProfile = 'critical') {
     sourceWorkflowEvidence: evidence,
     workflowName: 'Validate PR',
     workflowPath: PATH,
-    implementer: { provider: 'codex', workerIdentity: 'delivery-v2-worker-codex-critical.md', runId: 1234 }
+    implementer: { provider: 'codex', workerIdentity: 'delivery-v2-worker-codex-critical.md', runId: 1234 },
+    priorFindings: [{ id: 'DV2-OLD-FINDING', candidateSha: 'e'.repeat(40), status: 'remediated-pending-verification' }]
   });
 }
 
@@ -63,6 +64,9 @@ test('generic audit request binds target workflow, exact SHA and requested effec
   assert.equal(value.candidate.implementer.provider, 'codex');
   assert.equal(value.candidate.implementer.workerIdentity, 'delivery-v2-worker-codex-critical.md');
   assert.equal(value.candidate.implementer.runId, 1234);
+  assert.equal(value.candidate.priorFindings.length, 1);
+  assert.equal(value.candidate.priorFindings[0].id, 'DV2-OLD-FINDING');
+  assert.equal(value.candidate.priorFindings[0].sameCandidate, false);
   assert.equal(value.applicability.mode, 'independent');
 });
 

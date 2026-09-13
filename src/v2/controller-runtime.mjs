@@ -37,8 +37,41 @@ async function fetchJson(url, token) {
   return response.json();
 }
 
-export function ciFailureClassForConclusion(conclusion) {
-  return String(conclusion ?? '').toLowerCase() === 'failure' ? 'actionable' : 'external';
+const EXTERNAL_CI_FAILURE_RE = /(runner.{0,40}(?:lost|offline|unavailable|disconnect)|no (?:hosted )?runner|timed out waiting for (?:a )?runner|startup_failure|service unavailable|bad gateway|gateway timeout|rate limit|artifact storage quota|billing|econnreset|etimedout|enetunreach|connection (?:reset|refused)|network.{0,40}(?:unreachable|timeout|reset)|temporary failure|secret.{0,40}(?:missing|not found))/i;
+const REPOSITORY_CI_FAILURE_RE = /(assertionerror|testinglibraryelementerror|tests? (?:failed|failing)|\bfail(?:ed|ure)?\b.{0,80}(?:test|spec|assert)|error TS\d{4}|eslint|lint(?:ing)? (?:error|failed)|type(?:check| error)|build failed|compilation failed|compile error|migration.{0,40}failed|schema.{0,40}failed)/i;
+
+export function ciFailureClassForEvidence({ conclusion, failedJobs = [] } = {}) {
+  if (String(conclusion ?? '').toLowerCase() !== 'failure') return 'external';
+  if (!Array.isArray(failedJobs) || failedJobs.length === 0) return 'external';
+  const corpus = failedJobs.map((job) => [job?.name, ...(job?.failedStepNames ?? []), job?.log].filter(Boolean).join('\n')).join('\n');
+  if (!corpus.trim() || EXTERNAL_CI_FAILURE_RE.test(corpus)) return 'external';
+  return REPOSITORY_CI_FAILURE_RE.test(corpus) ? 'actionable' : 'external';
+}
+
+export async function collectCiFailureEvidence({ repository, check, token } = {}) {
+  const detailsUrl = String(check?.details_url ?? '');
+  const runMatch = detailsUrl.match(/\/actions\/runs\/(\d+)/);
+  if (!runMatch) return Object.freeze({ workflowRunId: null, workflowUrl: null, failedJobs: Object.freeze([]) });
+  const runId = requiredPositiveInteger(runMatch[1], 'workflow run id from check');
+  const repo = requiredString(repository, 'repository');
+  const payload = await fetchJson(`https://api.github.com/repos/${repo}/actions/runs/${runId}/jobs?per_page=100`, token);
+  const failedJobs = [];
+  for (const job of (payload.jobs ?? []).filter((item) => String(item?.conclusion ?? '').toLowerCase() === 'failure')) {
+    let log = '';
+    try {
+      const response = await fetch(`https://api.github.com/repos/${repo}/actions/jobs/${requiredPositiveInteger(job.id, 'job.id')}/logs`, { headers: githubHeaders(token) });
+      if (response.ok) log = (await response.text()).slice(-200000);
+    } catch {
+      log = '';
+    }
+    failedJobs.push(Object.freeze({
+      id: job.id,
+      name: String(job.name ?? ''),
+      failedStepNames: Object.freeze((job.steps ?? []).filter((step) => String(step?.conclusion ?? '').toLowerCase() === 'failure').map((step) => String(step.name ?? '')).filter(Boolean)),
+      log
+    }));
+  }
+  return Object.freeze({ workflowRunId: runId, workflowUrl: `https://github.com/${repo}/actions/runs/${runId}`, failedJobs: Object.freeze(failedJobs) });
 }
 
 export function createDispatchNonce() {

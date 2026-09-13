@@ -49,6 +49,11 @@ on:
         description: Exact implementation worker run that produced the audited material head
         required: true
         type: string
+      prior_findings_json:
+        description: Authoritative prior V2 finding lineage from preceding audit attempts
+        required: true
+        default: '[]'
+        type: string
       dispatch_nonce:
         description: Deterministic controller dispatch correlation nonce
         required: true
@@ -80,6 +85,7 @@ jobs:
       IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider }}
       IMPLEMENTER_WORKER_IDENTITY: ${{ inputs.implementer_worker_identity }}
       IMPLEMENTER_RUN_ID: ${{ inputs.implementer_run_id }}
+      PRIOR_FINDINGS_JSON: ${{ inputs.prior_findings_json }}
       AUDIT_RESULT_PATH: /tmp/delivery-v2-github-audit-${{ github.run_id }}.json
       DELIVERY_ROLE_RUNTIME_ROOT: /tmp/delivery-v2-auditor-${{ github.run_id }}
       DELIVERY_ROLE_RUNTIME_WORKER: /tmp/delivery-v2-auditor-${{ github.run_id }}/role-runtime-worker.mjs

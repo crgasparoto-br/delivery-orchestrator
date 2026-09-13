@@ -9,8 +9,8 @@ import {
   selectManagedPullRequest
 } from '../scripts/guard-delivery-v2-reentry.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
-import { markExistingAuditInFlight, rebuildCiPendingState } from '../scripts/resume-delivery-v2-controller.mjs';
-import { ciFailureClassForConclusion } from '../src/v2/controller-runtime.mjs';
+import { controllerMetadataForNewMaterial, markExistingAuditInFlight, rebuildCiPendingState } from '../scripts/resume-delivery-v2-controller.mjs';
+import { ciFailureClassForEvidence } from '../src/v2/controller-runtime.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { operationalStateFromPersistent } from '../src/v2/operational-controller.mjs';
 
@@ -141,7 +141,7 @@ test('head drift resumes deterministic classification without resetting attempt 
   assert.equal(decision.attempts.implementation, 1);
 });
 
-test('existing PR without state routes to deterministic PR recovery, never another initial worker', () => {
+test('existing PR without canonical state fails closed instead of resetting unknown budgets', () => {
   const decision = evaluateReentry({
     pullRequest: pr(),
     stateEnvelope: null,
@@ -151,9 +151,11 @@ test('existing PR without state routes to deterministic PR recovery, never anoth
     baseBranch: 'main',
     provider: 'codex'
   });
-  assert.equal(decision.runController, true);
-  assert.equal(decision.resumePr, 77);
-  assert.equal(decision.nextAction, 'recover-pr-state');
+  assert.equal(decision.runController, false);
+  assert.equal(decision.pullRequestNumber, 77);
+  assert.equal(decision.status, 'escalated-missing-persistent-state');
+  assert.equal(decision.nextAction, 'human-escalation');
+  assert.equal(decision.attempts, null);
 });
 
 test('a failed pre-PR bootstrap attempt retries within the existing bounded budget instead of resetting it', () => {
@@ -221,10 +223,11 @@ test('existing in-flight audit is restored without consuming another audit attem
   assert.equal(restored.auditAttempts, 1);
 });
 
-test('cancelled, timed out, stale or startup failures never become automatic code remediation', () => {
-  assert.equal(ciFailureClassForConclusion('failure'), 'actionable');
+test('CI failures require deterministic repository evidence before automatic remediation', () => {
+  assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'test', failedStepNames: ['test'], log: 'Tests failed with AssertionError' }] }), 'actionable');
+  assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'test', failedStepNames: [], log: 'service unavailable' }] }), 'external');
   for (const conclusion of ['cancelled', 'timed_out', 'startup_failure', 'stale', 'neutral', 'skipped']) {
-    assert.equal(ciFailureClassForConclusion(conclusion), 'external');
+    assert.equal(ciFailureClassForEvidence({ conclusion, failedJobs: [] }), 'external');
   }
 });
 
@@ -240,4 +243,19 @@ test('base drift routes resume back through deterministic classification', () =>
   assert.equal(decision.runController, true);
   assert.equal(decision.staleStateDetected, true);
   assert.equal(decision.nextAction, 'classify');
+});
+
+test('new material metadata replaces producer identity and clears stale audit identity while carrying prior findings', () => {
+  const metadata = controllerMetadataForNewMaterial({
+    controller: { auditRunId: 50, auditDispatchNonce: 'old-audit', auditRequestFingerprint: 'old-fp', priorFindings: [{ id: 'DV2-OLD', candidateSha: HEAD_A, status: 'open' }] },
+    workerRunId: 77,
+    plan: planFor()
+  });
+  assert.equal(metadata.workerRunId, null);
+  assert.equal(metadata.materialWorkerRunId, 77);
+  assert.equal(metadata.materialWorkerIdentity, planFor().implementation.workflow);
+  assert.equal(metadata.auditRunId, null);
+  assert.equal(metadata.auditDispatchNonce, null);
+  assert.equal(metadata.auditRequestFingerprint, null);
+  assert.equal(metadata.priorFindings[0].status, 'remediated-pending-verification');
 });
