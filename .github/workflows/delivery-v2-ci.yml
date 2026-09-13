@@ -27,7 +27,7 @@ on:
       - 'docs/delivery-v2/**'
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: read
 
 concurrency:
@@ -107,14 +107,15 @@ jobs:
             echo "drift=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Emit compiled worker drift for deterministic remediation
+      - name: Publish compiler-owned worker locks for this remediation run
         if: steps.worker-identity.outputs.changed == 'true' && steps.compiled-workers.outputs.drift == 'true'
         shell: bash
         run: |
-          archive="${RUNNER_TEMP}/delivery-v2-compiled-workers.tgz"
-          tar -czf "$archive" .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
-          echo "DV2_LOCK_ARCHIVE_SHA256=$(sha256sum "$archive" | cut -d' ' -f1)"
-          base64 -w 60000 "$archive" | sed 's/^/DV2_LOCK_ARCHIVE_CHUNK:/'
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
+          git commit -m "chore(v2): regenerate gh-aw worker locks"
+          git push origin HEAD:${{ github.head_ref }}
 
       - name: Verify compiled gh-aw workers
         if: steps.worker-identity.outputs.changed == 'true'
