@@ -65,7 +65,10 @@ jobs:
               elif line.startswith('      const releaseInput = {'):
                   lines[index] = line[2:]
                   adjusted += 1
-          if adjusted < 4:
+              elif '`        mergePreview: releaseIdentity.mergePreview,`' in line:
+                  lines[index] = line.replace('`        mergePreview: releaseIdentity.mergePreview,`', '`      mergePreview: releaseIdentity.mergePreview,`').replace('`        mergePreview,`', '`      mergePreview,`')
+                  adjusted += 1
+          if adjusted < 5:
               raise SystemExit(f'resume release indentation adjustments incomplete: {adjusted}')
 
           path.write_text('\n'.join(lines) + '\n')
