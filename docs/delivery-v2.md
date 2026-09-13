@@ -1,127 +1,98 @@
 # Delivery V2: GitHub-native, risk-adaptive delivery
 
-> **Quick guide only.** The canonical architecture is `docs/delivery-v2/MASTER_SPEC.md`. Machine-readable requirement status is `config/delivery-v2-requirements.json`; sequencing/history is `docs/delivery-v2/ROADMAP.md`; GitHub issue #27 is the completed V2 umbrella. This file must not override those sources.
+> **Quick guide only.** `docs/delivery-v2/MASTER_SPEC.md` remains canonical. `config/delivery-v2-requirements.json` is the machine-readable terminal requirement ledger; `docs/delivery-v2/ROADMAP.md` and issue #27 are completed-program history.
 
 ## Core idea
 
-Delivery V2 moves orchestration decisions out of the coding model:
-
 > deterministic software controls AI; AI does not control the delivery system.
 
-GitHub owns repository/issue/PR identity, exact SHAs, risk, budgets, checks and release state. AI providers are bounded workers for implementation or independent semantic review.
+The normal operational path is now a bounded GitHub workflow, not a sequence reconstructed by a chat:
 
-## Providers and bounded execution
+```text
+issue/scope -> provider worker -> managed PR -> exact-head CI
+           -> bounded same-PR remediation when needed
+           -> risk-required independent audit
+           -> bounded same-PR audit remediation when needed
+           -> exact-head release gate -> ready/escalated
+```
 
-Supported providers are `codex`, `claude` and `copilot`. Provider+risk resolves to exactly one compiled `gh-aw` worker. Invalid configuration, missing authentication or provider failure fails closed; there is no silent provider fallback.
+The controller persists state on the managed PR. Material head drift invalidates candidate-bound CI/audit evidence. Attempt ceilings are deterministic and exhausted budgets escalate instead of opening another AI-on-AI loop.
 
-Agent shell execution receives read access only. Privileged write capability is exposed through constrained safe outputs, not a general write token.
+## Scope discovery and risk
 
-The baseline AI ceilings remain:
+FAST remains a reviewed allowlist; unknown paths and sensitive boundaries remain CRITICAL. Requested risk can promote but never downgrade observed risk.
 
-- FAST: 20 turns / 100 credits;
-- STANDARD: 40 turns / 250 credits;
-- CRITICAL: 80 turns / 500 credits.
+A missing initial changed-path set has two separate meanings:
 
-These are ceilings, not consumption targets. They should only be tightened from measured production evidence.
+1. **security classification:** fail closed as CRITICAL;
+2. **provider spending:** unresolved `auto` scope does not justify immediately spending the 80-turn / 500-credit CRITICAL material-worker budget.
 
-## Risk profiles
+The dispatch controller first uses supplied paths or deterministic issue path evidence. When it cannot establish any concrete path, it performs **zero provider calls**, keeps security fail-closed, records `needs-scope`, and asks for `changed_paths`. Once concrete scope exists, the normal material budget is selected from observed risk.
 
-### FAST
+Baseline ceilings remain:
 
-- strict low-risk allowlist;
-- focused/related tests and affected build;
-- max 2 implementation attempts;
-- no mandatory LLM audit;
-- full regression after merge or scheduled safety net.
+- FAST — 20 turns / 100 credits, max 2 implementation attempts;
+- STANDARD — 40 turns / 250 credits, max 2 implementation attempts;
+- CRITICAL — 80 turns / 500 credits, max 3 implementation attempts and max 2 audit-remediation attempts.
 
-### STANDARD
+## Same-PR remediation
 
-- ordinary application/business/API changes outside critical boundaries;
-- affected/non-database tests plus build;
-- max 2 implementation attempts;
-- focused independent audit when policy requires it.
+All compiled provider/risk workers have an initial mode and a remediation mode. Initial mode creates one managed `[delivery-v2] ` PR. Remediation mode receives the controller's structured CI/audit failure packet, works on the exact current PR head, and may write only through constrained `push-to-pull-request-branch` safe output.
 
-### CRITICAL
+A remediation worker cannot create a replacement PR. FAST applies the same file allowlist to both create-PR and remediation-push outputs. Protected-file policy, repository allowlists, explicit provider choice and write-token isolation remain unchanged.
 
-- database/migrations;
-- authentication/authorization/session/security;
-- financial/billing;
-- shared contracts;
-- CI/workflows/config/dependencies/infrastructure;
-- privileged integrations;
-- unknown, incomplete or uncertain changed-file evidence.
+## Adaptive CI and exact-head release
 
-CRITICAL keeps the complete repository safety gate, requires independent semantic audit and allows max 3 implementation attempts / 2 audit-remediation attempts.
+Target repositories continue to own concrete validation commands. The controller observes the target's stable required status and trusted source CI workflow from `config/delivery-v2-controller-targets.json`.
 
-Requested risk can promote but never downgrade observed risk. Missing changed-file evidence stays fail-closed; efficiency work must improve deterministic evidence, not guess a cheaper profile from issue prose.
+CI and audit evidence is exact-material-SHA-bound. Actionable CI failure becomes the bounded remediation input. External or ambiguous conditions fail closed rather than provoking unrelated code edits.
 
-## Adaptive CI and exact-head evidence
+The release gate becomes ready only when the current remote PR head equals the evaluated material head, the classifier/fingerprint applies to that candidate, the stable required check is terminal green, risk-required audit approves the same candidate, and no blocking finding or budget blocker remains.
 
-`actions/delivery-v2-risk` and the V2 CI plan provide deterministic risk outputs. Target repositories keep their own build/test commands.
+STANDARD audit applicability is resolved before any audit-provider call from the effective risk plus the target repository policy. A target with `standardAuditRequired: false` goes directly from exact-head CI success to release evaluation; CRITICAL remains mandatory-audit and cannot be downgraded by that switch.
 
-FAST is a strict safe-root allowlist. Static extensions do not grant FAST outside trusted roots. Repository-specific policy can add sensitive boundaries and promote risk, but cannot weaken core CRITICAL invariants. Unknown paths fail closed.
+## Generic independent audit
 
-Public target repositories consume generated, fingerprinted classifier packages instead of depending directly on private reusable workflows.
+`.github/workflows/delivery-v2-audit.yml` is the normal GitHub-native audit workflow. It accepts any configured target repository/PR; it is not gated by the old `DV2-AUDIT-PILOT: critical` marker or issue #27.
 
-Audit and release evidence binds to repository + issue/PR, base SHA, exact material head SHA, merge-preview SHA when applicable, observed risk/classifier fingerprint and required checks. Material head drift invalidates candidate-bound evidence.
+The reviewer receives a deterministic sanitized bundle containing:
 
-## AI context hygiene
+- exact GitHub audit request and check evidence;
+- target issue contract;
+- PR metadata;
+- a bounded prioritized subset of the immutable candidate diff;
+- `DIFF_MANIFEST.json`, which binds the full raw diff by SHA-256 and byte count, lists every changed path and records every included/omitted diff block;
+- Delivery V2 audit contract;
+- bounded exact-SHA material context with prioritized full changed text files plus one-hop direct relative dependencies when resolvable.
 
-Implementation workers start from the target issue and repository instructions and should search only issue-relevant source/test/docs paths. Historical or generated delivery material is excluded from model exploration by default, including `.audit/**`, `skills/catalog/**`, `.generated/**` and compiled `*.lock.yml` files, unless the issue explicitly targets those paths or a deterministic check requires them.
+Both the diff context and material-context expansion have explicit file, per-file and total-byte ceilings; material context also limits dependency probes. The byte budget is risk-adaptive: STANDARD is capped at 32 KiB of bounded diff plus 48 KiB of material context (80 KiB aggregate), while CRITICAL retains 64 KiB plus 96 KiB (160 KiB aggregate). Missing/unsupported audit risk fails closed, and explicit smaller limits used by focused tests remain valid. The exact base/head SHAs remain the candidate identity, while the diff manifest preserves integrity of the full raw diff without placing all of its bytes in the model context. When either bounded manifest omits material that is genuinely required to support a release-blocking conclusion, the reviewer must fail closed with an `audit-context-insufficient` finding rather than guess or browse the repository. This preserves evidence strength while cutting the STANDARD model-context byte ceiling by 50%.
 
-This is a context/token optimization only. It never hides evidence required by CI, audit or a task that actually owns one of those paths.
+Product repositories use the compact `docs/delivery-v2/AUDIT_CONTRACT.md` projection to reduce repeated tokens. Changes to the Delivery V2 control plane itself use the full `MASTER_SPEC.md`. Hidden implementer reasoning, generated worker locks and unrelated repository inventory are not reviewer context. The physically retired V1 roots `.audit/entregar-issue/**` and `skills/catalog/**` are ignored and blocked from reintroduction.
 
-The canonical compiled `gh-aw` worker locks live in `.github/workflows/*.lock.yml` plus `.github/aw/actions-lock.json`. Duplicate `.generated/gh-aw` snapshots are not part of the active architecture.
+## Observability and token accounting
 
-## Observability and cost accounting
+Every compiled worker retains native `gh-aw` usage artifacts. The normal controller downloads and normalizes those artifacts when available. Audit model usage is normalized into the same delivery record.
 
-Delivery metrics preserve provider usage when available:
+Metrics preserve unknown values as `null`; a provider that does not report tokens/credits never becomes a fabricated zero. The final controller artifact includes provider calls, attempts, per-stage usage, CI/audit/end-to-end duration, exact material SHA, change size, evidence references and terminal state.
 
-- AI turns and credits;
-- input, output and total tokens;
-- optional per-stage AI usage;
-- provider cost;
-- provider calls and attempts;
-- CI/audit/end-to-end duration;
-- change size, terminal reason and escalation.
+## Deterministic work deduplication
 
-Every compiled implementation worker must retain the native `gh-aw` usage payloads (`/tmp/gh-aw/usage/agent_usage.json` and `.jsonl`) in its generated contract. Those artifacts are the raw provider telemetry source for real token/AI-credit analysis; the repository regression suite checks their presence across all provider/risk workers so a compiler upgrade cannot silently remove cost visibility.
+`Delivery V2 CI` remains the trusted automatic exact-head gate. Its aggregate `verify:v2` command runs the strict terminal-completeness verifier exactly once and the target-policy verifier exactly once. `verify:v2:complete` remains available as the focused strict-completeness command, but the CI does not invoke it a second time after `verify:v2`.
 
-Summaries aggregate usage by repository/risk/provider and by stage when stage telemetry exists. Missing token/credit/cost telemetry remains unknown/null; it is never silently converted to zero. This distinction is required before using the data to tune worker budgets.
+Before installing `gh-aw`, the CI compares the worker compilation identity with the trusted base. When worker Markdown sources, generated worker locks/actions lock and compiler-workflow identity are unchanged, the previously trusted base attestation is reused and the `gh-aw` setup/compile steps are skipped. When that identity changes, the same CI performs exactly one strict compile and verifies zero generated drift. `Delivery V2 - Compile gh-aw` remains manual preflight only and cannot create a second automatic compile for a PR.
 
-The first measured FAST pilot in `controle_calorias` observed approximately 128 seconds versus an earlier approximately 1,255-second full baseline (~89.8% reduction, ~9.8x faster). This is evidence, not a universal SLA.
+The CI trigger and syntax checks cover repository scripts by surface (`scripts/**` and generic `*.mjs` loops) rather than by a manually maintained list. A newly added V2 controller/helper script therefore cannot silently bypass the platform gate merely because its filename was not enumerated.
 
-## Current program state
+## V1 retirement
 
-Delivery V2 is the default and only active delivery architecture. The required DV2-001..DV2-016 program reached terminal status under the completion contract, and V1 active orchestration was retired under DV2-014.
+V1 remains retired. No active `delivery-request`, `max_cycles`, recursive controller, nested-Skill normal path or mandatory V1 handoff/certificate dependency is reintroduced. The former `.audit/entregar-issue/**` and `skills/catalog/**` snapshot roots have also been physically removed from the working tree and are ignored to prevent accidental regeneration. Minimal historical provenance remains under `docs/delivery-v2/history/v1/**` and in Git history only.
 
-Post-completion hardening keeps the following invariants continuously enforced:
-
-- no active `delivery-request`/`max_cycles`/recursive V1 runtime returns;
-- historical `.audit/entregar-issue/**` and `skills/catalog/**` material remains traceability-only;
-- active executable surfaces do not depend on those historical snapshot trees;
-- compiled workers stay synchronized with their Markdown sources and retain raw usage telemetry;
-- token/credit telemetry remains explicit and comparable;
-- risk classification remains fail-closed.
-
-Run:
+## Validation
 
 ```bash
 npm test
 npm run validate
 npm run verify:v2
-npm run verify:v2:complete
 ```
 
-`verify:v2:complete` is now a regression guard for the terminal V2 contract rather than a pending rollout gate.
-
-## New-context continuation
-
-A new agent/chat should read, in order:
-
-1. `docs/delivery-v2/MASTER_SPEC.md`
-2. `config/delivery-v2-requirements.json`
-3. `docs/delivery-v2/ROADMAP.md`
-4. issue #27 for completed-program history and the current issue/PR for new work
-
-Conversation history is optional context, never a correctness dependency. Historical V1 artifacts must not be used to reconstruct current orchestration state.
+Use `npm run verify:v2:complete` only when the strict completeness verifier is needed in isolation. The terminal V2 contract remains protected by that strict completeness gate and `test/v2-retirement.test.mjs`.

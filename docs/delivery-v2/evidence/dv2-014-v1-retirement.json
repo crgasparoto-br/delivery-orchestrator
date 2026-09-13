@@ -35,7 +35,7 @@
     "docs/persistent-delivery-queue.md",
     "docs/delivery-completion-contract.md"
   ],
-  "retainedForTraceability": [
+  "retainedForTraceabilityAtRetirement": [
     ".audit/entregar-issue/**",
     "skills/catalog/**",
     "docs/delivery-v2/history/v1/trusted-auditors.json",
@@ -75,11 +75,40 @@
     "lexicalScannerIsSecurityBoundary": false,
     "ghAwUsageArtifactContract": true
   },
+  "v2_1PhysicalCleanup": {
+    "issueNumber": 63,
+    "removedResidualRoots": [
+      ".audit/entregar-issue/**",
+      "skills/catalog/**"
+    ],
+    "retainedProvenance": [
+      "docs/delivery-v2/history/v1/trusted-auditors.json",
+      "docs/delivery-v2/history/v1/skills-catalog-sync-manifest.json",
+      "git-history"
+    ],
+    "reintroductionBlockedByGitignore": true,
+    "runtimeActive": false
+  },
+  "transitionalAuditPilotCleanup": {
+    "issueNumber": 63,
+    "removedResidualPaths": [
+      ".github/workflows/delivery-v2-independent-audit.yml",
+      "scripts/run-delivery-v2-independent-audit.mjs",
+      "src/v2/independent-audit-runtime.mjs",
+      "test/v2-independent-audit-runtime.test.mjs",
+      "test/v2-critical-audit-pilot-evidence.test.mjs"
+    ],
+    "replacementWorkflow": ".github/workflows/delivery-v2-audit.yml",
+    "replacementRunner": "scripts/run-delivery-v2-github-audit.mjs",
+    "replacementRuntime": "src/v2/github-native-audit-runtime.mjs",
+    "runtimeActive": false
+  },
   "invariants": [
     "normal delivery no longer accepts delivery-request control issues",
     "normal delivery no longer exposes max_cycles or a recursive implement-audit loop",
     "normal delivery no longer requires nested Skills or .audit/entregar-issue certificates",
     "all active GitHub workflow, package-command and repository-local action entrypoints are explicitly Delivery V2 and have no concrete dependency on historical V1 roots",
+    "the transitional issue-27 audit pilot is historical only; the generic GitHub-native audit is the single active semantic-review path",
     "lexical marker checks are regression tripwires for the current candidate, not a security boundary or a universal JavaScript static analyzer",
     "V1 trust and Skill snapshot verification metadata is retained only under docs/delivery-v2/history/v1 for historical verification",
     "compiled gh-aw workers retain raw usage artifacts for token and AI-credit observability",

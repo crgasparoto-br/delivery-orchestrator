@@ -1,12 +1,6 @@
 name: Delivery V2 - Compile gh-aw
 
 on:
-  push:
-    branches-ignore:
-      - main
-    paths:
-      - '.github/workflows/delivery-v2-worker-*.md'
-      - '.github/workflows/delivery-v2-gh-aw-compile.yml'
   workflow_dispatch:
 
 permissions:
@@ -22,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout branch
+      - name: Checkout candidate
         uses: actions/checkout@v4
         with:
           fetch-depth: 0

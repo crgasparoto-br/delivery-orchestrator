@@ -24,6 +24,8 @@ FAST is an allowlist: unknown paths and authentication/authorization/session/ide
 
 CRITICAL release requires an independent result bound to the exact candidate and request evidence. The normal V2 audit is GitHub-native and does not require legacy `.audit/entregar-issue/handoff-ready.json` certificates.
 
+Audit context limits are also risk-adaptive: STANDARD receives at most 80 KiB aggregate bounded diff/material context, while CRITICAL retains 160 KiB. Omitted material never weakens the gate: when a release-blocking conclusion depends on omitted context, the reviewer must emit `audit-context-insufficient` instead of approving from incomplete evidence. Unsupported audit risk profiles fail closed.
+
 A green source CI run is evidence, not proof that a candidate-modified workflow is semantically safe. Independent review must still assess relevant workflow and code changes when they are part of the candidate.
 
 ## Release authority
@@ -32,6 +34,6 @@ Release readiness is computed deterministically from the current material head, 
 
 ## Retired V1 boundary
 
-The former `delivery-request:` issue queue, `delivery-loop.yml`, `max_cycles` recursion, nested-Skill normal path and mandatory V1 handoff/signing flow are retired. Historical `.audit/entregar-issue/**` and `skills/catalog/**` content may remain for traceability but is not an active security or orchestration dependency.
+The former `delivery-request:` issue queue, `delivery-loop.yml`, `max_cycles` recursion, nested-Skill normal path and mandatory V1 handoff/signing flow are retired. The former `.audit/entregar-issue/**` and `skills/catalog/**` snapshot roots are physically absent from the active tree and ignored to prevent accidental regeneration. Minimal historical provenance is confined to `docs/delivery-v2/history/v1/**` and Git history and is not an active security or orchestration dependency.
 
-Any reintroduction of those active V1 entrypoints is a regression and is blocked by `test/v2-retirement.test.mjs`.
+Any reintroduction of those active V1 entrypoints or snapshot roots is a regression and is blocked by the V2 retirement/physical-cleanup tests.

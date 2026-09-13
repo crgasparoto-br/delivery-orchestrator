@@ -1,7 +1,14 @@
 {
   "schemaVersion": 1,
   "requirement": "DV2-008",
-  "exercise": "github-native-critical-independent-audit",
+  "exercise": "historical-github-native-critical-independent-audit-pilot",
+  "historical": true,
+  "operationalPathActive": false,
+  "supersededBy": {
+    "workflow": ".github/workflows/delivery-v2-audit.yml",
+    "runner": "scripts/run-delivery-v2-github-audit.mjs",
+    "runtime": "src/v2/github-native-audit-runtime.mjs"
+  },
   "repository": "crgasparoto-br/delivery-orchestrator",
   "pullRequestNumber": 48,
   "headRef": "test/27-dv2-008-critical-ci-binding-pilot-v2",
@@ -36,5 +43,5 @@
   },
   "legacyV1HandoffRequired": false,
   "result": "validated",
-  "conclusion": "A real CRITICAL pull request passed exact-head Delivery V2 CI and was independently approved from the trusted main audit runtime with zero release-blocking findings. The authoritative decision is durably published in the PR conversation and bound to the exact candidate SHA and request fingerprint; the Actions artifacts API returned zero artifacts despite the upload step concluding success, so no artifact availability is claimed."
+  "conclusion": "Historical validation evidence: a real CRITICAL pull request passed exact-head Delivery V2 CI and was independently approved by the then-current pilot audit runtime. That pilot runtime is retired and this record is retained only as historical evidence; the active operational path is the generic GitHub-native audit listed in supersededBy."
 }

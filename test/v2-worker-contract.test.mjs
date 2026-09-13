@@ -30,9 +30,25 @@ for (const provider of ['copilot', 'codex', 'claude']) {
       assert.match(body, new RegExp(`engine: ${provider}`));
       assert.match(body, new RegExp(`max-turns: ${policy[risk].turns}`));
       assert.match(body, new RegExp(`max-ai-credits: ${policy[risk].credits}`));
+      assert.match(body, /target_ref:/);
+      assert.match(body, /target_pr:/);
+      assert.match(body, /remediation_context:/);
+      assert.match(body, /dispatch_nonce:/);
+      assert.match(body, /run-name: "Delivery V2 worker \$\{\{ github\.event\.inputs\.dispatch_nonce \}\}"/);
+      assert.match(body, /fetch: \["refs\/pulls\/open\/\*"\]/);
       assert.match(body, /github-token: \$\{\{ secrets\.DELIVERY_GITHUB_READ_TOKEN \}\}/);
       assert.match(body, /safe-outputs:[\s\S]*github-token: \$\{\{ secrets\.DELIVERY_GITHUB_WRITE_TOKEN \}\}/);
+      assert.match(body, /GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "\$\{\{ github\.event\.inputs\.target_pr == '' && 'true' \|\| 'false' \}\}"/);
       assert.match(body, /create-pull-request:/);
+      assert.match(body, /title-prefix: "\[delivery-v2\] "/);
+      assert.match(body, /push-to-pull-request-branch:/);
+      assert.match(body, /target: "\$\{\{ github\.event\.inputs\.target_pr \}\}"/);
+      assert.doesNotMatch(body, /target: "\*"/);
+      assert.match(body, /required-title-prefix: "\[delivery-v2\] "/);
+      assert.match(body, /fallback-as-pull-request: false/);
+      assert.match(body, /Remediation mode/);
+      assert.match(body, /Do \*\*not\*\* create a replacement PR/);
+      assert.match(lockBody, /GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST/);
       assert.doesNotMatch(body, /merge-pull-request:/);
       assert.doesNotMatch(body, /entregar-issue|auditar-issue/i);
       assert.doesNotMatch(body, /permissions:[\s\S]{0,200}contents: write/);
@@ -45,8 +61,12 @@ for (const provider of ['copilot', 'codex', 'claude']) {
       const usageUpload = usageArtifactUploadBlock(lockBody);
       assert.match(usageUpload, /\/tmp\/gh-aw\/usage\/agent_usage\.json(?:\n|$)/);
       assert.match(usageUpload, /\/tmp\/gh-aw\/usage\/agent_usage\.jsonl(?:\n|$)/);
-      if (risk === 'fast') assert.match(body, /allowed-files:/);
-      else assert.doesNotMatch(body, /allowed-files:/);
+      if (risk === 'fast') {
+        const allowedFilesCount = (body.match(/allowed-files:/g) ?? []).length;
+        assert.equal(allowedFilesCount, 2, 'FAST must constrain both create-PR and remediation-push outputs');
+      } else {
+        assert.doesNotMatch(body, /allowed-files:/);
+      }
     });
   }
 }

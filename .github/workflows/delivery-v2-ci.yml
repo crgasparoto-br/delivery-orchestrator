@@ -16,15 +16,13 @@ on:
       - 'schemas/delivery-v2-metrics.schema.json'
       - 'schemas/delivery-v2-requirements.schema.json'
       - 'schemas/delivery-v2-target-policy.schema.json'
-      - 'scripts/export-delivery-v2-classifier.mjs'
-      - 'scripts/run-delivery-v2-independent-audit.mjs'
-      - 'scripts/verify-delivery-v2-completeness.mjs'
-      - 'scripts/verify-delivery-v2-targets.mjs'
+      - 'scripts/**'
       - '.github/delivery-orchestrator-capabilities.json'
       - '.github/aw/actions-lock.json'
       - '.github/workflows/delivery-v2-*.yml'
       - '.github/workflows/delivery-v2-*.md'
       - '.github/workflows/delivery-v2-*.lock.yml'
+      - '.github/scripts/**'
       - 'docs/delivery-v2.md'
       - 'docs/delivery-v2/**'
 
@@ -44,6 +42,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -57,11 +57,8 @@ jobs:
       - name: V2 unit tests
         run: node --test test/v2-*.test.mjs
 
-      - name: Verify Delivery V2 contract
+      - name: Verify Delivery V2 contract and terminal completeness
         run: npm run verify:v2
-
-      - name: Verify Delivery V2 terminal completeness
-        run: npm run verify:v2:complete
 
       - name: Syntax checks
         shell: bash
@@ -71,21 +68,58 @@ jobs:
             node --check "$file"
           done
           node --check actions/delivery-v2-risk/index.cjs
-          node --check scripts/export-delivery-v2-classifier.mjs
-          node --check scripts/run-delivery-v2-independent-audit.mjs
-          node --check scripts/verify-delivery-v2-completeness.mjs
-          node --check scripts/verify-delivery-v2-targets.mjs
+          for file in scripts/*.mjs; do
+            node --check "$file"
+          done
+          for file in .github/scripts/*.mjs; do
+            node --check "$file"
+          done
+
+      - name: Detect gh-aw worker identity drift
+        id: worker-identity
+        shell: bash
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          changed_paths="$(git diff --name-only "$base" HEAD)"
+          changed="$(printf '%s\n' "$changed_paths" | node scripts/should-compile-delivery-v2-workers.mjs)"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      - name: Reuse trusted-base gh-aw attestation
+        if: steps.worker-identity.outputs.changed == 'false'
+        shell: bash
+        run: echo "gh-aw worker sources, generated locks and compiler workflow identity are unchanged from the trusted base; reusing the base attestation."
 
       - name: Install pinned gh-aw
+        if: steps.worker-identity.outputs.changed == 'true'
         uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
         with:
           version: v0.88.7
 
-      - name: Verify compiled gh-aw workers
+      - name: Compile gh-aw workers
+        if: steps.worker-identity.outputs.changed == 'true'
+        id: compiled-workers
         shell: bash
         run: |
           gh aw compile --strict
-          git diff --exit-code -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
+          if git diff --quiet -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Emit compiled worker drift for deterministic remediation
+        if: steps.worker-identity.outputs.changed == 'true' && steps.compiled-workers.outputs.drift == 'true'
+        shell: bash
+        run: |
+          archive="${RUNNER_TEMP}/delivery-v2-compiled-workers.tgz"
+          tar -czf "$archive" .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
+          echo "DV2_LOCK_ARCHIVE_SHA256=$(sha256sum "$archive" | cut -d' ' -f1)"
+          base64 -w 60000 "$archive" | sed 's/^/DV2_LOCK_ARCHIVE_CHUNK:/'
+
+      - name: Verify compiled gh-aw workers
+        if: steps.worker-identity.outputs.changed == 'true'
+        shell: bash
+        run: git diff --exit-code -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
 
       - name: Smoke deterministic plan
         run: >-

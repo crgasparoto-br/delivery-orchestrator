@@ -30,10 +30,13 @@
           {
             "id": "DV2-008-EVIDENCE-REGRESSION-NONDISCRIMINATING",
             "candidateSha": "1971fb5751dd99883c6772094bd4b1448fb4089e",
+            "severity": "high",
+            "violatedContract": "MASTER_SPEC.md §4.2 Fail closed and §12 DV2-008 GitHub-native independent audit",
             "blocksRelease": true,
             "remediationMode": "systemic",
             "surface": "test/v2-critical-audit-pilot-evidence.test.mjs",
-            "failureMode": "The pilot regression did not prove mandatory workflow provenance and exact PR/base/head/repository bindings field by field."
+            "failureMode": "The pilot regression did not prove mandatory workflow provenance and exact PR/base/head/repository bindings field by field.",
+            "evidence": "CANDIDATE.diff lines 55-57 assign the same BLOB and WORKFLOW_SOURCE to candidate and trustedBase; line 72 asserts only workflowId; lines 74-75 exercise only deletion of the whole object. This does not cover the exact identity and trusted workflow-evidence acceptance conditions stated for the candidate and required by DV2-008's fail-closed evidence contract."
           }
         ]
       }

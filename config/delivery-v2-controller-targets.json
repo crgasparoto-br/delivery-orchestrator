@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "crgasparoto-br/controle_calorias": {
+      "baseBranch": "develop",
+      "requiredStatusName": "Agent-first gate",
+      "ciWorkflowName": "Agent-first gate",
+      "ciWorkflowPath": ".github/workflows/agent-check.yml",
+      "mergePreviewJobName": "Merge preview integration",
+      "standardAuditRequired": true,
+      "finalStatusName": "Delivery V2 release"
+    },
+    "crgasparoto-br/training-system": {
+      "baseBranch": "develop",
+      "requiredStatusName": "Validate repository",
+      "ciWorkflowName": "Validate PR",
+      "ciWorkflowPath": ".github/workflows/validate-pr.yml",
+      "mergePreviewJobName": "Merge preview compatibility",
+      "standardAuditRequired": true,
+      "finalStatusName": "Delivery V2 release"
+    },
+    "crgasparoto-br/delivery-orchestrator": {
+      "baseBranch": "main",
+      "requiredStatusName": "V2 platform checks",
+      "ciWorkflowName": "Delivery V2 CI",
+      "ciWorkflowPath": ".github/workflows/delivery-v2-ci.yml",
+      "mergePreviewJobName": "V2 platform checks",
+      "standardAuditRequired": true,
+      "finalStatusName": "Delivery V2 release"
+    }
+  }
+}
