@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import {
   assertPullRequestSnapshotStable,
   fetchAuditClassifier,
+  fetchBoundedAuditContext,
   fetchImmutableCompareEvidence
 } from '../src/v2/github-audit-evidence.mjs';
 
@@ -29,6 +30,39 @@ test('self target classifier uses exact risk-profile fallback while external tar
   assert.equal(classifier.version, 'delivery-v2-risk-profile-v1');
   assert.equal(classifier.fingerprint, createHash('sha256').update(source).digest('hex'));
   await assert.rejects(() => fetchAuditClassifier('crgasparoto-br/other', 'a'.repeat(40), 'token', { orchestratorRepository: 'crgasparoto-br/delivery-orchestrator' }), /GitHub API 404/);
+});
+
+test('material context prioritizes executable source then tests and manifests generated omissions', async (t) => {
+  const head = '2'.repeat(40);
+  const contents = new Map([
+    ['src/v2/core.mjs', 'export const core = true;\n'],
+    ['test/v2-core.test.mjs', 'export const test = true;\n'],
+    ['config/runtime.json', '{"enabled":true}\n'],
+    ['.github/workflows/delivery-v2-worker-codex-critical.md', '# prompt\n']
+  ]);
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async (url) => {
+    const match = String(url).match(/\/contents\/(.+)\?ref=/);
+    if (!match) throw new Error(`unexpected URL ${url}`);
+    const filePath = decodeURIComponent(match[1]);
+    const content = contents.get(filePath);
+    if (content == null) return response({ ok: false, status: 404, text: 'missing' });
+    return response({ json: { type: 'file', encoding: 'base64', sha: createHash('sha1').update(filePath).digest('hex'), content: Buffer.from(content).toString('base64') } });
+  };
+
+  const context = await fetchBoundedAuditContext('crgasparoto-br/example', head, [
+    'config/runtime.json',
+    '.github/workflows/delivery-v2-worker-codex-critical.lock.yml',
+    '.github/workflows/delivery-v2-worker-codex-critical.md',
+    'test/v2-core.test.mjs',
+    'src/v2/core.mjs'
+  ], 'token', { limits: { maxFiles: 2, maxFileBytes: 4096, maxTotalBytes: 8192, maxDependencyProbes: 1 } });
+
+  assert.deepEqual(context.files.map((item) => item.path), ['src/v2/core.mjs', 'test/v2-core.test.mjs']);
+  assert.equal(context.omitted.find((item) => item.path.endsWith('.lock.yml'))?.reason, 'non-material-or-generated');
+  assert.equal(context.omitted.find((item) => item.path === 'config/runtime.json')?.reason, 'context-budget');
+  assert.equal(context.omitted.find((item) => item.path.endsWith('-critical.md'))?.reason, 'context-budget');
 });
 
 test('audit changed paths and diff come only from immutable base...candidate compare', async (t) => {
