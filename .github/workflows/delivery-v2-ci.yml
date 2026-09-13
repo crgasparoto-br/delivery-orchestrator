@@ -50,7 +50,11 @@ jobs:
           version: v0.88.7
 
       - name: Regenerate canonical worker locks
-        run: gh aw compile --strict
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh aw compile --strict
+          git add .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
 
       - name: Restore trusted CI and remove remediation transport
         shell: bash
