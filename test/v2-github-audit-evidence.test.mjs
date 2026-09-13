@@ -123,7 +123,7 @@ test('material context supplements diff-represented paths instead of duplicating
   assert.equal(context.files.some((item) => item.path === 'test/v2-core.test.mjs'), false);
   assert.ok(context.files.some((item) => item.path === 'config/delivery-v2-requirements.json'));
   assert.ok(context.files.some((item) => item.path === 'docs/delivery-v2/ADR-0006.md'));
-  assert.ok(context.files.some((item) => item.path.endsWith('-critical.md'));
+  assert.ok(context.files.some((item) => item.path.endsWith('-critical.md')));
   assert.ok(context.files.some((item) => item.path === 'src/v2/dep.mjs' && item.kind === 'direct-relative-dependency'));
   assert.equal(context.omitted.find((item) => item.path === 'src/v2/core.mjs')?.reason, 'represented-in-bounded-diff');
   assert.equal(context.omitted.find((item) => item.path === 'test/v2-core.test.mjs')?.reason, 'represented-in-bounded-diff');
