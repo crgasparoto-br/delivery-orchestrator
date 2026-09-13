@@ -122,15 +122,17 @@ export function compactAuditPullRequest(pullRequest, riskProfile) {
   });
 }
 
-export function evaluateAuditBundleBudget({ riskProfile, issue, pullRequest, files } = {}) {
+export function evaluateAuditBundleBudget({ riskProfile, issue, pullRequest, files, preflightReasons = [] } = {}) {
   const limits = auditBundleLimitsForRisk(riskProfile);
   const issueProjection = compactAuditIssue(issue, riskProfile);
   const pullRequestProjection = compactAuditPullRequest(pullRequest, riskProfile);
   const fileMap = requiredObject(files, 'files');
+  if (!Array.isArray(preflightReasons)) throw new Error('preflightReasons must be an array');
+  const normalizedPreflightReasons = preflightReasons.map((reason) => requiredString(reason, 'preflightReason'));
   const totalBytes = Object.values(fileMap).reduce((sum, value) => sum + Buffer.byteLength(String(value ?? ''), 'utf8'), 0)
     + Buffer.byteLength(JSON.stringify(issueProjection), 'utf8')
     + Buffer.byteLength(JSON.stringify(pullRequestProjection), 'utf8');
-  const reasons = [];
+  const reasons = [...normalizedPreflightReasons];
   if (issueProjection.bodyContext.truncated) reasons.push('issue-body-truncated');
   if (pullRequestProjection.bodyContext.truncated) reasons.push('pull-request-body-truncated');
   if (totalBytes > limits.maxTotalBytes) reasons.push('bundle-total-byte-limit-exceeded');
@@ -153,7 +155,7 @@ export function auditContextInsufficientFinding({ candidateSha, budget } = {}) {
     severity: 'high',
     violatedContract: 'DV2-008 bounded independent audit context must fail closed when material contract context is omitted',
     surface: 'audit-bundle',
-    failureMode: `The bounded audit bundle cannot safely represent all material issue/PR context: ${value.reasons.join(', ')}`,
+    failureMode: `The bounded audit bundle cannot safely represent all material audit context: ${value.reasons.join(', ')}`,
     evidence: `bundleBytes=${value.totalBytes}; maxTotalBytes=${value.limits.maxTotalBytes}; reasons=${value.reasons.join(',')}`,
     remediationMode: 'targeted',
     blocksRelease: true,

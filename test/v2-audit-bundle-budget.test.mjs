@@ -82,3 +82,18 @@ test('total audit bundle has a risk-specific hard ceiling', () => {
   assert.ok(budget.reasons.includes('bundle-total-byte-limit-exceeded'));
   assert.throws(() => auditBundleLimitsForRisk('fast'), /unsupported audit bundle risk profile/);
 });
+
+test('deterministic semantic preflight reasons block model invocation even when byte ceilings fit', () => {
+  const budget = evaluateAuditBundleBudget({
+    riskProfile: 'critical',
+    issue,
+    pullRequest: pr,
+    files: { contract: 'contract' },
+    preflightReasons: ['bounded-diff:required-reservation-byte-limit-exceeded']
+  });
+
+  assert.equal(budget.allowed, false);
+  assert.deepEqual(budget.reasons, ['bounded-diff:required-reservation-byte-limit-exceeded']);
+  const finding = auditContextInsufficientFinding({ candidateSha: sha, budget });
+  assert.match(finding.failureMode, /required-reservation-byte-limit-exceeded/);
+});

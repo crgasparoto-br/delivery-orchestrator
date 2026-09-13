@@ -1,29 +1,31 @@
 import { createHash } from 'node:crypto';
 import { posix as pathPosix } from 'node:path';
 
+import {
+  AUDIT_SEMANTIC_CATEGORY_ORDER,
+  auditSemanticCategory,
+  isGeneratedLowValueAuditPath,
+  isSharedContractAuditPath,
+  normalizeAuditSemanticPath
+} from './audit-context-policy.mjs';
+
 const AUDIT_CONTEXT_TEXT_EXTENSIONS = new Set([
-  '.cjs', '.css', '.graphql', '.html', '.js', '.json', '.jsx', '.md', '.mjs', '.py', '.sh', '.sql', '.toml', '.ts', '.tsx', '.yaml', '.yml'
+  '.cjs', '.cs', '.css', '.go', '.graphql', '.html', '.java', '.js', '.json', '.jsx', '.kt', '.kts',
+  '.less', '.md', '.mjs', '.php', '.prisma', '.py', '.rb', '.rs', '.sass', '.scala', '.scss', '.sh',
+  '.sql', '.svelte', '.swift', '.toml', '.ts', '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml'
 ]);
-const AUDIT_CONTEXT_GENERATED_PATTERNS = [
-  /(?:^|\/)\.audit(?:\/|$)/,
-  /(?:^|\/)skills\/catalog(?:\/|$)/,
-  /(?:^|\/)\.generated(?:\/|$)/,
-  /\.lock\.ya?ml$/,
-  /(?:^|\/)package-lock\.json$/,
-  /(?:^|\/)\.github\/aw\/actions-lock\.json$/
-];
-const WORKER_PROMPT_PATTERN = /^\.github\/workflows\/delivery-v2-worker-(?:claude|codex|copilot)-(?:fast|standard|critical)\.md$/;
+const AUDIT_CONTEXT_TEXT_BASENAMES = new Set(['Dockerfile', 'Makefile', 'Procfile']);
 const DIRECT_IMPORT_EXTENSIONS = ['.mjs', '.js', '.cjs', '.ts', '.tsx', '.jsx', '.json'];
 
 export const DEFAULT_AUDIT_CONTEXT_LIMITS = Object.freeze({
-  maxFiles: 12,
+  maxFiles: 24,
   maxFileBytes: 24 * 1024,
   maxTotalBytes: 96 * 1024,
   maxDependencyProbes: 24
 });
 
 export const STANDARD_AUDIT_CONTEXT_LIMITS = Object.freeze({
-  maxFiles: 8,
+  maxFiles: 16,
   maxFileBytes: 16 * 1024,
   maxTotalBytes: 48 * 1024,
   maxDependencyProbes: 12
@@ -79,19 +81,30 @@ function normalizeAuditContextLimits(limits = {}) {
   return Object.freeze(merged);
 }
 
-function auditContextPriority(filePath) {
-  if (/^(?:src|scripts|actions)\//.test(filePath) || /^\.github\/scripts\//.test(filePath)) return 0;
-  if (/^(?:test|tests|__tests__)\//.test(filePath) || /(?:^|\/)test\./.test(filePath)) return 1;
-  if (/^(?:config|schemas)\//.test(filePath) || (/^\.github\/workflows\//.test(filePath) && !WORKER_PROMPT_PATTERN.test(filePath))) return 2;
-  if (/^(?:docs|README)/.test(filePath)) return 3;
-  if (WORKER_PROMPT_PATTERN.test(filePath)) return 4;
-  return 5;
+function fairChangedPathOrder(paths) {
+  const buckets = new Map(AUDIT_SEMANTIC_CATEGORY_ORDER.map((category) => [category, []]));
+  for (const filePath of paths) buckets.get(auditSemanticCategory(filePath)).push(filePath);
+  for (const bucket of buckets.values()) bucket.sort((a, b) => a.localeCompare(b));
+  const ordered = [];
+  let remaining = true;
+  while (remaining) {
+    remaining = false;
+    for (const category of AUDIT_SEMANTIC_CATEGORY_ORDER) {
+      const bucket = buckets.get(category);
+      if (bucket.length > 0) {
+        ordered.push(bucket.shift());
+        remaining = true;
+      }
+    }
+  }
+  return ordered;
 }
 
 function auditContextPathAllowed(filePath) {
-  const normalized = pathPosix.normalize(String(filePath ?? '').replace(/^\.\//, ''));
-  if (!normalized || normalized.startsWith('../') || normalized.startsWith('/')) return false;
-  if (AUDIT_CONTEXT_GENERATED_PATTERNS.some((pattern) => pattern.test(normalized))) return false;
+  const normalized = normalizeAuditSemanticPath(filePath);
+  if (!normalized || isGeneratedLowValueAuditPath(normalized)) return false;
+  if (isSharedContractAuditPath(normalized)) return true;
+  if (AUDIT_CONTEXT_TEXT_BASENAMES.has(pathPosix.basename(normalized))) return true;
   return AUDIT_CONTEXT_TEXT_EXTENSIONS.has(pathPosix.extname(normalized).toLowerCase());
 }
 
@@ -140,20 +153,28 @@ async function fetchOptionalFileEvidenceAtRef(repository, filePath, ref, token) 
   }
 }
 
-export async function fetchBoundedAuditContext(repository, ref, changedPaths, token, { limits } = {}) {
+export async function fetchBoundedAuditContext(repository, ref, changedPaths, token, { limits, representedPaths = [] } = {}) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) throw new Error('changedPaths must be a non-empty array');
+  if (!Array.isArray(representedPaths)) throw new Error('representedPaths must be an array');
   const candidateSha = requiredString(ref, 'ref').toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(candidateSha)) throw new Error('audit context ref must be an exact 40-character Git SHA');
   const resolvedLimits = normalizeAuditContextLimits(limits);
   const allChangedPaths = [...new Set(changedPaths.map((value) => String(value).trim()).filter(Boolean))];
-  const orderedChangedPaths = allChangedPaths
-    .filter(auditContextPathAllowed)
-    .sort((a, b) => auditContextPriority(a) - auditContextPriority(b) || a.localeCompare(b));
+  const changedPathSet = new Set(allChangedPaths);
+  const represented = new Set(representedPaths.map((value) => String(value).trim()).filter(Boolean));
+  for (const filePath of represented) {
+    if (!changedPathSet.has(filePath)) throw new Error(`represented audit path is not changed: ${filePath}`);
+  }
+  const allowedChangedPaths = allChangedPaths.filter(auditContextPathAllowed);
+  const orderedChangedPaths = fairChangedPathOrder(allowedChangedPaths.filter((filePath) => !represented.has(filePath)));
   const files = [];
   const omitted = allChangedPaths
     .filter((filePath) => !auditContextPathAllowed(filePath))
     .map((filePath) => ({ path: filePath, kind: 'changed', reason: 'non-material-or-generated', importedBy: null }));
-  const seen = new Set();
+  for (const filePath of allowedChangedPaths.filter((filePath) => represented.has(filePath))) {
+    omitted.push({ path: filePath, kind: 'changed', reason: 'represented-in-bounded-diff', importedBy: null });
+  }
+  const seen = new Set(represented);
   let totalBytes = 0;
 
   function appendEvidence(evidence, kind, importedBy = null) {
@@ -178,6 +199,7 @@ export async function fetchBoundedAuditContext(repository, ref, changedPaths, to
       blobSha: evidence.blobSha,
       kind,
       importedBy,
+      category: auditSemanticCategory(evidence.path),
       bytes,
       content: evidence.content
     }));
@@ -197,10 +219,15 @@ export async function fetchBoundedAuditContext(repository, ref, changedPaths, to
     appendEvidence(evidence, 'changed');
   }
 
+  const dependencySeeds = files.filter((item) => item.kind === 'changed');
+  for (const filePath of allowedChangedPaths.filter((item) => represented.has(item) && auditSemanticCategory(item) === 'executable')) {
+    const evidence = await fetchOptionalFileEvidenceAtRef(repository, filePath, ref, token);
+    if (evidence) dependencySeeds.push(evidence);
+  }
+
   let dependencyProbes = 0;
-  const changedFiles = files.filter((item) => item.kind === 'changed');
   dependencyLoop:
-  for (const changedFile of changedFiles) {
+  for (const changedFile of dependencySeeds) {
     for (const specifier of directRelativeImportSpecifiers(changedFile.content)) {
       for (const candidate of dependencyCandidates(changedFile.path, specifier)) {
         if (dependencyProbes >= resolvedLimits.maxDependencyProbes || files.length >= resolvedLimits.maxFiles || totalBytes >= resolvedLimits.maxTotalBytes) break dependencyLoop;
@@ -215,12 +242,13 @@ export async function fetchBoundedAuditContext(repository, ref, changedPaths, to
   }
 
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     candidateSha,
-    strategy: 'changed-files-plus-direct-relative-dependencies',
+    strategy: 'supplemental-changed-files-plus-direct-relative-dependencies',
     limits: resolvedLimits,
     totalBytes,
     dependencyProbes,
+    representedPaths: Object.freeze([...represented]),
     files: Object.freeze(files),
     omitted: Object.freeze(omitted)
   });
