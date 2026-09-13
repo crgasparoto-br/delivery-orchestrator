@@ -14,7 +14,7 @@ const AUDIT_CONTEXT_GENERATED_PATTERNS = [
 ];
 const WORKER_PROMPT_PATTERN = /^\.github\/workflows\/delivery-v2-worker-(?:claude|codex|copilot)-(?:fast|standard|critical)\.md$/;
 const DIRECT_IMPORT_EXTENSIONS = ['.mjs', '.js', '.cjs', '.ts', '.tsx', '.jsx', '.json'];
-const SEMANTIC_CATEGORY_ORDER = Object.freeze(['executable', 'tests', 'contract', 'docs', 'prompts', 'other']);
+const SEMANTIC_CATEGORY_ORDER = Object.freeze(['executable', 'tests', 'config', 'evidence', 'docs', 'prompts', 'other']);
 
 export const DEFAULT_AUDIT_CONTEXT_LIMITS = Object.freeze({
   maxFiles: 24,
@@ -83,8 +83,9 @@ function normalizeAuditContextLimits(limits = {}) {
 function auditContextCategory(filePath) {
   if (/^(?:src|scripts|actions)\//.test(filePath) || /^\.github\/scripts\//.test(filePath)) return 'executable';
   if (/^(?:test|tests|__tests__)\//.test(filePath) || /(?:^|\/)test\./.test(filePath)) return 'tests';
-  if (/^(?:config|schemas)\//.test(filePath) || /^docs\/delivery-v2\/evidence\//.test(filePath)) return 'contract';
-  if (/^\.github\/workflows\//.test(filePath) && !WORKER_PROMPT_PATTERN.test(filePath)) return 'contract';
+  if (/^docs\/delivery-v2\/evidence\//.test(filePath)) return 'evidence';
+  if (/^(?:config|schemas)\//.test(filePath)) return 'config';
+  if (/^\.github\/workflows\//.test(filePath) && !WORKER_PROMPT_PATTERN.test(filePath)) return 'config';
   if (/^(?:docs|README)/.test(filePath)) return 'docs';
   if (WORKER_PROMPT_PATTERN.test(filePath)) return 'prompts';
   return 'other';
