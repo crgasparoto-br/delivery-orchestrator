@@ -87,6 +87,23 @@ test('audit rejection exposes only blocking findings plus explicitly new risk su
   assert.deepEqual(input.newRiskSurfaces, ['src/new-boundary.mjs']);
 });
 
+test('audit context insufficiency escalates deterministically without authorizing implementation remediation', () => {
+  let state = startAudit(ciSuccess(publish(begin('critical'))));
+  state = recordAuditResult(state, {
+    candidateSha: A,
+    decision: 'rejected',
+    evidenceRef: 'audit:context',
+    findings: [blockingFinding(A, 'DV2-AUDIT-CONTEXT-INSUFFICIENT')]
+  });
+  assert.equal(state.status, 'escalated');
+  assert.equal(state.terminalReason, 'audit-context-insufficient');
+  assert.equal(state.escalation.reason, 'audit-context-insufficient');
+  assert.deepEqual(state.escalation.findingIds, ['DV2-AUDIT-CONTEXT-INSUFFICIENT']);
+  assert.equal(state.implementationAttempts, 1);
+  assert.equal(state.auditRemediationAttempts, 0);
+  assert.throws(() => remediationInputsFor(state), /no remediation input/);
+});
+
 test('rejected audit without actionable blocking findings fails closed', () => {
   const state = startAudit(ciSuccess(publish(begin('critical'))));
   assert.throws(() => recordAuditResult(state, { candidateSha: A, decision: 'rejected', evidenceRef: 'audit:1', findings: [] }), /release-blocking findings/);

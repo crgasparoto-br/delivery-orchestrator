@@ -18,9 +18,16 @@ import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
 import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
 import { parseTrustedJsonEnvelope, selectTrustedMarkerComment, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
+import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-policy.mjs';
+import {
+  createControllerDeliveryMetrics,
+  normalizeControllerObservability,
+  recordControllerProviderObservation,
+  runDurationMs
+} from '../src/v2/controller-observability.mjs';
+import { downloadGhAwUsageArtifact } from '../src/v2/gh-aw-usage-artifact.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
-const AUDIT_MARKER = '<!-- delivery-v2-independent-audit -->';
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
 const POLL_MS = Number(process.env.DELIVERY_V2_POLL_MS || 10000);
 const MAX_STAGE_MS = Number(process.env.DELIVERY_V2_STAGE_TIMEOUT_MS || 75 * 60 * 1000);
@@ -72,8 +79,7 @@ async function loadControllerTarget(repository, baseBranch) {
   const config = JSON.parse(await readFile(new URL('../config/delivery-v2-controller-targets.json', import.meta.url), 'utf8'));
   const target = config.targets?.[repository];
   if (!target) throw new Error(`repository is not configured for Delivery V2 controller: ${repository}`);
-  if (target.baseBranch !== baseBranch) throw new Error(`base branch ${baseBranch} does not match configured ${target.baseBranch}`);
-  return Object.freeze(target);
+  return normalizeControllerTargetPolicy(repository, target, { baseBranch });
 }
 
 async function loadRepositoryRiskPolicy(repository) {
@@ -324,11 +330,13 @@ export async function main() {
   let classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
   let latestCheck = null;
   let latestSourceRun = null;
-  let providerCalls = 0;
 
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
   const stateEnvelope = parseStateComment(await listComments(targetRepository, resumePr, targetReadToken), trustedLogin);
   if (!stateEnvelope) throw new Error('managed PR is missing authoritative Delivery V2 persistent state');
+  let observability = stateEnvelope.controller?.observability
+    ? normalizeControllerObservability(stateEnvelope.controller.observability)
+    : null;
   const priorControllerRunId = positiveInteger(stateEnvelope.controller?.controllerRunId, 'persisted controllerRunId');
   const priorControllerRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${priorControllerRunId}`, actionsToken);
   validateControllerRunProvenance(priorControllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
@@ -370,7 +378,7 @@ export async function main() {
   });
 
   const persist = async (extra = {}) => {
-    controller = { ...controller, ...extra };
+    controller = { ...controller, ...(observability ? { observability } : {}), ...extra };
     return upsertStateComment({
       repository: targetRepository,
       prNumber: resumePr,
@@ -381,6 +389,17 @@ export async function main() {
       latestSourceRun,
       token: targetWriteToken,
       extra: controller
+    });
+  };
+
+  const recordWorkerUsage = async (run) => {
+    if (!observability) return;
+    const usage = await downloadGhAwUsageArtifact({ repository: orchestratorRepository, runId: run.id, token: actionsToken });
+    observability = recordControllerProviderObservation(observability, {
+      runId: run.id,
+      stage: 'implementation',
+      usage: usage.usage,
+      evidenceRef: usage.evidenceRef ?? run.html_url
     });
   };
 
@@ -401,6 +420,7 @@ export async function main() {
       if (!Number.isInteger(workerRunId) || workerRunId < 1) throw new Error('cannot safely resume an in-flight implementation without persisted worker identity');
       const run = await waitWorkflowRun(orchestratorRepository, workerRunId, actionsToken);
       if (run.conclusion !== 'success') throw new Error(`persisted remediation worker failed: ${run.html_url}`);
+      await recordWorkerUsage(run);
       const beforeSha = materialHeadSha;
       pullRequest = await waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken);
       materialHeadSha = String(pullRequest.head.sha).toLowerCase();
@@ -491,10 +511,10 @@ export async function main() {
         token: actionsToken,
         dispatchNonce: workerDispatchNonce
       });
-      providerCalls += 1;
       await persist({ nextAction: 'observe-remediation', workerRunId: worker.id, workerDispatchNonce });
       worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
       if (worker.conclusion !== 'success') throw new Error(`remediation worker failed: ${worker.html_url}`);
+      await recordWorkerUsage(worker);
       pullRequest = await waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken);
       materialHeadSha = String(pullRequest.head.sha).toLowerCase();
       changedPaths = await fetchChangedPaths(targetRepository, resumePr, targetReadToken);
@@ -548,13 +568,21 @@ export async function main() {
             prior_findings_json: JSON.stringify(controller.priorFindings ?? [])
           }
         });
-        providerCalls += 1;
         await persist({ nextAction: 'observe-audit', auditRunId: auditRun.id, auditDispatchNonce });
         auditRun = await waitWorkflowRun(orchestratorRepository, auditRun.id, actionsToken);
       }
       if (auditRun.conclusion !== 'success') throw new Error(`independent audit workflow failed: ${auditRun.html_url}`);
       const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
       const result = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: sourceRun.id, token: actionsToken });
+      if (observability) {
+        observability = recordControllerProviderObservation(observability, {
+          runId: auditRun.id,
+          stage: 'audit',
+          usage: result.modelUsage ?? {},
+          durationMs: runDurationMs(auditRun),
+          evidenceRef: auditRun.html_url
+        });
+      }
       state = applyOperationalEvent(state, { type: 'audit-result', result: { candidateSha: materialHeadSha, decision: result.decision, findings: result.findings, evidenceRef: auditRun.html_url } });
       const priorFindings = result.findings.map((finding) => ({ id: finding.id, candidateSha: finding.candidateSha, status: finding.blocksRelease ? 'open' : 'non-blocking' }));
       await persist({ nextAction: state.status, auditRunId: auditRun.id, auditDispatchNonce: controller.auditDispatchNonce, auditRequestFingerprint: result.requestFingerprint, priorFindings });
@@ -576,6 +604,15 @@ export async function main() {
       const auditRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${auditRunId}`, actionsToken);
       const auditResult = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });
       if (auditResult.decision !== 'approved') throw new Error('release gate requires approved authoritative audit');
+      if (observability) {
+        observability = recordControllerProviderObservation(observability, {
+          runId: auditRun.id,
+          stage: 'audit',
+          usage: auditResult.modelUsage ?? {},
+          durationMs: runDurationMs(auditRun),
+          evidenceRef: auditRun.html_url
+        });
+      }
       audit = { candidateSha: materialHeadSha, decision: 'approved', mode: state.auditMode, requestFingerprint: auditResult.requestFingerprint, evidenceRef: auditRun.html_url };
     }
     const finalPullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
@@ -596,6 +633,22 @@ export async function main() {
   }
 
   pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
+  const metrics = observability ? createControllerDeliveryMetrics({
+    observability,
+    repository: targetRepository,
+    issueNumber,
+    pullRequestNumber: resumePr,
+    materialHeadSha: String(pullRequest.head.sha).toLowerCase(),
+    risk: state.riskProfile,
+    provider,
+    classifier: { version: classifier.version, fingerprint: classifier.fingerprint },
+    attempts: { implementation: state.implementationAttempts, audit: state.auditAttempts },
+    finalCiRun: latestSourceRun,
+    change: { files: pullRequest.changed_files ?? 0, additions: pullRequest.additions ?? 0, deletions: pullRequest.deletions ?? 0 },
+    terminalReason: state.status === 'ready-for-human-merge' ? 'ready-for-human-merge' : (state.terminalReason ?? state.status),
+    escalated: state.status === 'escalated',
+    evidenceRefs: [latestCheck?.details_url, latestSourceRun?.html_url].filter(Boolean)
+  }) : null;
   const payload = {
     schemaVersion: 1,
     status: state.status,
@@ -603,7 +656,10 @@ export async function main() {
     issueNumber,
     pullRequestNumber: resumePr,
     materialHeadSha: String(pullRequest.head.sha).toLowerCase(),
-    providerCalls,
+    risk: state.riskProfile,
+    providerCalls: metrics?.providerCalls ?? null,
+    metricsStatus: metrics ? 'complete' : 'legacy-state-missing-observability',
+    metrics,
     resumed: true,
     attempts: {
       implementation: state.implementationAttempts,

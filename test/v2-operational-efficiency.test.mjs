@@ -50,12 +50,28 @@ test('trusted platform CI performs one strict completeness scan, one target scan
   assert.match(pkg.scripts['verify:v2:targets'], /verify-delivery-v2-targets\.mjs/);
 });
 
-test('controller target policy binds each rollout repository to one stable required check and trusted workflow', async () => {
+test('controller target policy binds each rollout repository to one stable required check, trusted workflow and explicit merge enforcement truth', async () => {
   const config = JSON.parse(await readFile('config/delivery-v2-controller-targets.json', 'utf8'));
+  for (const [repository, target] of Object.entries(config.targets)) {
+    assert.equal(target.finalStatusName, 'Delivery V2 release', repository);
+    assert.equal(target.mergePolicy.requiredFinalStatusName, target.finalStatusName, repository);
+    assert.equal(target.mergePolicy.enforcementMode, 'controller-status-only', repository);
+    assert.equal(target.mergePolicy.nativeRequiredStatusEnforced, false, repository);
+    assert.match(target.mergePolicy.limitation, /Native required-status enforcement is not configured/, repository);
+  }
   assert.equal(config.targets['crgasparoto-br/controle_calorias'].requiredStatusName, 'Agent-first gate');
-  assert.equal(config.targets['crgasparoto-br/controle_calorias'].finalStatusName, 'Delivery V2 release');
   assert.equal(config.targets['crgasparoto-br/controle_calorias'].ciWorkflowPath, '.github/workflows/agent-check.yml');
   assert.equal(config.targets['crgasparoto-br/training-system'].requiredStatusName, 'Validate repository');
-  assert.equal(config.targets['crgasparoto-br/training-system'].finalStatusName, 'Delivery V2 release');
   assert.equal(config.targets['crgasparoto-br/training-system'].ciWorkflowPath, '.github/workflows/validate-pr.yml');
+});
+
+test('initial and resumed controllers share persistent observability and the same metrics builder', async () => {
+  const initial = await readFile('scripts/run-delivery-v2-controller.mjs', 'utf8');
+  const resume = await readFile('scripts/resume-delivery-v2-controller.mjs', 'utf8');
+  for (const body of [initial, resume]) {
+    assert.match(body, /createControllerDeliveryMetrics/);
+    assert.match(body, /recordControllerProviderObservation/);
+    assert.match(body, /observability/);
+  }
+  assert.match(resume, /metricsStatus: metrics \? 'complete' : 'legacy-state-missing-observability'/);
 });

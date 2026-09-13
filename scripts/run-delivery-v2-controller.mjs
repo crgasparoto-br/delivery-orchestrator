@@ -15,14 +15,18 @@ import {
   operationalRemediationInput,
   persistentStateFromOperational
 } from '../src/v2/operational-controller.mjs';
-import { createDeliveryMetrics } from '../src/v2/metrics.mjs';
-import { mergeGhAwUsage, normalizeGhAwUsage, parseGhAwUsageJsonl } from '../src/v2/usage-telemetry.mjs';
+import { normalizeGhAwUsage, parseGhAwUsageJsonl } from '../src/v2/usage-telemetry.mjs';
 import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
 import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
+import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-policy.mjs';
+import {
+  createControllerDeliveryMetrics,
+  createControllerObservability,
+  recordControllerProviderObservation
+} from '../src/v2/controller-observability.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
-const AUDIT_MARKER = '<!-- delivery-v2-independent-audit -->';
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
 const POLL_MS = Number(process.env.DELIVERY_V2_POLL_MS || 10000);
@@ -52,11 +56,6 @@ async function api(url, token, options = {}) {
   const text = await response.text();
   return text ? JSON.parse(text) : null;
 }
-async function apiText(url, token, accept) {
-  const response = await fetch(url, { headers: headers(token, accept) });
-  if (!response.ok) throw new Error(`GitHub API ${response.status} GET ${url}: ${await response.text()}`);
-  return response.text();
-}
 async function postJson(url, token, body) {
   return api(url, token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 }
@@ -64,14 +63,12 @@ async function patchJson(url, token, body) {
   return api(url, token, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 }
 function encodeRepoPath(value) { return value.split('/').map(encodeURIComponent).join('/'); }
-function workflowRef(url) { return `github:${url}`; }
 
 async function loadControllerTarget(repository, baseBranch) {
   const config = JSON.parse(await readFile(new URL('../config/delivery-v2-controller-targets.json', import.meta.url), 'utf8'));
   const target = config.targets?.[repository];
   if (!target) throw new Error(`repository is not configured for Delivery V2 controller: ${repository}`);
-  if (target.baseBranch !== baseBranch) throw new Error(`base branch ${baseBranch} does not match configured ${target.baseBranch}`);
-  return Object.freeze(target);
+  return normalizeControllerTargetPolicy(repository, target, { baseBranch });
 }
 
 async function loadRepositoryRiskPolicy(repository) {
@@ -294,13 +291,6 @@ function runDuration(run) {
   return Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : 0;
 }
 
-function ciQueueDuration(run) {
-  if (!run) return 0;
-  const created = Date.parse(run.created_at);
-  const started = Date.parse(run.run_started_at ?? run.created_at);
-  return Number.isFinite(created) && Number.isFinite(started) ? Math.max(0, started - created) : 0;
-}
-
 function checkEvidence(check, sourceRun, sha) {
   return [{
     name: check.name,
@@ -367,9 +357,6 @@ export async function main() {
 
   const workerRuns = [];
   const auditRuns = [];
-  const usageObservations = [];
-  const workerUsageObservations = [];
-  const auditUsageObservations = [];
   const evidenceRefs = [];
   let initialDispatchAt = Date.now();
   let worker;
@@ -382,8 +369,12 @@ export async function main() {
   worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
   workerRuns.push(worker);
   const workerUsage = await downloadWorkerUsage(orchestratorRepository, worker.id, actionsToken);
-  usageObservations.push(workerUsage.usage);
-  workerUsageObservations.push(workerUsage.usage);
+  let observability = recordControllerProviderObservation(createControllerObservability({ startedAtMs: startedAt }), {
+    runId: worker.id,
+    stage: 'implementation',
+    usage: workerUsage.usage,
+    evidenceRef: workerUsage.evidenceRef ?? worker.html_url
+  });
   if (workerUsage.evidenceRef) evidenceRefs.push(workerUsage.evidenceRef);
   if (worker.conclusion !== 'success') throw new Error(`initial implementation worker failed: ${worker.html_url}`);
 
@@ -399,7 +390,7 @@ export async function main() {
   let latestSourceRun = null;
   let lastAudit = null;
 
-  let controller = { controllerRunId, controllerRepository: orchestratorRepository, controllerRef: orchestratorRef, controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml' };
+  let controller = { controllerRunId, controllerRepository: orchestratorRepository, controllerRef: orchestratorRef, controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml', observability };
   const identity = () => ({
     issueNumber,
     pullRequestNumber: pullRequest.number,
@@ -409,7 +400,7 @@ export async function main() {
     provider
   });
   const persist = async (extra = {}) => {
-    controller = { ...controller, ...extra };
+    controller = { ...controller, observability, ...extra };
     return upsertStateComment({ repository: targetRepository, prNumber: pullRequest.number, state, identity: identity(), classifier, workflowChecks: latestCheck && latestSourceRun ? checkEvidence(latestCheck, latestSourceRun, materialHeadSha) : [], evidenceRefs, token: targetWriteToken, extra: controller });
   };
 
@@ -481,8 +472,12 @@ export async function main() {
       worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
       workerRuns.push(worker);
       const usage = await downloadWorkerUsage(orchestratorRepository, worker.id, actionsToken);
-      usageObservations.push(usage.usage);
-      workerUsageObservations.push(usage.usage);
+      observability = recordControllerProviderObservation(observability, {
+        runId: worker.id,
+        stage: 'implementation',
+        usage: usage.usage,
+        evidenceRef: usage.evidenceRef ?? worker.html_url
+      });
       if (usage.evidenceRef) evidenceRefs.push(usage.evidenceRef);
       if (worker.conclusion !== 'success') throw new Error(`CI remediation worker failed: ${worker.html_url}`);
       pullRequest = await waitHeadChange(targetRepository, pullRequest.number, beforeSha, targetReadToken);
@@ -541,10 +536,14 @@ export async function main() {
       auditRuns.push(auditRun);
       if (auditRun.conclusion !== 'success') throw new Error(`independent audit workflow failed: ${auditRun.html_url}`);
       lastAudit = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: pullRequest.number, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });
-      if (lastAudit.modelUsage) {
-        const auditUsage = normalizeGhAwUsage(lastAudit.modelUsage);
-        usageObservations.push(auditUsage);
-        auditUsageObservations.push(auditUsage);
+      if (lastAudit.providerCalls !== 0) {
+        observability = recordControllerProviderObservation(observability, {
+          runId: auditRun.id,
+          stage: 'audit',
+          usage: lastAudit.modelUsage ?? {},
+          durationMs: runDuration(auditRun),
+          evidenceRef: auditRun.html_url
+        });
       }
       evidenceRefs.push(auditRun.html_url);
       state = applyOperationalEvent(state, {
@@ -577,8 +576,12 @@ export async function main() {
         worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
         workerRuns.push(worker);
         const usage = await downloadWorkerUsage(orchestratorRepository, worker.id, actionsToken);
-        usageObservations.push(usage.usage);
-        workerUsageObservations.push(usage.usage);
+        observability = recordControllerProviderObservation(observability, {
+          runId: worker.id,
+          stage: 'implementation',
+          usage: usage.usage,
+          evidenceRef: usage.evidenceRef ?? worker.html_url
+        });
         if (usage.evidenceRef) evidenceRefs.push(usage.evidenceRef);
         if (worker.conclusion !== 'success') throw new Error(`audit remediation worker failed: ${worker.html_url}`);
         pullRequest = await waitHeadChange(targetRepository, pullRequest.number, beforeSha, targetReadToken);
@@ -644,10 +647,8 @@ export async function main() {
   }
 
   pullRequest = await fetchPullRequest(targetRepository, pullRequest.number, targetReadToken);
-  const usage = mergeGhAwUsage(usageObservations);
-  const finalCiRun = latestSourceRun;
-  const finalAuditMs = auditRuns.reduce((sum, run) => sum + runDuration(run), 0);
-  const metrics = createDeliveryMetrics({
+  const metrics = createControllerDeliveryMetrics({
+    observability,
     repository: targetRepository,
     issueNumber,
     pullRequestNumber: pullRequest.number,
@@ -655,24 +656,12 @@ export async function main() {
     risk: state.riskProfile,
     provider,
     classifier: { version: classifier.version, fingerprint: classifier.fingerprint },
-    providerCalls: workerRuns.length + auditRuns.length,
     attempts: { implementation: state.implementationAttempts, audit: state.auditAttempts },
-    aiUsage: usage,
-    aiUsageByStage: {
-      implementation: mergeGhAwUsage(workerUsageObservations),
-      audit: mergeGhAwUsage(auditUsageObservations)
-    },
-    providerCost: { available: false, amount: null, currency: null },
-    durationsMs: {
-      ciQueue: ciQueueDuration(finalCiRun),
-      ciExecution: runDuration(finalCiRun),
-      audit: finalAuditMs,
-      endToEnd: Date.now() - startedAt
-    },
-    terminalReason: state.status === 'ready-for-human-merge' ? 'ready-for-human-merge' : (state.terminalReason ?? state.status),
+    finalCiRun: latestSourceRun,
     change: { files: pullRequest.changed_files ?? 0, additions: pullRequest.additions ?? 0, deletions: pullRequest.deletions ?? 0 },
+    terminalReason: state.status === 'ready-for-human-merge' ? 'ready-for-human-merge' : (state.terminalReason ?? state.status),
     escalated: state.status === 'escalated',
-    evidenceRefs: [...new Set(evidenceRefs.filter(Boolean))]
+    evidenceRefs
   });
 
   const payload = {

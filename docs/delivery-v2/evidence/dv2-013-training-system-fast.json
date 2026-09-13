@@ -36,14 +36,8 @@
     "baseRef": "develop",
     "baseSha": "0fba4d2870e087775433b844e22f04c0daa84bcf",
     "materialHeadSha": "ed59660e0a5cbe8b202491b105e36614770dfac6",
-    "changedFiles": [
-      "apps/web/src/components/AppErrorBoundary.tsx"
-    ],
-    "diff": {
-      "files": 1,
-      "additions": 10,
-      "deletions": 3
-    },
+    "changedFiles": ["apps/web/src/components/AppErrorBoundary.tsx"],
+    "diff": { "files": 1, "additions": 10, "deletions": 3 },
     "changeIntent": "Low-risk accessibility semantics for the global render-error fallback: role=alert with explicit title/description relationships; no business logic, auth, API, database, navigation or reload behavior changes.",
     "classification": {
       "requestedRisk": "auto",
@@ -65,23 +59,14 @@
       "completedAt": "2026-09-12T12:17:29Z",
       "endToEndSeconds": 164,
       "jobs": {
-        "risk": {
-          "jobId": 103551891296,
-          "conclusion": "success",
-          "startedAt": "2026-09-12T12:14:48Z",
-          "completedAt": "2026-09-12T12:14:53Z",
-          "executionSeconds": 5
-        },
+        "risk": { "jobId": 103551891296, "conclusion": "success", "startedAt": "2026-09-12T12:14:48Z", "completedAt": "2026-09-12T12:14:53Z", "executionSeconds": 5 },
         "mergePreview": {
           "jobId": 103551907872,
           "conclusion": "success",
           "startedAt": "2026-09-12T12:14:56Z",
           "completedAt": "2026-09-12T12:15:30Z",
           "executionSeconds": 34,
-          "skippedSteps": [
-            "Run pnpm --filter @corrida/api exec prisma generate",
-            "STANDARD or CRITICAL type compatibility"
-          ],
+          "skippedSteps": ["Run pnpm --filter @corrida/api exec prisma generate", "STANDARD or CRITICAL type compatibility"],
           "executedGate": "FAST web type compatibility"
         },
         "fastValidation": {
@@ -102,22 +87,11 @@
             "Architecture checks",
             "Run actions/upload-artifact@v4"
           ],
-          "skippedSteps": [
-            "Documentation checks"
-          ]
+          "skippedSteps": ["Documentation checks"]
         },
-        "standardValidation": {
-          "jobId": 103551994059,
-          "conclusion": "skipped"
-        },
-        "criticalValidation": {
-          "jobId": 103551993882,
-          "conclusion": "skipped"
-        },
-        "aggregate": {
-          "jobId": 103552234733,
-          "conclusion": "success"
-        }
+        "standardValidation": { "jobId": 103551994059, "conclusion": "skipped" },
+        "criticalValidation": { "jobId": 103551993882, "conclusion": "skipped" },
+        "aggregate": { "jobId": 103552234733, "conclusion": "success" }
       }
     },
     "exactHeadArtifact": {
@@ -149,13 +123,14 @@
     },
     "humanDisposition": {
       "mergePerformedByController": false,
-      "reason": "Automatic merge authorization is scoped to crgasparoto-br/delivery-orchestrator, not training-system.",
+      "reason": "The benchmark change is disposable validation material. DV2-013 rollout is the adaptive routing merged by PR #435 and active on develop; the benchmark PR does not need to be merged solely to certify that rollout.",
       "prCommentId": 5645838765
     }
   },
   "statusDecision": {
-    "status": "validated",
-    "rolledOut": false,
-    "reason": "The generated classifier migration is already merged on develop and a real low-risk UI PR independently proved the FAST route, exact-head artifact, focused gates, skipped STANDARD/CRITICAL jobs and benchmark timing. The pilot PR remains unmerged, so rolled-out is intentionally not claimed."
+    "status": "rolled-out",
+    "rolledOut": true,
+    "rolloutBoundary": "Generated adaptive routing from PR #435 is merged and active on training-system/develop. PR #436 is immutable benchmark evidence for the real FAST path and remains intentionally unmerged.",
+    "reason": "The production routing is deployed on develop and the required real FAST benchmark is recorded with exact-head evidence, so the rollout contract is satisfied without merging the disposable benchmark change."
   }
 }

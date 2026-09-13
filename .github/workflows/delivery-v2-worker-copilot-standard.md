@@ -85,7 +85,7 @@ Work only on **${{ github.event.inputs.target_repository }} issue #${{ github.ev
 
 Risk profile: **standard**. AI provider: **copilot**.
 
-Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts unless the issue explicitly targets them or a deterministic check requires them. Prefer targeted search in issue-relevant source/test/docs paths; do not inventory the entire repository before editing.
+Context hygiene: do not inventory retired or generated delivery snapshots, `.generated/**`, compiled `*.lock.yml`, or unrelated repository history unless the issue explicitly targets them or a deterministic check requires them. Prefer targeted search in issue-relevant source/test/docs paths; do not inventory the entire repository before editing.
 
 The deterministic controller owns orchestration, risk, budgets, CI/audit state and retries. You are only the bounded material worker for this attempt.
 

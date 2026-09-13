@@ -8,7 +8,13 @@
       "ciWorkflowPath": ".github/workflows/agent-check.yml",
       "mergePreviewJobName": "Merge preview integration",
       "standardAuditRequired": true,
-      "finalStatusName": "Delivery V2 release"
+      "finalStatusName": "Delivery V2 release",
+      "mergePolicy": {
+        "requiredFinalStatusName": "Delivery V2 release",
+        "enforcementMode": "controller-status-only",
+        "nativeRequiredStatusEnforced": false,
+        "limitation": "Native required-status enforcement is not configured for this private repository; the controller publishes the exact-head Delivery V2 release status and manual merge remains an external governance boundary."
+      }
     },
     "crgasparoto-br/training-system": {
       "baseBranch": "develop",
@@ -17,7 +23,13 @@
       "ciWorkflowPath": ".github/workflows/validate-pr.yml",
       "mergePreviewJobName": "Merge preview compatibility",
       "standardAuditRequired": true,
-      "finalStatusName": "Delivery V2 release"
+      "finalStatusName": "Delivery V2 release",
+      "mergePolicy": {
+        "requiredFinalStatusName": "Delivery V2 release",
+        "enforcementMode": "controller-status-only",
+        "nativeRequiredStatusEnforced": false,
+        "limitation": "Native required-status enforcement is not configured for this private repository; the controller publishes the exact-head Delivery V2 release status and manual merge remains an external governance boundary."
+      }
     },
     "crgasparoto-br/delivery-orchestrator": {
       "baseBranch": "main",
@@ -26,7 +38,13 @@
       "ciWorkflowPath": ".github/workflows/delivery-v2-ci.yml",
       "mergePreviewJobName": "V2 platform checks",
       "standardAuditRequired": true,
-      "finalStatusName": "Delivery V2 release"
+      "finalStatusName": "Delivery V2 release",
+      "mergePolicy": {
+        "requiredFinalStatusName": "Delivery V2 release",
+        "enforcementMode": "controller-status-only",
+        "nativeRequiredStatusEnforced": false,
+        "limitation": "Native required-status enforcement is not configured for this private repository; the controller publishes the exact-head Delivery V2 release status and manual merge remains an external governance boundary."
+      }
     }
   }
 }

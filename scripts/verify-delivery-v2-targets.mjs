@@ -2,6 +2,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
+import { validateControllerTargetPolicies } from '../src/v2/controller-target-policy.mjs';
 
 const rootDir = process.cwd();
 const configDir = resolve(rootDir, 'config/delivery-v2-targets');
@@ -21,6 +22,18 @@ for (const name of files) {
   } catch (error) {
     errors.push(`${name}: ${error.message}`);
   }
+}
+
+try {
+  const controllerConfig = JSON.parse(readFileSync(resolve(rootDir, 'config/delivery-v2-controller-targets.json'), 'utf8'));
+  const controllerTargets = validateControllerTargetPolicies(controllerConfig);
+  for (const repository of Object.keys(controllerTargets)) {
+    if (!seenRepositories.has(repository) && repository !== 'crgasparoto-br/delivery-orchestrator') {
+      errors.push(`controller target ${repository} has no classifier target policy`);
+    }
+  }
+} catch (error) {
+  errors.push(`delivery-v2-controller-targets.json: ${error.message}`);
 }
 
 if (files.length === 0) errors.push('no Delivery V2 target configs found');

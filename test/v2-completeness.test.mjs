@@ -18,7 +18,7 @@ test('canonical Delivery V2 manifest is structurally valid and complete', () => 
   assert.deepEqual(result.incompleteRequired, []);
 });
 
-test('strict completion mode passes when every required roadmap item is terminal', () => {
+test('strict completion mode passes when every required roadmap item meets its minimum completion status', () => {
   const result = runDeliveryV2Verification({
     rootDir: process.cwd(),
     requireComplete: true
@@ -27,6 +27,36 @@ test('strict completion mode passes when every required roadmap item is terminal
   assert.equal(result.ok, true, result.errors.join('\n'));
   assert.equal(result.complete, true);
   assert.deepEqual(result.incompleteRequired, []);
+});
+
+test('rolled-out minimum is not satisfied by a merely validated requirement', () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'delivery-v2-minimum-'));
+  mkdirSync(join(rootDir, 'src'), { recursive: true });
+  writeFileSync(join(rootDir, 'src', 'implemented.mjs'), 'export default true;\n');
+  const manifest = {
+    schemaVersion: 1,
+    contract: 'delivery-v2',
+    umbrellaIssue: 27,
+    completionPolicy: {
+      terminalStatuses: ['validated', 'rolled-out'],
+      allRequiredRequirementsMustBeTerminal: true,
+      v1RetirementRequirement: 'DV2-001'
+    },
+    requirements: [{
+      id: 'DV2-001',
+      status: 'validated',
+      minimumCompletionStatus: 'rolled-out',
+      requiredForV2Default: true,
+      trackingIssue: 27,
+      implementationRefs: ['file:src/implemented.mjs'],
+      validationRefs: ['github:test#1'],
+      rolloutRefs: []
+    }]
+  };
+  const result = validateDeliveryV2Contract({ manifest, rootDir, masterSpecText: 'DV2-001', roadmapText: 'DV2-001' });
+  assert.equal(result.ok, true, result.errors.join('\n'));
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.incompleteRequired, ['DV2-001']);
 });
 
 test('validator rejects duplicate IDs and unknown documentation IDs', () => {

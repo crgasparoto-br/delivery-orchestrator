@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 export const DEFAULT_MANIFEST = 'config/delivery-v2-requirements.json';
 export const ALLOWED_STATUSES = new Set(['planned', 'implemented', 'validated', 'rolled-out']);
+export const COMPLETION_STATUSES = new Set(['validated', 'rolled-out']);
+const STATUS_RANK = Object.freeze({ planned: 0, implemented: 1, validated: 2, 'rolled-out': 3 });
 
 function extractRequirementIds(text) {
   return new Set(text.match(/\bDV2-\d{3}\b/g) ?? []);
@@ -23,6 +25,10 @@ function validateLocalRefs(refs, rootDir, requirementId, field, errors) {
       errors.push(`${requirementId}.${field}: missing local evidence ${localPath}`);
     }
   }
+}
+
+function minimumCompletionStatus(item) {
+  return item.minimumCompletionStatus ?? 'validated';
 }
 
 export function validateDeliveryV2Contract({ manifest, rootDir, masterSpecText, roadmapText }) {
@@ -49,6 +55,10 @@ export function validateDeliveryV2Contract({ manifest, rootDir, masterSpecText, 
 
     if (!ALLOWED_STATUSES.has(item.status)) {
       errors.push(`${item.id}: unsupported status ${item.status}`);
+    }
+    const minimum = minimumCompletionStatus(item);
+    if (!COMPLETION_STATUSES.has(minimum)) {
+      errors.push(`${item.id}: unsupported minimumCompletionStatus ${minimum}`);
     }
     if (typeof item.requiredForV2Default !== 'boolean') {
       errors.push(`${item.id}: requiredForV2Default must be boolean`);
@@ -104,7 +114,11 @@ export function validateDeliveryV2Contract({ manifest, rootDir, masterSpecText, 
 
   const terminalStatuses = new Set(manifest?.completionPolicy?.terminalStatuses ?? []);
   const incompleteRequired = requirements
-    .filter((item) => item.requiredForV2Default && !terminalStatuses.has(item.status))
+    .filter((item) => {
+      if (!item.requiredForV2Default) return false;
+      const minimum = minimumCompletionStatus(item);
+      return !terminalStatuses.has(item.status) || (STATUS_RANK[item.status] ?? -1) < (STATUS_RANK[minimum] ?? Number.POSITIVE_INFINITY);
+    })
     .map((item) => item.id);
 
   if (!manifest?.completionPolicy?.allRequiredRequirementsMustBeTerminal) {

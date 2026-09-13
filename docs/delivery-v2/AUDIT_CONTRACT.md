@@ -25,7 +25,9 @@
 - CRITICAL requires independent semantic audit and cannot be disabled by a STANDARD policy switch.
 - The reviewer receives candidate code/evidence and the contract, not hidden implementer reasoning.
 - Candidate context is bounded and exact-SHA: immutable diff plus prioritized full changed text files and resolvable one-hop direct relative dependencies, under deterministic file/byte/probe ceilings.
-- Historical/generated delivery artifacts and unrelated repository inventory are excluded from normal context. If a bounded omission prevents a supported blocking conclusion, review fails closed as context-insufficient rather than inventing evidence.
+- Issue and PR inputs are bounded projections rather than raw GitHub API objects. STANDARD allows at most 24 KiB issue body, 16 KiB PR body and 128 KiB total model bundle; CRITICAL allows 48 KiB, 32 KiB and 256 KiB.
+- If issue/PR truncation or the total bundle limit would omit material contract context, the runtime must emit a blocking `audit-context-insufficient` result **before model invocation**, with zero audit-provider calls.
+- Historical/generated delivery snapshots and unrelated repository inventory are excluded from normal context. If a bounded diff/material omission prevents a supported blocking conclusion, review fails closed as context-insufficient rather than inventing evidence.
 - Every finding is candidate-SHA-bound and machine-usable: stable ID, severity, violated contract/requisite, affected surface, concrete failure mode, discriminating/reproducible evidence, remediation mode and release-blocking flag.
 - Approval from another material SHA is never reusable.
 
@@ -41,9 +43,11 @@
 
 `ready-for-human-merge` requires current remote head == evaluated material SHA, applicable classifier/fingerprint, required CI terminal green, required independent audit approved for the same SHA, no unresolved blocking finding, no budget/external blocker and no later material commit.
 
+The final `Delivery V2 release` status is release evidence. Whether GitHub natively requires that status for merge is a separate target-policy fact and must not be inferred from a green controller result.
+
 ## Security and context hygiene
 
 - Agent execution receives read capability; privileged mutations use constrained safe outputs.
 - Protected governance paths and repository/path allowlists remain enforced.
 - Secrets are never echoed and network/tool access is never broadened automatically.
-- Historical `.audit/**`, `skills/catalog/**`, generated locks and unrelated repository inventory are not normal reviewer context.
+- Retired/generated delivery snapshots, generated locks and unrelated repository inventory are not normal reviewer context.
