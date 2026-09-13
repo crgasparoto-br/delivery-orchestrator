@@ -107,6 +107,15 @@ jobs:
             echo "drift=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Emit compiled worker drift for deterministic remediation
+        if: steps.worker-identity.outputs.changed == 'true' && steps.compiled-workers.outputs.drift == 'true'
+        shell: bash
+        run: |
+          archive="${RUNNER_TEMP}/delivery-v2-compiled-workers.tgz"
+          tar -czf "$archive" .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
+          echo "DV2_LOCK_ARCHIVE_SHA256=$(sha256sum "$archive" | cut -d' ' -f1)"
+          base64 -w 60000 "$archive" | sed 's/^/DV2_LOCK_ARCHIVE_CHUNK:/'
+
       - name: Publish compiler-owned worker locks for this remediation run
         if: steps.worker-identity.outputs.changed == 'true' && steps.compiled-workers.outputs.drift == 'true'
         shell: bash
