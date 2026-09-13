@@ -98,16 +98,14 @@ jobs:
             echo "drift=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload compiled worker drift for deterministic remediation
+      - name: Emit compiled worker drift for deterministic remediation
         if: steps.compiled-workers.outputs.drift == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: delivery-v2-compiled-workers-${{ github.run_id }}
-          path: |
-            .github/workflows/delivery-v2-worker-*.lock.yml
-            .github/aw/actions-lock.json
-          if-no-files-found: error
-          retention-days: 1
+        shell: bash
+        run: |
+          archive="${RUNNER_TEMP}/delivery-v2-compiled-workers.tgz"
+          tar -czf "$archive" .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
+          echo "DV2_LOCK_ARCHIVE_SHA256=$(sha256sum "$archive" | cut -d' ' -f1)"
+          base64 -w 60000 "$archive" | sed 's/^/DV2_LOCK_ARCHIVE_CHUNK:/'
 
       - name: Verify compiled gh-aw workers
         shell: bash
