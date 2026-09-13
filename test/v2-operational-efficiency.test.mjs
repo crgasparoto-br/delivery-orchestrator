@@ -7,7 +7,7 @@ test('normal dispatch owns initial and resumed controller paths through one idem
   assert.match(body, /node scripts\/guard-delivery-v2-reentry\.mjs/);
   assert.match(body, /node scripts\/reserve-delivery-v2-initial-attempt\.mjs/);
   assert.match(body, /node scripts\/run-delivery-v2-controller\.mjs/);
-  assert.doesNotMatch(body, /node scripts\/resume-delivery-v2-controller\.mjs/);
+  assert.match(body, /node scripts\/resume-delivery-v2-controller\.mjs/);
   assert.match(body, /resume_pr == ''/);
   assert.match(body, /DELIVERY_V2_RESUME_PR: \$\{\{ steps\.reentry\.outputs\.resume_pr \}\}/);
   assert.match(body, /DELIVERY_V2_RECOVER_WORKER_RUN_ID:/);
