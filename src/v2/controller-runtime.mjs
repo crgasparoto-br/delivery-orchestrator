@@ -211,7 +211,7 @@ export function releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, b
   });
 }
 
-export function mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs = [], requiredJobName } = {}) {
+export function mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs = [], requiredJobName, jobLogById = {} } = {}) {
   const identity = releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, baseSha });
   if (!identity.mergePreview.previewSha) return identity.mergePreview;
   if (!workflowRun || typeof workflowRun !== 'object' || Array.isArray(workflowRun)) throw new Error('merge-preview source workflow run is required');
@@ -230,6 +230,13 @@ export function mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha,
   if (matches.length > 1) throw new Error('ambiguous merge-preview validation jobs');
   const job = matches[0];
   if (!job) return identity.mergePreview;
+  const jobId = requiredPositiveInteger(job.id, 'merge-preview job.id');
+  const log = String(jobLogById?.[jobId] ?? '');
+  const previewSha = identity.mergePreview.previewSha;
+  const prMergeRef = `refs/pull/${prNumber}/merge`;
+  if (!log.includes(previewSha) || (!log.includes(prMergeRef) && !log.includes(`pull/${prNumber}/merge`))) {
+    return identity.mergePreview;
+  }
   return Object.freeze({
     ...identity.mergePreview,
     status: String(job.status ?? '').toLowerCase() || 'pending',
@@ -242,7 +249,17 @@ export async function collectMergePreviewEvidence({ repository, pullRequest, mat
   const repo = requiredString(repository, 'repository');
   const runId = requiredPositiveInteger(workflowRun?.id, 'workflowRun.id');
   const payload = await fetchJson(`https://api.github.com/repos/${repo}/actions/runs/${runId}/jobs?per_page=100`, token);
-  return mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs: payload.jobs ?? [], requiredJobName });
+  const jobs = payload.jobs ?? [];
+  const jobName = requiredString(requiredJobName, 'requiredJobName');
+  const matchingJobs = jobs.filter((job) => String(job?.name ?? '') === jobName);
+  if (matchingJobs.length > 1) throw new Error('ambiguous merge-preview validation jobs');
+  const jobLogById = {};
+  if (matchingJobs[0]) {
+    const jobId = requiredPositiveInteger(matchingJobs[0].id, 'merge-preview job.id');
+    const response = await fetch(`https://api.github.com/repos/${repo}/actions/jobs/${jobId}/logs`, { headers: githubHeaders(token) });
+    if (response.ok) jobLogById[jobId] = (await response.text()).slice(-300000);
+  }
+  return mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs, requiredJobName, jobLogById });
 }
 
 export async function publishReleaseStatus({ repository, sha, context, state, description, token, targetUrl = null } = {}) {

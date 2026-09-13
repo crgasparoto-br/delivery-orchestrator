@@ -34,6 +34,8 @@ on:
         required: false
         type: string
 
+run-name: "Delivery V2 controller ${{ inputs.target_repository }} #${{ inputs.target_issue }}"
+
 permissions:
   actions: write
   contents: read

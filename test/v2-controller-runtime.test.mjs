@@ -48,12 +48,14 @@ test('merge-preview release evidence requires a successful named job from the ex
   const previewSha = 'd'.repeat(40);
   const pr = { number: 64, html_url: 'https://github.com/owner/target/pull/64', head: { sha: SHA }, base: { sha: baseSha }, merge_commit_sha: previewSha };
   const run = { id: 10, event: 'pull_request', head_sha: SHA, html_url: 'run:10', pull_requests: [{ number: 64, head: { sha: SHA }, base: { sha: baseSha } }] };
-  const evidence = mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: run, jobs: [{ name: 'Merge preview compatibility', status: 'completed', conclusion: 'success', html_url: 'job:1' }], requiredJobName: 'Merge preview compatibility' });
+  const evidence = mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: run, jobs: [{ id: 1, name: 'Merge preview compatibility', status: 'completed', conclusion: 'success', html_url: 'job:1' }], requiredJobName: 'Merge preview compatibility', jobLogById: { 1: `checkout refs/pull/64/merge ${previewSha}` } });
   assert.equal(evidence.previewSha, previewSha);
   assert.equal(evidence.status, 'completed');
   assert.equal(evidence.conclusion, 'success');
   assert.equal(evidence.evidenceRef, 'job:1');
   const missing = mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: run, jobs: [], requiredJobName: 'Merge preview compatibility' });
   assert.equal(missing.status, 'pending');
+  const unbound = mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: run, jobs: [{ id: 2, name: 'Merge preview compatibility', status: 'completed', conclusion: 'success', html_url: 'job:2' }], requiredJobName: 'Merge preview compatibility', jobLogById: { 2: 'checkout unrelated-ref' } });
+  assert.equal(unbound.status, 'pending');
   assert.throws(() => mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: { ...run, head_sha: 'e'.repeat(40) }, jobs: [], requiredJobName: 'Merge preview compatibility' }), /head mismatch/);
 });

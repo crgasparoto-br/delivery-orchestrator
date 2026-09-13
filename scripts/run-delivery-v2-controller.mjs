@@ -18,6 +18,7 @@ import {
 import { createDeliveryMetrics } from '../src/v2/metrics.mjs';
 import { mergeGhAwUsage, normalizeGhAwUsage, parseGhAwUsageJsonl } from '../src/v2/usage-telemetry.mjs';
 import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
 import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
@@ -190,24 +191,25 @@ async function fetchCheckRuns(repository, sha, token) {
   return payload.check_runs ?? [];
 }
 
-async function waitRequiredCheck({ repository, prNumber, sha, requiredStatusName, token }) {
+async function sourceWorkflowRunForHead({ repository, sha, workflowName, token }) {
+  const payload = await api(`https://api.github.com/repos/${repository}/actions/runs?head_sha=${sha}&event=pull_request&per_page=100`, token);
+  return selectAuthoritativeSourceWorkflowRun(payload.workflow_runs ?? [], { workflowName, sha });
+}
+
+async function waitRequiredCheck({ repository, prNumber, sha, requiredStatusName, workflowName, token }) {
   const deadline = Date.now() + MAX_STAGE_MS;
   while (Date.now() < deadline) {
     const pr = await fetchPullRequest(repository, prNumber, token);
     const current = String(pr.head.sha).toLowerCase();
     if (current !== sha.toLowerCase()) return { kind: 'head-drift', pullRequest: pr };
-    const check = (await fetchCheckRuns(repository, sha, token)).find((item) => item.name === requiredStatusName);
-    if (check?.status === 'completed') return { kind: 'check', check, pullRequest: pr };
+    const sourceRun = await sourceWorkflowRunForHead({ repository, sha, workflowName, token });
+    if (!sourceRun) { await sleep(POLL_MS); continue; }
+    const check = selectCheckForWorkflowRun(await fetchCheckRuns(repository, sha, token), { requiredStatusName, workflowRunId: sourceRun.id });
+    if (sourceRun.status === 'completed' && check?.status === 'completed') return { kind: 'check', check, sourceRun, pullRequest: pr };
+    if (sourceRun.status === 'completed' && !check) throw new Error(`required check ${requiredStatusName} is missing for authoritative workflow run ${sourceRun.id}`);
     await sleep(POLL_MS);
   }
   throw new Error(`required check ${requiredStatusName} did not become terminal within bounded timeout`);
-}
-
-async function sourceWorkflowRunForHead({ repository, sha, workflowName, token }) {
-  const payload = await api(`https://api.github.com/repos/${repository}/actions/runs?head_sha=${sha}&event=pull_request&per_page=100`, token);
-  const matches = (payload.workflow_runs ?? []).filter((run) => run.name === workflowName && run.status === 'completed' && run.conclusion === 'success');
-  if (matches.length === 0) throw new Error(`no terminal green source workflow ${workflowName} found for ${sha}`);
-  return matches.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0];
 }
 
 async function upsertStateComment({ repository, prNumber, state, identity, classifier, workflowChecks, evidenceRefs, token, extra = {} }) {
@@ -225,7 +227,7 @@ async function postScopeRequired({ repository, issueNumber, token }) {
   await postJson(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`, token, { body });
 }
 
-async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef, targetPr = '', remediationContext = '', token, dispatchNonce = createDispatchNonce() }) {
+async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch, targetRef, targetPr = '', remediationContext = '', token, dispatchNonce = createDispatchNonce() }) {
   return dispatchWorkflowAndResolveRun({
     repository: orchestratorRepository,
     workflow: plan.implementation.workflow,
@@ -234,6 +236,7 @@ async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, t
     kind: 'worker',
     dispatchNonce,
     inputs: {
+      controller_run_id: String(controllerRunId),
       target_repository: targetRepository,
       target_issue: String(issueNumber),
       base_branch: baseBranch,
@@ -351,6 +354,8 @@ export async function main() {
   if (changedPaths.length === 0) changedPaths = await deterministicIssuePaths(targetRepository, baseBranch, issue.body, targetReadToken);
   let plan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk, changedPaths, repositoryPolicy });
   const dispatchDecision = createDispatchDecision(plan);
+  const initialWorkerIdentity = plan.implementation.workflow;
+  const initialWorkerProvider = plan.implementation.provider;
 
   if (!dispatchDecision.dispatchAllowed) {
     await postScopeRequired({ repository: targetRepository, issueNumber, token: targetWriteToken });
@@ -372,7 +377,7 @@ export async function main() {
     worker = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${recoverWorkerRunId}`, actionsToken);
     initialDispatchAt = Date.parse(worker.created_at ?? worker.run_started_at ?? new Date().toISOString());
   } else {
-    worker = await dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef: baseBranch, token: actionsToken, dispatchNonce: initialDispatchNonce });
+    worker = await dispatchWorker({ orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch, targetRef: baseBranch, token: actionsToken, dispatchNonce: initialDispatchNonce });
   }
   worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
   workerRuns.push(worker);
@@ -409,7 +414,7 @@ export async function main() {
   };
 
   await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
-  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider });
+  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce, materialWorkerRunId: worker.id, materialWorkerIdentity: initialWorkerIdentity, materialWorkerProvider: initialWorkerProvider });
 
   for (let cycle = 0; cycle < 8; cycle += 1) {
     const observed = await waitRequiredCheck({
@@ -417,6 +422,7 @@ export async function main() {
       prNumber: pullRequest.number,
       sha: materialHeadSha,
       requiredStatusName: targetPolicy.requiredStatusName,
+      workflowName: targetPolicy.ciWorkflowName,
       token: targetReadToken
     });
 
@@ -435,17 +441,18 @@ export async function main() {
     }
 
     latestCheck = observed.check;
-    latestSourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken }).catch(() => null);
-    if (latestCheck.conclusion !== 'success') {
+    latestSourceRun = observed.sourceRun;
+    const ciConclusion = latestCheck.conclusion === 'success' ? latestSourceRun.conclusion : latestCheck.conclusion;
+    if (ciConclusion !== 'success') {
       const failureEvidence = await collectCiFailureEvidence({ repository: targetRepository, check: latestCheck, token: targetReadToken });
-      const failureClass = ciFailureClassForEvidence({ conclusion: latestCheck.conclusion, failedJobs: failureEvidence.failedJobs });
+      const failureClass = ciFailureClassForEvidence({ conclusion: ciConclusion, failedJobs: failureEvidence.failedJobs });
       state = applyOperationalEvent(state, {
         type: 'ci-result',
         result: {
           candidateSha: materialHeadSha,
           conclusion: 'failure',
           failureClass,
-          cause: `${latestCheck.name}:${latestCheck.conclusion}:${failureClass}`,
+          cause: `${latestCheck.name}:${ciConclusion}:${failureClass}`,
           evidenceRef: failureEvidence.workflowUrl ?? latestCheck.details_url ?? `github:check:${latestCheck.id}`
         }
       });
@@ -463,7 +470,7 @@ export async function main() {
       await persist({ nextAction: 'dispatch-ci-remediation', workerRunId: null, workerDispatchNonce });
       const beforeSha = materialHeadSha;
       worker = await dispatchWorker({
-        orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch,
+        orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch,
         targetRef: beforeSha,
         targetPr: pullRequest.number,
         remediationContext: JSON.stringify(remediation),
@@ -523,9 +530,9 @@ export async function main() {
           source_workflow_name: targetPolicy.ciWorkflowName,
           source_workflow_path: targetPolicy.ciWorkflowPath,
           implementation_attempt: String(state.implementationAttempts),
-          implementer_provider: plan.implementation.provider,
-          implementer_worker_identity: plan.implementation.workflow,
-          implementer_run_id: String(worker.id),
+          implementer_provider: controller.materialWorkerProvider ?? initialWorkerProvider,
+          implementer_worker_identity: controller.materialWorkerIdentity ?? initialWorkerIdentity,
+          implementer_run_id: String(controller.materialWorkerRunId ?? worker.id),
           prior_findings_json: JSON.stringify(controller.priorFindings ?? [])
         }
       });
@@ -559,7 +566,7 @@ export async function main() {
         await persist({ nextAction: 'dispatch-audit-remediation', workerRunId: null, workerDispatchNonce });
         const beforeSha = materialHeadSha;
         worker = await dispatchWorker({
-          orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch,
+          orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch,
           targetRef: beforeSha,
           targetPr: pullRequest.number,
           remediationContext: JSON.stringify(remediation),

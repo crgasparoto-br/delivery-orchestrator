@@ -9,12 +9,37 @@ on:
       target_pr: {description: Existing managed PR number for bounded remediation, required: false, default: '', type: string}
       remediation_context: {description: Controller-provided CI/audit findings for bounded remediation, required: false, default: '', type: string}
       dispatch_nonce: {description: Deterministic controller dispatch correlation nonce, required: true, type: string}
+      controller_run_id: {description: Authoritative Delivery V2 controller workflow run id, required: true, type: string}
 run-name: "Delivery V2 worker ${{ github.event.inputs.dispatch_nonce }}"
 permissions:
+  actions: read
   contents: read
   issues: read
 env:
   GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "${{ github.event.inputs.target_pr == '' && 'true' || 'false' }}"
+pre-steps:
+  - name: Validate controller provenance
+    shell: bash
+    env:
+      CONTROLLER_RUN_ID: ${{ github.event.inputs.controller_run_id }}
+      TARGET_REPOSITORY: ${{ github.event.inputs.target_repository }}
+      TARGET_ISSUE: ${{ github.event.inputs.target_issue }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      GITHUB_TOKEN: ${{ github.token }}
+    run: |
+      node <<'PROVENANCE'
+      const id = Number(process.env.CONTROLLER_RUN_ID);
+      if (!Number.isInteger(id) || id < 1) throw new Error('invalid controller run id');
+      const response = await fetch('https://api.github.com/repos/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + id, { headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + process.env.GITHUB_TOKEN, 'X-GitHub-Api-Version': '2022-11-28' } });
+      if (!response.ok) throw new Error('controller run lookup failed: ' + response.status);
+      const run = await response.json();
+      const expectedTitle = 'Delivery V2 controller ' + process.env.TARGET_REPOSITORY + ' #' + process.env.TARGET_ISSUE;
+      if (run.path !== '.github/workflows/delivery-v2-dispatch.yml') throw new Error('untrusted controller workflow path');
+      if (run.event !== 'workflow_dispatch') throw new Error('untrusted controller event');
+      if (run.head_branch !== process.env.DEFAULT_BRANCH) throw new Error('untrusted controller ref');
+      if (!['queued', 'in_progress'].includes(run.status)) throw new Error('controller run is not live');
+      if (run.display_title !== expectedTitle) throw new Error('controller target identity mismatch');
+      PROVENANCE
 engine: codex
 max-turns: 80
 max-ai-credits: 500
