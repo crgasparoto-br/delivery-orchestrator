@@ -21,7 +21,10 @@ const GENERATED_LOW_VALUE_PATTERNS = Object.freeze([
   /(?:^|\/)\.github\/aw\/actions-lock\.json$/
 ]);
 const WORKER_PROMPT_PATTERN = /^\.github\/workflows\/delivery-v2-worker-(?:claude|codex|copilot)-(?:fast|standard|critical)\.md$/;
-const SEMANTIC_CATEGORY_ORDER = Object.freeze(['executable', 'tests', 'config', 'evidence', 'docs', 'prompts', 'other']);
+const CANONICAL_DOC_PATTERN = /^docs\/delivery-v2\/(?:MASTER_SPEC|AUDIT_CONTRACT|ROADMAP)\.md$/;
+const RESERVED_SEMANTIC_CATEGORIES = Object.freeze(['executable', 'tests', 'config', 'evidence', 'canonical-docs', 'prompts']);
+const RESERVED_SEMANTIC_CATEGORY_SET = new Set(RESERVED_SEMANTIC_CATEGORIES);
+const SEMANTIC_CATEGORY_ORDER = Object.freeze([...RESERVED_SEMANTIC_CATEGORIES, 'docs', 'other']);
 
 export function auditDiffLimitsForRisk(riskProfile) {
   const risk = String(riskProfile ?? '').trim().toLowerCase();
@@ -84,6 +87,7 @@ function semanticCategory(filePath) {
   const value = String(filePath ?? '');
   if (/^(?:test|tests|__tests__)\//.test(value) || /(?:^|\/)[^/]*\.test\.[^/]+$/.test(value) || /(?:^|\/)[^/]*\.spec\.[^/]+$/.test(value)) return 'tests';
   if (/^docs\/delivery-v2\/evidence\//.test(value)) return 'evidence';
+  if (CANONICAL_DOC_PATTERN.test(value)) return 'canonical-docs';
   if (WORKER_PROMPT_PATTERN.test(value)) return 'prompts';
   if (/^(?:src|scripts|actions)\//.test(value) || /^\.github\/scripts\//.test(value)) return 'executable';
   if (/^(?:config|schemas)\//.test(value)) return 'config';
@@ -153,13 +157,13 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
 
   const reservationCandidates = new Map();
   if (alignmentExact) {
-    for (const category of SEMANTIC_CATEGORY_ORDER) {
+    for (const category of RESERVED_SEMANTIC_CATEGORIES) {
       const candidates = eligible
         .filter((entry) => entry.category === category)
         .sort((a, b) => a.bytes - b.bytes || a.index - b.index);
       if (candidates.length > 0) reservationCandidates.set(category, candidates[0]);
     }
-    for (const category of SEMANTIC_CATEGORY_ORDER) {
+    for (const category of RESERVED_SEMANTIC_CATEGORIES) {
       const representative = reservationCandidates.get(category);
       if (representative) include(representative);
     }
@@ -182,7 +186,7 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
   const categoryReservations = Object.freeze(Object.fromEntries(SEMANTIC_CATEGORY_ORDER.map((category) => {
     const representative = reservationCandidates.get(category);
     return [category, Object.freeze({
-      required: Boolean(representative),
+      required: RESERVED_SEMANTIC_CATEGORY_SET.has(category) && Boolean(representative),
       path: representative?.path ?? null,
       bytes: representative?.bytes ?? 0,
       included: Boolean(representative && includedIndexes.has(representative.index))

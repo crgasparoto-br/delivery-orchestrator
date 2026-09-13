@@ -56,7 +56,7 @@ test('semantic representatives survive realistic code-heavy blocks under the unc
     'test/v2-heavy.test.mjs',
     'config/delivery-v2-requirements.json',
     'docs/delivery-v2/evidence/dv2-013-training-system-fast.json',
-    'docs/delivery-v2/ADR-0006.md',
+    'docs/delivery-v2/MASTER_SPEC.md',
     '.github/workflows/delivery-v2-worker-codex-critical.md'
   ];
   const payloads = paths.map((filePath) => filePath.startsWith('src/v2/heavy-') ? 'x'.repeat(2800) : 'y'.repeat(3800));
@@ -70,13 +70,48 @@ test('semantic representatives survive realistic code-heavy blocks under the unc
   assert.ok(included.has('test/v2-heavy.test.mjs'));
   assert.ok(included.has('config/delivery-v2-requirements.json'));
   assert.ok(included.has('docs/delivery-v2/evidence/dv2-013-training-system-fast.json'));
-  assert.ok(included.has('docs/delivery-v2/ADR-0006.md'));
+  assert.ok(included.has('docs/delivery-v2/MASTER_SPEC.md'));
   assert.ok(included.has('.github/workflows/delivery-v2-worker-codex-critical.md'));
-  for (const category of ['executable', 'tests', 'config', 'evidence', 'docs', 'prompts']) {
+  for (const category of ['executable', 'tests', 'config', 'evidence', 'canonical-docs', 'prompts']) {
     assert.equal(bounded.manifest.categoryReservations[category].included, true, `missing representative for ${category}`);
   }
   assert.ok(bounded.manifest.boundedBytes <= 64 * 1024);
   assert.equal(bounded.manifest.strategy, 'bounded-semantic-class-representative-unified-diff');
+});
+
+test('canonical Delivery V2 docs cannot be displaced by a smaller noncanonical document', () => {
+  const paths = [
+    'src/v2/primary.mjs',
+    'src/v2/spillover.mjs',
+    'test/v2-primary.test.mjs',
+    'config/delivery-v2-requirements.json',
+    'docs/delivery-v2/evidence/dv2-013-training-system-fast.json',
+    '.github/workflows/delivery-v2-worker-codex-critical.md',
+    'docs/changelog.md',
+    'docs/delivery-v2/MASTER_SPEC.md'
+  ];
+  const payloadByPath = new Map([
+    ['src/v2/primary.mjs', 'e'.repeat(3400)],
+    ['src/v2/spillover.mjs', 's'.repeat(3400)],
+    ['test/v2-primary.test.mjs', 't'.repeat(420)],
+    ['config/delivery-v2-requirements.json', 'c'.repeat(420)],
+    ['docs/delivery-v2/evidence/dv2-013-training-system-fast.json', 'v'.repeat(420)],
+    ['.github/workflows/delivery-v2-worker-codex-critical.md', 'p'.repeat(420)],
+    ['docs/changelog.md', 'd'.repeat(120)],
+    ['docs/delivery-v2/MASTER_SPEC.md', 'm'.repeat(2800)]
+  ]);
+  const diff = paths.map((filePath) => block(filePath, payloadByPath.get(filePath))).join('');
+  const bounded = boundAuditDiff(diff, paths, {
+    limits: { maxFiles: 12, maxFileBytes: 4096, maxTotalBytes: 10 * 1024 }
+  });
+  const included = new Set(bounded.manifest.included.map((item) => item.path));
+
+  assert.equal(bounded.manifest.categoryReservations['canonical-docs'].path, 'docs/delivery-v2/MASTER_SPEC.md');
+  assert.equal(bounded.manifest.categoryReservations['canonical-docs'].included, true);
+  assert.equal(bounded.manifest.categoryReservations.docs.required, false);
+  assert.ok(included.has('docs/delivery-v2/MASTER_SPEC.md'));
+  assert.equal(bounded.manifest.included.find((item) => item.path === 'docs/delivery-v2/MASTER_SPEC.md')?.category, 'canonical-docs');
+  assert.ok(bounded.manifest.boundedBytes <= 10 * 1024);
 });
 
 test('co-located test files under src receive the tests reservation', () => {
