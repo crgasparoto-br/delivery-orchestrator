@@ -16,13 +16,7 @@ on:
       - 'schemas/delivery-v2-metrics.schema.json'
       - 'schemas/delivery-v2-requirements.schema.json'
       - 'schemas/delivery-v2-target-policy.schema.json'
-      - 'scripts/export-delivery-v2-classifier.mjs'
-      - 'scripts/run-delivery-v2-independent-audit.mjs'
-      - 'scripts/run-delivery-v2-github-audit.mjs'
-      - 'scripts/should-compile-delivery-v2-workers.mjs'
-      - 'scripts/finalize-delivery-v2-controller-status.mjs'
-      - 'scripts/verify-delivery-v2-completeness.mjs'
-      - 'scripts/verify-delivery-v2-targets.mjs'
+      - 'scripts/**'
       - '.github/delivery-orchestrator-capabilities.json'
       - '.github/aw/actions-lock.json'
       - '.github/workflows/delivery-v2-*.yml'
@@ -74,14 +68,12 @@ jobs:
             node --check "$file"
           done
           node --check actions/delivery-v2-risk/index.cjs
-          node --check scripts/export-delivery-v2-classifier.mjs
-          node --check scripts/run-delivery-v2-independent-audit.mjs
-          node --check scripts/run-delivery-v2-github-audit.mjs
-          node --check scripts/should-compile-delivery-v2-workers.mjs
-          node --check scripts/finalize-delivery-v2-controller-status.mjs
-          node --check .github/scripts/validate-delivery-v2-worker-authorization.mjs
-          node --check scripts/verify-delivery-v2-completeness.mjs
-          node --check scripts/verify-delivery-v2-targets.mjs
+          for file in scripts/*.mjs; do
+            node --check "$file"
+          done
+          for file in .github/scripts/*.mjs; do
+            node --check "$file"
+          done
 
       - name: Detect gh-aw worker identity drift
         id: worker-identity

@@ -1,9 +1,0 @@
-{
-  "ok": true,
-  "required": [
-    "prompts/implementer.md",
-    "prompts/auditor.md",
-    "skills/catalog/entregar-issue/SKILL.md",
-    "skills/catalog/auditar-issue/SKILL.md"
-  ]
-}

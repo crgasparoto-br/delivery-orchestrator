@@ -21,6 +21,20 @@ export const DEFAULT_AUDIT_CONTEXT_LIMITS = Object.freeze({
   maxDependencyProbes: 24
 });
 
+export const STANDARD_AUDIT_CONTEXT_LIMITS = Object.freeze({
+  maxFiles: 8,
+  maxFileBytes: 16 * 1024,
+  maxTotalBytes: 48 * 1024,
+  maxDependencyProbes: 12
+});
+
+export function auditContextLimitsForRisk(riskProfile) {
+  const risk = String(riskProfile ?? '').trim().toLowerCase();
+  if (!risk || risk === 'critical') return DEFAULT_AUDIT_CONTEXT_LIMITS;
+  if (risk === 'standard') return STANDARD_AUDIT_CONTEXT_LIMITS;
+  throw new Error(`unsupported audit context risk profile: ${risk || '(missing)'}`);
+}
+
 function requiredString(value, label) {
   const result = String(value ?? '').trim();
   if (!result) throw new Error(`${label} is required`);
@@ -57,7 +71,7 @@ async function fetchText(url, token, accept) {
 }
 
 function normalizeAuditContextLimits(limits = {}) {
-  const merged = { ...DEFAULT_AUDIT_CONTEXT_LIMITS, ...limits };
+  const merged = { ...auditContextLimitsForRisk(process.env.AUDIT_RISK_PROFILE), ...limits };
   for (const [key, value] of Object.entries(merged)) {
     if (!Number.isInteger(value) || value < 1) throw new Error(`audit context ${key} must be a positive integer`);
   }

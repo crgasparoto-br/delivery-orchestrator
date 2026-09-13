@@ -60,7 +60,7 @@ DV2-012 and DV2-013 proved adaptive routing in `controle_calorias` and `training
 
 ### Phase F — V1 retirement
 
-DV2-014 made V2 the only active normal delivery architecture. Active `delivery-request`, recursive `max_cycles`, nested orchestration Skill and mandatory V1 handoff/certificate paths are retired. Only `.audit/entregar-issue/**` and `skills/catalog/**` are retained as historical traceability and are excluded from normal AI context unless explicitly needed.
+DV2-014 made V2 the only active normal delivery architecture. Active `delivery-request`, recursive `max_cycles`, nested orchestration Skill and mandatory V1 handoff/certificate paths are retired. The historical `.audit/entregar-issue/**` and `skills/catalog/**` snapshot roots that were initially retained for traceability were physically removed during post-completion hardening; minimal provenance now lives only under `docs/delivery-v2/history/v1/**` and Git history.
 
 ### Phase G — program governance
 
@@ -70,15 +70,11 @@ DV2-015 keeps the architecture reconstructable from repository state. The execut
 
 There is no remaining V2 rollout item in the original roadmap. New work is tracked through dedicated issues and must preserve the non-negotiable invariants in `MASTER_SPEC.md`.
 
-Issue #59 is post-completion hardening, not a new architecture phase. It tightens:
+Issue #59 is post-completion hardening, not a new architecture phase. It tightened V1-residue detection, AI context hygiene, token/credit observability, canonical `gh-aw` lock publication and documentation freshness.
 
-- V1-residue detection so retired runtime cannot silently return;
-- AI context hygiene so historical/generated artifacts are not explored by default;
-- token/credit observability and aggregation;
-- canonical `gh-aw` lock publication without duplicate `.generated/gh-aw` snapshots;
-- documentation so future sessions consume current state rather than stale rollout instructions.
+Issue #63 extends that hardening into operational efficiency: deterministic end-to-end controller wiring, resumable/reentry-safe execution, automatic usage ingestion, compile-attestation reuse, bounded audit context, complete CI script-surface coverage and physical removal of the last V1 snapshot roots from active tool-discovery paths.
 
-Hardening does **not** infer a cheaper risk profile from issue prose. If changed-file evidence is missing or uncertain, the classifier remains fail-closed and CRITICAL.
+Hardening does **not** infer a cheaper risk profile from issue prose or disable required review without evidence. If changed-file evidence is missing or uncertain, the classifier remains fail-closed and CRITICAL. STANDARD audit may be skipped only by explicit target policy; CRITICAL audit remains mandatory. Context-budget reductions fail closed when omitted evidence is material.
 
 ## Evidence and continuation rule
 

@@ -75,6 +75,20 @@
     "lexicalScannerIsSecurityBoundary": false,
     "ghAwUsageArtifactContract": true
   },
+  "v2_1PhysicalCleanup": {
+    "issueNumber": 63,
+    "removedResidualRoots": [
+      ".audit/entregar-issue/**",
+      "skills/catalog/**"
+    ],
+    "retainedProvenance": [
+      "docs/delivery-v2/history/v1/trusted-auditors.json",
+      "docs/delivery-v2/history/v1/skills-catalog-sync-manifest.json",
+      "git-history"
+    ],
+    "reintroductionBlockedByGitignore": true,
+    "runtimeActive": false
+  },
   "invariants": [
     "normal delivery no longer accepts delivery-request control issues",
     "normal delivery no longer exposes max_cycles or a recursive implement-audit loop",

@@ -65,9 +65,9 @@ The reviewer receives a deterministic sanitized bundle containing:
 - Delivery V2 audit contract;
 - bounded exact-SHA material context with prioritized full changed text files plus one-hop direct relative dependencies when resolvable.
 
-Both the diff context and material-context expansion have explicit file, per-file and total-byte ceilings; material context also limits dependency probes. Historical/generated roots remain excluded. The exact base/head SHAs remain the candidate identity, while the diff manifest preserves integrity of the full raw diff without placing all of its bytes in the model context. When either bounded manifest omits material that is genuinely required to support a release-blocking conclusion, the reviewer must fail closed with an `audit-context-insufficient` finding rather than guess or browse the repository. This preserves evidence strength while capping audit tokens on large PRs.
+Both the diff context and material-context expansion have explicit file, per-file and total-byte ceilings; material context also limits dependency probes. The byte budget is risk-adaptive: STANDARD is capped at 32 KiB of bounded diff plus 48 KiB of material context (80 KiB aggregate), while CRITICAL retains 64 KiB plus 96 KiB (160 KiB aggregate). Missing/unsupported audit risk fails closed, and explicit smaller limits used by focused tests remain valid. The exact base/head SHAs remain the candidate identity, while the diff manifest preserves integrity of the full raw diff without placing all of its bytes in the model context. When either bounded manifest omits material that is genuinely required to support a release-blocking conclusion, the reviewer must fail closed with an `audit-context-insufficient` finding rather than guess or browse the repository. This preserves evidence strength while cutting the STANDARD model-context byte ceiling by 50%.
 
-Product repositories use the compact `docs/delivery-v2/AUDIT_CONTRACT.md` projection to reduce repeated tokens. Changes to the Delivery V2 control plane itself use the full `MASTER_SPEC.md`. Hidden implementer reasoning, historical `.audit/**` / `skills/catalog/**`, generated worker locks and unrelated repository inventory are not reviewer context.
+Product repositories use the compact `docs/delivery-v2/AUDIT_CONTRACT.md` projection to reduce repeated tokens. Changes to the Delivery V2 control plane itself use the full `MASTER_SPEC.md`. Hidden implementer reasoning, generated worker locks and unrelated repository inventory are not reviewer context. The physically retired V1 roots `.audit/entregar-issue/**` and `skills/catalog/**` are ignored and blocked from reintroduction.
 
 ## Observability and token accounting
 
@@ -81,9 +81,11 @@ Metrics preserve unknown values as `null`; a provider that does not report token
 
 Before installing `gh-aw`, the CI compares the worker compilation identity with the trusted base. When worker Markdown sources, generated worker locks/actions lock and compiler-workflow identity are unchanged, the previously trusted base attestation is reused and the `gh-aw` setup/compile steps are skipped. When that identity changes, the same CI performs exactly one strict compile and verifies zero generated drift. `Delivery V2 - Compile gh-aw` remains manual preflight only and cannot create a second automatic compile for a PR.
 
+The CI trigger and syntax checks cover repository scripts by surface (`scripts/**` and generic `*.mjs` loops) rather than by a manually maintained list. A newly added V2 controller/helper script therefore cannot silently bypass the platform gate merely because its filename was not enumerated.
+
 ## V1 retirement
 
-V1 remains retired. No active `delivery-request`, `max_cycles`, recursive controller, nested-Skill normal path or mandatory V1 handoff/certificate dependency is reintroduced. Historical `.audit/entregar-issue/**`, `skills/catalog/**` and archived V1 metadata remain traceability-only.
+V1 remains retired. No active `delivery-request`, `max_cycles`, recursive controller, nested-Skill normal path or mandatory V1 handoff/certificate dependency is reintroduced. The former `.audit/entregar-issue/**` and `skills/catalog/**` snapshot roots have also been physically removed from the working tree and are ignored to prevent accidental regeneration. Minimal historical provenance remains under `docs/delivery-v2/history/v1/**` and in Git history only.
 
 ## Validation
 

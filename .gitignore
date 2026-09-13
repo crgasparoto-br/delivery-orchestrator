@@ -2,5 +2,7 @@ node_modules/
 runs/*
 !runs/.gitkeep
 auditor-trust/
+.audit/
+skills/catalog/
 .env
 *.pem

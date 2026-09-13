@@ -6,12 +6,25 @@ export const DEFAULT_AUDIT_DIFF_LIMITS = Object.freeze({
   maxTotalBytes: 64 * 1024
 });
 
+export const STANDARD_AUDIT_DIFF_LIMITS = Object.freeze({
+  maxFiles: 12,
+  maxFileBytes: 12 * 1024,
+  maxTotalBytes: 32 * 1024
+});
+
+export function auditDiffLimitsForRisk(riskProfile) {
+  const risk = String(riskProfile ?? '').trim().toLowerCase();
+  if (!risk || risk === 'critical') return DEFAULT_AUDIT_DIFF_LIMITS;
+  if (risk === 'standard') return STANDARD_AUDIT_DIFF_LIMITS;
+  throw new Error(`unsupported audit diff risk profile: ${risk || '(missing)'}`);
+}
+
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
 function normalizeLimits(limits = {}) {
-  const resolved = { ...DEFAULT_AUDIT_DIFF_LIMITS, ...limits };
+  const resolved = { ...auditDiffLimitsForRisk(process.env.AUDIT_RISK_PROFILE), ...limits };
   for (const [key, value] of Object.entries(resolved)) {
     if (!Number.isInteger(value) || value < 1) throw new Error(`audit diff ${key} must be a positive integer`);
   }

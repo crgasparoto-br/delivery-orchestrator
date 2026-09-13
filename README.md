@@ -77,7 +77,9 @@ FAST keeps the same file envelope on both initial PR creation and follow-up reme
 
 `.github/workflows/delivery-v2-audit.yml` is the generic normal-path audit. It is no longer tied to issue #27 or a pilot marker. The deterministic controller supplies target repository/PR, exact material SHA through the trusted source CI run, effective risk and target CI workflow identity.
 
-The reviewer receives a sanitized bundle containing only the exact audit request, issue contract, PR metadata, candidate diff and Delivery V2 audit contract. Product-repository audits use `docs/delivery-v2/AUDIT_CONTRACT.md`; control-plane changes in this repository use the full `MASTER_SPEC.md`. Hidden implementer reasoning, historical V1 artifacts and unrelated repository inventory are excluded.
+The reviewer receives a sanitized bundle containing only exact audit identity/evidence, issue/PR contract, a bounded candidate diff, integrity manifest, bounded material context and the relevant Delivery V2 audit contract. Product-repository audits use `docs/delivery-v2/AUDIT_CONTRACT.md`; control-plane changes in this repository use the full `MASTER_SPEC.md`. Hidden implementer reasoning, generated artifacts and unrelated repository inventory are excluded.
+
+Audit context is risk-adaptive without changing release semantics: STANDARD is capped at 80 KiB aggregate model material (32 KiB diff + 48 KiB exact-SHA material context), while CRITICAL retains the 160 KiB ceiling (64 KiB + 96 KiB). If a bounded omission is material to a blocking conclusion, the auditor must fail closed with `audit-context-insufficient` instead of guessing.
 
 ## Observability and cost accounting
 
@@ -89,7 +91,7 @@ The final controller artifact records provider calls, implementation/audit attem
 
 **V1 is retired.** The former `delivery-loop.yml`, `delivery-request:` queue, `max_cycles` controller, recursive implement/audit loop, nested-Skill normal path and mandatory `.audit/entregar-issue` handoff/certificate path are not active entrypoints.
 
-Historical `.audit/entregar-issue/**`, `skills/catalog/**` and archived V1 metadata are retained only for historical traceability; they are traceability-only. Active V2 workflows and scripts must not depend on them.
+The former `.audit/entregar-issue/**` and `skills/catalog/**` snapshot roots are now physically removed from the active tree and ignored so local/generated tooling cannot reintroduce them accidentally. Minimal V1 provenance remains only under `docs/delivery-v2/history/v1/**` and in Git history; active V2 workflows and scripts have no dependency on the retired roots.
 
 ## Canonical contract
 
@@ -115,4 +117,4 @@ npm run verify:v2
 npm run verify:v2:complete
 ```
 
-`verify:v2` runs the regular completeness and target-policy checks. `verify:v2:complete` adds the strict terminal-completeness assertion without repeating the target-policy scan. `Delivery V2 CI` remains the trusted automatic exact-head gate and performs the single automatic `gh-aw` compile; `Delivery V2 - Compile gh-aw` is retained only as a manual preflight.
+`verify:v2` runs the regular completeness and target-policy checks. `verify:v2:complete` adds the strict terminal-completeness assertion without repeating the target-policy scan. `Delivery V2 CI` remains the trusted automatic exact-head gate and performs the single automatic `gh-aw` compile only when worker/compiler identity changed; otherwise it reuses the trusted-base attestation. The CI trigger covers repository scripts by surface rather than a manually maintained filename list. `Delivery V2 - Compile gh-aw` is retained only as a manual preflight.
