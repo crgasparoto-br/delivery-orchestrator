@@ -18,6 +18,8 @@ on:
       - 'schemas/delivery-v2-target-policy.schema.json'
       - 'scripts/export-delivery-v2-classifier.mjs'
       - 'scripts/run-delivery-v2-independent-audit.mjs'
+      - 'scripts/run-delivery-v2-github-audit.mjs'
+      - 'scripts/finalize-delivery-v2-controller-status.mjs'
       - 'scripts/verify-delivery-v2-completeness.mjs'
       - 'scripts/verify-delivery-v2-targets.mjs'
       - '.github/delivery-orchestrator-capabilities.json'
@@ -25,6 +27,7 @@ on:
       - '.github/workflows/delivery-v2-*.yml'
       - '.github/workflows/delivery-v2-*.md'
       - '.github/workflows/delivery-v2-*.lock.yml'
+      - '.github/scripts/**'
       - 'docs/delivery-v2.md'
       - 'docs/delivery-v2/**'
 
@@ -73,6 +76,9 @@ jobs:
           node --check actions/delivery-v2-risk/index.cjs
           node --check scripts/export-delivery-v2-classifier.mjs
           node --check scripts/run-delivery-v2-independent-audit.mjs
+          node --check scripts/run-delivery-v2-github-audit.mjs
+          node --check scripts/finalize-delivery-v2-controller-status.mjs
+          node --check .github/scripts/validate-delivery-v2-worker-authorization.mjs
           node --check scripts/verify-delivery-v2-completeness.mjs
           node --check scripts/verify-delivery-v2-targets.mjs
 
@@ -81,11 +87,31 @@ jobs:
         with:
           version: v0.88.7
 
-      - name: Verify compiled gh-aw workers
+      - name: Compile gh-aw workers
+        id: compiled-workers
         shell: bash
         run: |
           gh aw compile --strict
-          git diff --exit-code -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
+          if git diff --quiet -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload compiled worker drift for deterministic remediation
+        if: steps.compiled-workers.outputs.drift == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-v2-compiled-workers-${{ github.run_id }}
+          path: |
+            .github/workflows/delivery-v2-worker-*.lock.yml
+            .github/aw/actions-lock.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Verify compiled gh-aw workers
+        shell: bash
+        run: git diff --exit-code -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
 
       - name: Smoke deterministic plan
         run: >-

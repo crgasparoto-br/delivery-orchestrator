@@ -18,28 +18,22 @@ permissions:
 env:
   GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "${{ github.event.inputs.target_pr == '' && 'true' || 'false' }}"
 pre-steps:
-  - name: Validate controller provenance
+  - name: Validate controller-selected worker authorization
     shell: bash
     env:
       CONTROLLER_RUN_ID: ${{ github.event.inputs.controller_run_id }}
       TARGET_REPOSITORY: ${{ github.event.inputs.target_repository }}
       TARGET_ISSUE: ${{ github.event.inputs.target_issue }}
+      TARGET_PR: ${{ github.event.inputs.target_pr }}
+      TARGET_REF: ${{ github.event.inputs.target_ref || github.event.inputs.base_branch }}
+      BASE_BRANCH: ${{ github.event.inputs.base_branch }}
+      DISPATCH_NONCE: ${{ github.event.inputs.dispatch_nonce }}
+      EXPECTED_PROVIDER: claude
+      EXPECTED_RISK: critical
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       GITHUB_TOKEN: ${{ github.token }}
-    run: |
-      node <<'PROVENANCE'
-      const id = Number(process.env.CONTROLLER_RUN_ID);
-      if (!Number.isInteger(id) || id < 1) throw new Error('invalid controller run id');
-      const response = await fetch('https://api.github.com/repos/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + id, { headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + process.env.GITHUB_TOKEN, 'X-GitHub-Api-Version': '2022-11-28' } });
-      if (!response.ok) throw new Error('controller run lookup failed: ' + response.status);
-      const run = await response.json();
-      const expectedTitle = 'Delivery V2 controller ' + process.env.TARGET_REPOSITORY + ' #' + process.env.TARGET_ISSUE;
-      if (run.path !== '.github/workflows/delivery-v2-dispatch.yml') throw new Error('untrusted controller workflow path');
-      if (run.event !== 'workflow_dispatch') throw new Error('untrusted controller event');
-      if (run.head_branch !== process.env.DEFAULT_BRANCH) throw new Error('untrusted controller ref');
-      if (!['queued', 'in_progress'].includes(run.status)) throw new Error('controller run is not live');
-      if (run.display_title !== expectedTitle) throw new Error('controller target identity mismatch');
-      PROVENANCE
+      DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
+    run: node .github/scripts/validate-delivery-v2-worker-authorization.mjs
 engine: claude
 max-turns: 80
 max-ai-credits: 500

@@ -108,6 +108,10 @@ jobs:
           DELIVERY_V2_RECOVER_WORKER_RUN_ID: ${{ steps.reentry.outputs.recover_worker_run_id }}
         run: node scripts/run-delivery-v2-controller.mjs
 
+      - name: Finalize terminal release status
+        if: always() && steps.reentry.outputs.run_controller == 'true'
+        run: node scripts/finalize-delivery-v2-controller-status.mjs
+
       - name: Publish controller summary
         if: always()
         shell: bash

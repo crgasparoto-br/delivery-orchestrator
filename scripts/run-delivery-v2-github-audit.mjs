@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { CodexExecutor } from '../src/codex-executor.mjs';
 import {
@@ -10,6 +11,12 @@ import {
   finalizeGithubNativeAuditResult,
   githubNativeAuditOutputSchema
 } from '../src/v2/github-native-audit-runtime.mjs';
+import {
+  assertPullRequestSnapshotStable,
+  fetchAuditClassifier,
+  fetchFileEvidenceAtRef,
+  fetchImmutableCompareEvidence
+} from '../src/v2/github-audit-evidence.mjs';
 
 function requiredEnv(name) {
   const value = String(process.env[name] ?? '').trim();
@@ -22,45 +29,13 @@ function positiveInteger(name, fallback = null) {
   if (!Number.isInteger(value) || value < 1) throw new Error(`${name} must be a positive integer`);
   return value;
 }
-function apiHeaders(token, accept = 'application/vnd.github+json') {
-  return { Accept: accept, Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'delivery-v2-github-native-auditor' };
+function apiHeaders(token) {
+  return { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'delivery-v2-github-native-auditor' };
 }
 async function fetchJson(url, token) {
   const response = await fetch(url, { headers: apiHeaders(token) });
   if (!response.ok) throw new Error(`GitHub API ${response.status} for ${url}: ${await response.text()}`);
   return response.json();
-}
-async function fetchText(url, token, accept) {
-  const response = await fetch(url, { headers: apiHeaders(token, accept) });
-  if (!response.ok) throw new Error(`GitHub API ${response.status} for ${url}: ${await response.text()}`);
-  return response.text();
-}
-async function fetchChangedPaths(repository, pullRequestNumber, token) {
-  const paths = [];
-  for (let page = 1; ; page += 1) {
-    const files = await fetchJson(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}/files?per_page=100&page=${page}`, token);
-    paths.push(...files.map((file) => file.filename));
-    if (files.length < 100) break;
-  }
-  if (paths.length === 0) throw new Error('audited PR has no changed paths');
-  return paths;
-}
-async function fetchFileEvidenceAtRef(repository, filePath, ref, token) {
-  const encoded = filePath.split('/').map(encodeURIComponent).join('/');
-  const payload = await fetchJson(`https://api.github.com/repos/${repository}/contents/${encoded}?ref=${encodeURIComponent(ref)}`, token);
-  if (payload.type !== 'file' || payload.encoding !== 'base64') throw new Error(`expected base64 file for ${filePath}@${ref}`);
-  return { ref: String(ref).toLowerCase(), path: filePath, blobSha: String(payload.sha).toLowerCase(), content: Buffer.from(payload.content, 'base64').toString('utf8') };
-}
-async function fetchClassifier(repository, ref, token) {
-  const evidence = await fetchFileEvidenceAtRef(repository, '.delivery-v2/lock.json', ref, token);
-  const lock = JSON.parse(evidence.content);
-  const fingerprint = String(lock.canonicalClassifierFingerprint ?? '').toLowerCase();
-  if (!/^[0-9a-f]{64}$/.test(fingerprint)) throw new Error('target .delivery-v2/lock.json lacks canonicalClassifierFingerprint');
-  return {
-    version: `${lock.source?.repository ?? 'unknown'}@${lock.source?.commit ?? 'unknown'}`,
-    fingerprint,
-    evidence
-  };
 }
 function linuxHome(user) {
   const line = execFileSync('getent', ['passwd', user], { encoding: 'utf8' }).trim();
@@ -112,7 +87,7 @@ function priorFindingsFromEnv() {
   });
 }
 
-async function main() {
+export async function main() {
   const repository = requiredEnv('TARGET_REPOSITORY');
   const issueNumber = positiveInteger('TARGET_ISSUE');
   const pullRequestNumber = positiveInteger('TARGET_PR');
@@ -126,6 +101,7 @@ async function main() {
   const priorFindings = priorFindingsFromEnv();
   const token = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const reviewerRunId = positiveInteger('GITHUB_RUN_ID');
+  const orchestratorRepository = requiredEnv('GITHUB_REPOSITORY');
   const auditorUser = process.env.DELIVERY_AUDITOR_USER || 'delivery-auditor';
   const implementerUser = process.env.DELIVERY_IMPLEMENTER_USER || 'delivery-implementer';
   const authMode = process.env.CODEX_AUTH_MODE || 'chatgpt';
@@ -137,19 +113,25 @@ async function main() {
     fetchJson(`https://api.github.com/repos/${repository}/issues/${issueNumber}`, token),
     fetchJson(`https://api.github.com/repos/${repository}/actions/runs/${sourceWorkflowRunId}`, token)
   ]);
+  const candidateSha = String(pullRequest.head?.sha ?? '').toLowerCase();
+  const baseSha = String(pullRequest.base?.sha ?? '').toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(candidateSha) || !/^[0-9a-f]{40}$/.test(baseSha)) throw new Error('target PR lacks exact base/head SHA identity');
+
   const sourceWorkflowDefinition = await fetchJson(`https://api.github.com/repos/${repository}/actions/workflows/${sourceWorkflowRun.workflow_id}`, token);
-  const [candidateWorkflow, baseWorkflow, changedPaths, classifier, diffText] = await Promise.all([
-    fetchFileEvidenceAtRef(repository, workflowPath, pullRequest.head.sha, token),
-    fetchFileEvidenceAtRef(repository, workflowPath, pullRequest.base.sha, token),
-    fetchChangedPaths(repository, pullRequestNumber, token),
-    fetchClassifier(repository, pullRequest.head.sha, token),
-    fetchText(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}`, token, 'application/vnd.github.v3.diff')
+  const [candidateWorkflow, baseWorkflow, classifier, compareEvidence] = await Promise.all([
+    fetchFileEvidenceAtRef(repository, workflowPath, candidateSha, token),
+    fetchFileEvidenceAtRef(repository, workflowPath, baseSha, token),
+    fetchAuditClassifier(repository, candidateSha, token, { orchestratorRepository }),
+    fetchImmutableCompareEvidence(repository, baseSha, candidateSha, token)
   ]);
+  const stablePullRequest = await fetchJson(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}`, token);
+  assertPullRequestSnapshotStable(pullRequest, stablePullRequest);
+
   const request = buildGithubNativeAuditRequest({
     repository,
     issueNumber,
-    pullRequest,
-    changedPaths,
+    pullRequest: stablePullRequest,
+    changedPaths: compareEvidence.changedPaths,
     riskProfile,
     riskReasons: [`controller-effective-risk:${riskProfile}`],
     classifier,
@@ -163,14 +145,14 @@ async function main() {
     priorFindings
   });
 
-  const contractUrl = repository === process.env.GITHUB_REPOSITORY
+  const contractUrl = repository === orchestratorRepository
     ? new URL('../docs/delivery-v2/MASTER_SPEC.md', import.meta.url)
     : new URL('../docs/delivery-v2/AUDIT_CONTRACT.md', import.meta.url);
   const contractText = await readFile(contractUrl, 'utf8');
 
   let bundle;
   try {
-    bundle = await prepareBundle({ request, contractText, diffText, issue, pullRequest });
+    bundle = await prepareBundle({ request, contractText, diffText: compareEvidence.diffText, issue, pullRequest: stablePullRequest });
     const codexHome = process.env.CODEX_AUDITOR_HOME || path.join(linuxHome(auditorUser), '.codex-delivery', 'auditor');
     const executor = new CodexExecutor({ apiKey: process.env.OPENAI_API_KEY, authMode, model, implementerUser, auditorUser });
     const response = await executor.runFresh({
@@ -205,7 +187,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error.stack || error.message}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    process.stderr.write(`${error.stack || error.message}\n`);
+    process.exitCode = 1;
+  });
+}
