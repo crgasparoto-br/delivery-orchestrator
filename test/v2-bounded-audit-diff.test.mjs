@@ -50,6 +50,31 @@ test('generated locks and repetitive worker prompts cannot evict source and test
   assert.doesNotMatch(bounded.text, /delivery-v2-worker-codex-critical/);
 });
 
+test('semantic class reservations keep contract docs and active prompts visible under code-heavy diffs', () => {
+  const paths = [
+    ...Array.from({ length: 10 }, (_, index) => `src/v2/heavy-${index}.mjs`),
+    'test/v2-heavy.test.mjs',
+    'config/delivery-v2-requirements.json',
+    'docs/delivery-v2/evidence/dv2-013-training-system-fast.json',
+    'docs/delivery-v2/ADR-0006.md',
+    '.github/workflows/delivery-v2-worker-codex-critical.md'
+  ];
+  const diff = paths.map((filePath) => block(filePath, 'x'.repeat(220))).join('');
+  const bounded = boundAuditDiff(diff, paths, {
+    limits: { maxFiles: 20, maxFileBytes: 2048, maxTotalBytes: 4096 }
+  });
+  const included = new Set(bounded.manifest.included.map((item) => item.path));
+
+  assert.ok([...included].some((filePath) => filePath.startsWith('src/')));
+  assert.ok(included.has('test/v2-heavy.test.mjs'));
+  assert.ok(included.has('config/delivery-v2-requirements.json'));
+  assert.ok(included.has('docs/delivery-v2/evidence/dv2-013-training-system-fast.json'));
+  assert.ok(included.has('docs/delivery-v2/ADR-0006.md'));
+  assert.ok(included.has('.github/workflows/delivery-v2-worker-codex-critical.md'));
+  assert.ok(bounded.manifest.boundedBytes <= 4096);
+  assert.equal(bounded.manifest.strategy, 'bounded-semantic-class-reserved-unified-diff');
+});
+
 test('oversized diff blocks are omitted explicitly instead of being silently truncated', () => {
   const diff = block('src/large.mjs', 'x'.repeat(200));
   const bounded = boundAuditDiff(diff, ['src/large.mjs'], {
@@ -63,11 +88,11 @@ test('oversized diff blocks are omitted explicitly instead of being silently tru
   assert.ok(bounded.manifest.omitted[0].bytes > 64);
 });
 
-test('GitHub-native auditor sends bounded evidence while preserving the full changed path set for manifests', async () => {
+test('GitHub-native auditor sends balanced bounded evidence while preserving the full changed path set', async () => {
   const script = await import('node:fs/promises').then(({ readFile }) => readFile(new URL('../scripts/run-delivery-v2-github-audit.mjs', import.meta.url), 'utf8'));
   assert.match(script, /const diffEvidence = boundAuditDiff\(compareEvidence\.diffText, compareEvidence\.changedPaths\)/);
-  assert.match(script, /fetchBoundedAuditContext\(repository, candidateSha, compareEvidence\.changedPaths, token\)/);
-  assert.doesNotMatch(script, /materialAuditContextPaths/);
+  assert.match(script, /const representedPaths = diffEvidence\.manifest\.included\.map\(\(entry\) => entry\.path\)\.filter\(Boolean\)/);
+  assert.match(script, /fetchBoundedAuditContext\(repository, candidateSha, compareEvidence\.changedPaths, token, \{ representedPaths \}\)/);
   assert.match(script, /evaluateAuditBundleBudget/);
   assert.match(script, /providerCalls: 0/);
   assert.match(script, /'CANDIDATE\.diff': diffEvidence\.text/);
