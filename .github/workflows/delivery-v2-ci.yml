@@ -62,6 +62,7 @@ jobs:
           set -euo pipefail
           git show "${{ github.event.pull_request.base.sha }}:.github/workflows/delivery-v2-ci.yml" > .github/workflows/delivery-v2-ci.yml
           rm -f scripts/apply-v2-finalize-remediation.mjs scripts/.v2-remediation-part-*
+          node -e "const fs=require('fs'); for (const f of ['scripts/run-delivery-v2-controller.mjs','scripts/resume-delivery-v2-controller.mjs']) { const s=fs.readFileSync(f,'utf8'); fs.writeFileSync(f,s.replace(/\n+$/,'\n')); }"
 
       - name: Validate final candidate before publication
         shell: bash
