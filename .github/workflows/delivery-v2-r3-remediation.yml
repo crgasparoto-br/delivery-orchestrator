@@ -95,12 +95,20 @@ jobs:
           node --test test/v2-controller-provenance.test.mjs test/v2-controller-runtime.test.mjs test/v2-persistent-state.test.mjs test/v2-operational-controller.test.mjs test/v2-reentry-guard.test.mjs test/v2-remediation-state-machine.test.mjs test/v2-worker-contract.test.mjs
           npm run verify:v2
           npm run verify:v2:complete
-      - name: Publish clean functional candidate
+      - name: Publish validated payload without workflow mutations
         shell: bash
         run: |
-          git rm .github/workflows/delivery-v2-r3-remediation.yml
+          rm -rf .delivery-v2-transport
+          mkdir -p .delivery-v2-transport
+          git diff --name-only HEAD -- .github/workflows | while IFS= read -r path; do
+            test -n "$path" || continue
+            mkdir -p ".delivery-v2-transport/$(dirname "$path")"
+            cp "$path" ".delivery-v2-transport/$path"
+          done
+          test -f .delivery-v2-transport/.github/workflows/delivery-v2-ci.yml
+          git checkout -- .github/workflows
           git config user.name "delivery-v2-remediation"
           git config user.email "delivery-v2-remediation@users.noreply.github.com"
-          git add src/v2 scripts test config .github/workflows .github/aw
-          git commit -m "fix(v2): close systemic release and resume audit gaps"
-          git push origin HEAD:feat/63-v2-operational-efficiency
+          git add src/v2 scripts test config .github/aw .delivery-v2-transport
+          git commit -m "chore(v2): publish validated r3 payload"
+          git push origin HEAD:refs/heads/delivery-v2-r3-payload-34731633814
