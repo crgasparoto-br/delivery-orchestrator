@@ -65,6 +65,62 @@ test('material context prioritizes executable source then tests and manifests ge
   assert.equal(context.omitted.find((item) => item.path.endsWith('-critical.md'))?.reason, 'context-budget');
 });
 
+test('material context supplements diff-represented paths instead of duplicating their bytes', async (t) => {
+  const head = '3'.repeat(40);
+  const contents = new Map([
+    ['src/v2/core.mjs', 'import "./dep.mjs";\nexport const core = true;\n'],
+    ['src/v2/dep.mjs', 'export const dep = true;\n'],
+    ['test/v2-core.test.mjs', 'export const test = true;\n'],
+    ['config/delivery-v2-requirements.json', '{"requirements":[{"id":"DV2-013","minimumCompletionStatus":"rolled-out"}]}\n'],
+    ['docs/delivery-v2/ADR-0006.md', '# Bounded polling\n'],
+    ['.github/workflows/delivery-v2-worker-codex-critical.md', '# prompt without retired roots\n']
+  ]);
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async (url) => {
+    const match = String(url).match(/\/contents\/(.+)\?ref=/);
+    if (!match) throw new Error(`unexpected URL ${url}`);
+    const filePath = decodeURIComponent(match[1]);
+    const content = contents.get(filePath);
+    if (content == null) return response({ ok: false, status: 404, text: 'missing' });
+    return response({ json: { type: 'file', encoding: 'base64', sha: createHash('sha1').update(filePath).digest('hex'), content: Buffer.from(content).toString('base64') } });
+  };
+
+  const changedPaths = [
+    'src/v2/core.mjs',
+    'test/v2-core.test.mjs',
+    'config/delivery-v2-requirements.json',
+    'docs/delivery-v2/ADR-0006.md',
+    '.github/workflows/delivery-v2-worker-codex-critical.md'
+  ];
+  const context = await fetchBoundedAuditContext('crgasparoto-br/example', head, changedPaths, 'token', {
+    representedPaths: ['src/v2/core.mjs', 'test/v2-core.test.mjs'],
+    limits: { maxFiles: 8, maxFileBytes: 4096, maxTotalBytes: 8192, maxDependencyProbes: 8 }
+  });
+
+  assert.deepEqual(context.representedPaths, ['src/v2/core.mjs', 'test/v2-core.test.mjs']);
+  assert.equal(context.files.some((item) => item.path === 'src/v2/core.mjs'), false);
+  assert.equal(context.files.some((item) => item.path === 'test/v2-core.test.mjs'), false);
+  assert.ok(context.files.some((item) => item.path === 'config/delivery-v2-requirements.json'));
+  assert.ok(context.files.some((item) => item.path === 'docs/delivery-v2/ADR-0006.md'));
+  assert.ok(context.files.some((item) => item.path.endsWith('-critical.md')));
+  assert.ok(context.files.some((item) => item.path === 'src/v2/dep.mjs' && item.kind === 'direct-relative-dependency'));
+  assert.equal(context.omitted.find((item) => item.path === 'src/v2/core.mjs')?.reason, 'represented-in-bounded-diff');
+  assert.equal(context.omitted.find((item) => item.path === 'test/v2-core.test.mjs')?.reason, 'represented-in-bounded-diff');
+  const expectedChangedBytes = [...context.files]
+    .filter((item) => item.kind === 'changed')
+    .reduce((sum, item) => sum + Buffer.byteLength(contents.get(item.path)), 0);
+  assert.ok(context.totalBytes >= expectedChangedBytes);
+  assert.equal(context.strategy, 'supplemental-changed-files-plus-direct-relative-dependencies');
+});
+
+test('represented audit paths must belong to the immutable changed-path set', async () => {
+  await assert.rejects(() => fetchBoundedAuditContext('crgasparoto-br/example', '4'.repeat(40), ['src/a.mjs'], 'token', {
+    representedPaths: ['src/not-changed.mjs'],
+    limits: { maxFiles: 2, maxFileBytes: 4096, maxTotalBytes: 8192, maxDependencyProbes: 1 }
+  }), /represented audit path is not changed/);
+});
+
 test('audit changed paths and diff come only from immutable base...candidate compare', async (t) => {
   const base = '1'.repeat(40);
   const head = '2'.repeat(40);
