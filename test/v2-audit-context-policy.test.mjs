@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  AUDIT_CONTRACT_TEXT_EXTENSIONS,
   AUDIT_RESERVED_SEMANTIC_CATEGORIES,
   AUDIT_SEMANTIC_CATEGORY_ORDER,
   auditSemanticCategory,
@@ -23,6 +24,10 @@ test('shared semantic policy classifies monorepo code, co-located tests and deli
     ['api/openapi.yaml', 'contract'],
     ['proto/service.proto', 'contract'],
     ['docs/schema.graphql', 'contract'],
+    ['graphql/user.graphql', 'contract'],
+    ['graphql/user.graphqls', 'contract'],
+    ['graphql/user.gql', 'contract'],
+    ['db/model.prisma', 'contract'],
     ['config/delivery-v2-requirements.json', 'config'],
     ['.delivery-v2/lock.json', 'config'],
     ['package.json', 'config'],
@@ -48,10 +53,21 @@ test('shared contract detection covers protocol, schema and API-definition forms
     'api/openapi.json',
     'docs/asyncapi.yml',
     'service.wsdl',
-    'types/user.schema.json'
+    'types/user.schema.json',
+    'graphql/user.graphql',
+    'graphql/user.graphqls',
+    'graphql/user.gql',
+    'db/model.prisma',
+    'events/payment.avdl',
+    'events/payment.avpr',
+    'rpc/service.thrift'
   ]) {
     assert.equal(isSharedContractAuditPath(filePath), true, filePath);
     assert.equal(auditSemanticCategory(filePath), 'contract', filePath);
+  }
+
+  for (const extension of ['.graphql', '.graphqls', '.gql', '.prisma', '.proto', '.avsc', '.avdl', '.avpr', '.raml', '.thrift', '.wsdl', '.xsd']) {
+    assert.ok(AUDIT_CONTRACT_TEXT_EXTENSIONS.includes(extension), extension);
   }
 
   for (const filePath of ['config/runtime.yaml', 'vite.config.ts', '.delivery-v2/lock.json']) {
