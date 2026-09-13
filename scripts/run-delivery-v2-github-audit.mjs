@@ -8,6 +8,10 @@ import { pathToFileURL } from 'node:url';
 import { CodexExecutor } from '../src/codex-executor.mjs';
 import { boundAuditDiff } from '../src/v2/bounded-audit-diff.mjs';
 import {
+  auditContextInsufficientFinding,
+  evaluateAuditBundleBudget
+} from '../src/v2/audit-bundle-budget.mjs';
+import {
   buildGithubNativeAuditRequest,
   finalizeGithubNativeAuditResult,
   githubNativeAuditOutputSchema
@@ -45,20 +49,26 @@ function linuxHome(user) {
   if (!home) throw new Error(`could not resolve Linux home for ${user}`);
   return home;
 }
-async function prepareBundle({ request, contractText, diffEvidence, materialContext, issue, pullRequest }) {
-  const root = await mkdtemp(path.join(tmpdir(), 'delivery-v2-github-audit-'));
-  await chmod(root, 0o755);
-  execFileSync('git', ['init', '-q'], { cwd: root });
-  const files = {
+
+function materialBundleFiles({ request, contractText, diffEvidence, materialContext }) {
+  return Object.freeze({
     'AUDIT_REQUEST.json': `${JSON.stringify(request, null, 2)}\n`,
     'DELIVERY_CONTRACT.md': contractText,
-    'ISSUE.json': `${JSON.stringify({ number: issue.number, title: issue.title, body: issue.body, labels: issue.labels?.map((item) => item.name) ?? [] }, null, 2)}\n`,
-    'PULL_REQUEST.json': `${JSON.stringify({ number: pullRequest.number, title: pullRequest.title, body: pullRequest.body, base: pullRequest.base, head: pullRequest.head }, null, 2)}\n`,
     'CANDIDATE.diff': diffEvidence.text,
     'DIFF_MANIFEST.json': `${JSON.stringify(diffEvidence.manifest, null, 2)}\n`,
     'MATERIAL_CONTEXT.json': `${JSON.stringify(materialContext, null, 2)}\n`
+  });
+}
+async function prepareBundle({ files, issue, pullRequest }) {
+  const root = await mkdtemp(path.join(tmpdir(), 'delivery-v2-github-audit-'));
+  await chmod(root, 0o755);
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  const bundleFiles = {
+    ...files,
+    'ISSUE.json': JSON.stringify(issue),
+    'PULL_REQUEST.json': JSON.stringify(pullRequest)
   };
-  for (const [name, content] of Object.entries(files)) {
+  for (const [name, content] of Object.entries(bundleFiles)) {
     const file = path.join(root, name);
     await writeFile(file, content, 'utf8');
     await chmod(file, 0o444);
@@ -69,9 +79,9 @@ function auditPrompt(request) {
   return [
     'You are the independent semantic reviewer for a Delivery V2 candidate.',
     '',
-    'Your entire allowed context is the sanitized bundle in the current working directory: AUDIT_REQUEST.json, DELIVERY_CONTRACT.md, ISSUE.json, PULL_REQUEST.json, CANDIDATE.diff, DIFF_MANIFEST.json and MATERIAL_CONTEXT.json. Do not seek implementation conversation history, hidden implementer reasoning, legacy V1 handoff material, generated workflow locks or unrelated repository inventory. Do not modify files or Git state.',
+    'Your entire allowed context is the sanitized bundle in the current working directory: AUDIT_REQUEST.json, DELIVERY_CONTRACT.md, ISSUE.json, PULL_REQUEST.json, CANDIDATE.diff, DIFF_MANIFEST.json and MATERIAL_CONTEXT.json. ISSUE.json and PULL_REQUEST.json are deterministic bounded projections, not raw GitHub API objects. Do not seek implementation conversation history, hidden implementer reasoning, retired delivery snapshots, generated workflow locks or unrelated repository inventory. Do not modify files or Git state.',
     '',
-    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, lists every changed path, and records included or omitted diff blocks with explicit reasons. MATERIAL_CONTEXT.json contains bounded full contents for prioritized changed source files plus one-hop direct relative dependencies when resolvable. Respect both manifests and their limits. If a release-blocking conclusion genuinely depends on omitted diff or file context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
+    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, lists every changed path, and records included or omitted diff blocks with explicit reasons. MATERIAL_CONTEXT.json contains bounded full contents for prioritized changed source files plus one-hop direct relative dependencies when resolvable. Generated locks never displace source/tests from this semantic budget; every omitted changed path remains explicitly manifested. Respect both manifests and their limits. If a release-blocking conclusion genuinely depends on omitted diff or file context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
     '',
     `Audit exactly candidate ${request.candidate.materialHeadSha}. Treat AUDIT_REQUEST.json identity/check evidence as authoritative. First verify the issue acceptance contract against the bounded candidate diff and full material context available in the bundle, then apply Delivery V2 invariants. Return all cheap blocking findings in one pass. Findings must identify concrete candidate behavior/configuration and discriminating evidence. Do not reject hypothetical future code that is absent from this candidate.`,
     '',
@@ -91,6 +101,40 @@ function priorFindingsFromEnv() {
     if (!id || !/^[0-9a-f]{40}$/.test(candidateSha) || !status) throw new Error(`PRIOR_FINDINGS_JSON[${index}] is incomplete`);
     return Object.freeze({ id, candidateSha, status });
   });
+}
+
+function auditContextPayload({ budget, diffEvidence, materialContext }) {
+  return {
+    bundleContext: {
+      limits: budget.limits,
+      totalBytes: budget.totalBytes,
+      issueBody: budget.issue.bodyContext,
+      pullRequestBody: budget.pullRequest.bodyContext,
+      modelInvocationAllowed: budget.allowed,
+      blockingReasons: budget.reasons
+    },
+    diffContext: {
+      strategy: diffEvidence.manifest.strategy,
+      limits: diffEvidence.manifest.limits,
+      fullDiffBytes: diffEvidence.manifest.fullDiffBytes,
+      fullDiffSha256: diffEvidence.manifest.fullDiffSha256,
+      boundedBytes: diffEvidence.manifest.boundedBytes,
+      includedCount: diffEvidence.manifest.included.length,
+      omittedCount: diffEvidence.manifest.omitted.length
+    },
+    materialContext: {
+      strategy: materialContext.strategy,
+      limits: materialContext.limits,
+      totalBytes: materialContext.totalBytes,
+      fileCount: materialContext.files.length,
+      omittedCount: materialContext.omitted.length
+    }
+  };
+}
+
+async function writeAuditResult(resultPath, payload) {
+  await mkdir(path.dirname(resultPath), { recursive: true });
+  await writeFile(resultPath, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 
 export async function main() {
@@ -157,10 +201,42 @@ export async function main() {
     ? new URL('../docs/delivery-v2/MASTER_SPEC.md', import.meta.url)
     : new URL('../docs/delivery-v2/AUDIT_CONTRACT.md', import.meta.url);
   const contractText = await readFile(contractUrl, 'utf8');
+  const files = materialBundleFiles({ request, contractText, diffEvidence, materialContext });
+  const budget = evaluateAuditBundleBudget({ riskProfile, issue, pullRequest: stablePullRequest, files });
+  const contextPayload = auditContextPayload({ budget, diffEvidence, materialContext });
+
+  if (!budget.allowed) {
+    const finding = auditContextInsufficientFinding({ candidateSha, budget });
+    const { candidateSha: _candidateSha, ...modelFinding } = finding;
+    const finalized = finalizeGithubNativeAuditResult({
+      request,
+      modelResult: { decision: 'rejected', findings: [modelFinding] },
+      reviewerRunId
+    });
+    const enrichedResult = { ...finalized.result, modelUsage: { providerCalls: 0 }, providerCalls: 0 };
+    const payload = {
+      schemaVersion: 1,
+      repository,
+      issueNumber,
+      pullRequestNumber,
+      sourceWorkflowRunId,
+      auditWorkflowRunId: reviewerRunId,
+      request,
+      result: enrichedResult,
+      outcome: finalized.outcome,
+      modelUsage: null,
+      providerCalls: 0,
+      reviewerContextId: null,
+      ...contextPayload
+    };
+    await writeAuditResult(resultPath, payload);
+    process.stdout.write(`${JSON.stringify({ ok: true, pullRequestNumber, candidateSha, decision: 'rejected', providerCalls: 0, resultPath })}\n`);
+    return;
+  }
 
   let bundle;
   try {
-    bundle = await prepareBundle({ request, contractText, diffEvidence, materialContext, issue, pullRequest: stablePullRequest });
+    bundle = await prepareBundle({ files, issue: budget.issue, pullRequest: budget.pullRequest });
     const codexHome = process.env.CODEX_AUDITOR_HOME || path.join(linuxHome(auditorUser), '.codex-delivery', 'auditor');
     const executor = new CodexExecutor({ apiKey: process.env.OPENAI_API_KEY, authMode, model, implementerUser, auditorUser });
     const response = await executor.runFresh({
@@ -174,6 +250,7 @@ export async function main() {
       networkAccessEnabled: false
     });
     const finalized = finalizeGithubNativeAuditResult({ request, modelResult: response.result, reviewerRunId });
+    const enrichedResult = { ...finalized.result, modelUsage: response.usage ?? null, providerCalls: 1 };
     const payload = {
       schemaVersion: 1,
       repository,
@@ -182,30 +259,15 @@ export async function main() {
       sourceWorkflowRunId,
       auditWorkflowRunId: reviewerRunId,
       request,
-      result: finalized.result,
+      result: enrichedResult,
       outcome: finalized.outcome,
       modelUsage: response.usage ?? null,
+      providerCalls: 1,
       reviewerContextId: response.contextId,
-      diffContext: {
-        strategy: diffEvidence.manifest.strategy,
-        limits: diffEvidence.manifest.limits,
-        fullDiffBytes: diffEvidence.manifest.fullDiffBytes,
-        fullDiffSha256: diffEvidence.manifest.fullDiffSha256,
-        boundedBytes: diffEvidence.manifest.boundedBytes,
-        includedCount: diffEvidence.manifest.included.length,
-        omittedCount: diffEvidence.manifest.omitted.length
-      },
-      materialContext: {
-        strategy: materialContext.strategy,
-        limits: materialContext.limits,
-        totalBytes: materialContext.totalBytes,
-        fileCount: materialContext.files.length,
-        omittedCount: materialContext.omitted.length
-      }
+      ...contextPayload
     };
-    await mkdir(path.dirname(resultPath), { recursive: true });
-    await writeFile(resultPath, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    process.stdout.write(`${JSON.stringify({ ok: true, pullRequestNumber, candidateSha: request.candidate.materialHeadSha, decision: finalized.result.decision, resultPath })}\n`);
+    await writeAuditResult(resultPath, payload);
+    process.stdout.write(`${JSON.stringify({ ok: true, pullRequestNumber, candidateSha: request.candidate.materialHeadSha, decision: finalized.result.decision, providerCalls: 1, resultPath })}\n`);
   } finally {
     if (bundle) await rm(bundle, { recursive: true, force: true });
   }

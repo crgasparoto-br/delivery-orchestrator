@@ -12,6 +12,7 @@ const AUDIT_CONTEXT_GENERATED_PATTERNS = [
   /(?:^|\/)package-lock\.json$/,
   /(?:^|\/)\.github\/aw\/actions-lock\.json$/
 ];
+const WORKER_PROMPT_PATTERN = /^\.github\/workflows\/delivery-v2-worker-(?:claude|codex|copilot)-(?:fast|standard|critical)\.md$/;
 const DIRECT_IMPORT_EXTENSIONS = ['.mjs', '.js', '.cjs', '.ts', '.tsx', '.jsx', '.json'];
 
 export const DEFAULT_AUDIT_CONTEXT_LIMITS = Object.freeze({
@@ -79,10 +80,12 @@ function normalizeAuditContextLimits(limits = {}) {
 }
 
 function auditContextPriority(filePath) {
-  if (/^(?:src|scripts|actions|config|schemas)\//.test(filePath) || /^\.github\/(?:scripts|workflows)\//.test(filePath)) return 0;
+  if (/^(?:src|scripts|actions)\//.test(filePath) || /^\.github\/scripts\//.test(filePath)) return 0;
   if (/^(?:test|tests|__tests__)\//.test(filePath) || /(?:^|\/)test\./.test(filePath)) return 1;
-  if (/^(?:docs|README)/.test(filePath)) return 2;
-  return 3;
+  if (/^(?:config|schemas)\//.test(filePath) || (/^\.github\/workflows\//.test(filePath) && !WORKER_PROMPT_PATTERN.test(filePath))) return 2;
+  if (/^(?:docs|README)/.test(filePath)) return 3;
+  if (WORKER_PROMPT_PATTERN.test(filePath)) return 4;
+  return 5;
 }
 
 function auditContextPathAllowed(filePath) {
