@@ -182,12 +182,14 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
     return true;
   }
 
+  const materialEntries = [];
   const eligible = [];
   for (const entry of entries) {
     if (generatedLowValuePath(entry.path)) {
       omitted.push({ index: entry.index, path: entry.path, bytes: entry.bytes, sha256: entry.sha256, category: entry.category, reason: 'generated-low-value' });
       continue;
     }
+    materialEntries.push(entry);
     if (entry.bytes > resolvedLimits.maxFileBytes) {
       omitted.push({ index: entry.index, path: entry.path, bytes: entry.bytes, sha256: entry.sha256, category: entry.category, reason: 'max-file-bytes' });
       continue;
@@ -196,25 +198,52 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
   }
 
   const reservationCandidates = new Map();
+  const requiredReservationCategories = new Set();
+  const reservationFailureReasons = [];
   for (const category of RESERVED_SEMANTIC_CATEGORIES) {
+    const materialCandidates = materialEntries.filter((entry) => entry.category === category);
+    if (materialCandidates.length === 0) continue;
+    requiredReservationCategories.add(category);
     const candidates = eligible
       .filter((entry) => entry.category === category)
       .sort((a, b) => a.bytes - b.bytes || a.index - b.index);
     if (candidates.length > 0) reservationCandidates.set(category, candidates[0]);
-  }
-  for (const category of RESERVED_SEMANTIC_CATEGORIES) {
-    const representative = reservationCandidates.get(category);
-    if (representative) include(representative);
+    else reservationFailureReasons.push(`required-category-no-eligible-representative:${category}`);
   }
 
-  const spillover = eligible
-    .filter((entry) => !includedIndexes.has(entry.index))
-    .sort((a, b) => SEMANTIC_CATEGORY_ORDER.indexOf(a.category) - SEMANTIC_CATEGORY_ORDER.indexOf(b.category) || a.index - b.index);
-  for (const entry of spillover) include(entry);
+  const requiredRepresentatives = RESERVED_SEMANTIC_CATEGORIES
+    .map((category) => reservationCandidates.get(category))
+    .filter(Boolean);
+  const requiredReservationBytes = requiredRepresentatives.reduce((sum, entry) => sum + entry.bytes, 0);
+  const requiredReservationCount = requiredReservationCategories.size;
+  if (requiredReservationCount > resolvedLimits.maxFiles) reservationFailureReasons.push('required-reservation-file-limit-exceeded');
+  if (requiredReservationBytes > resolvedLimits.maxTotalBytes) reservationFailureReasons.push('required-reservation-byte-limit-exceeded');
+
+  const reservationPreflightComplete = reservationFailureReasons.length === 0;
+  if (reservationPreflightComplete) {
+    for (const category of RESERVED_SEMANTIC_CATEGORIES) {
+      const representative = reservationCandidates.get(category);
+      if (representative && !include(representative)) reservationFailureReasons.push(`required-reservation-not-included:${category}`);
+    }
+  }
+  const reservationCoverageComplete = reservationFailureReasons.length === 0
+    && [...requiredReservationCategories].every((category) => {
+      const representative = reservationCandidates.get(category);
+      return Boolean(representative && includedIndexes.has(representative.index));
+    });
+
+  if (reservationCoverageComplete) {
+    const spillover = eligible
+      .filter((entry) => !includedIndexes.has(entry.index))
+      .sort((a, b) => SEMANTIC_CATEGORY_ORDER.indexOf(a.category) - SEMANTIC_CATEGORY_ORDER.indexOf(b.category) || a.index - b.index);
+    for (const entry of spillover) include(entry);
+  }
 
   for (const entry of eligible) {
     if (includedIndexes.has(entry.index)) continue;
-    const reason = included.length >= resolvedLimits.maxFiles ? 'max-files' : 'max-total-bytes';
+    const reason = reservationCoverageComplete
+      ? (included.length >= resolvedLimits.maxFiles ? 'max-files' : 'max-total-bytes')
+      : 'semantic-reservation-incomplete';
     omitted.push({ index: entry.index, path: entry.path, bytes: entry.bytes, sha256: entry.sha256, category: entry.category, reason });
   }
 
@@ -222,7 +251,7 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
   const categoryReservations = Object.freeze(Object.fromEntries(SEMANTIC_CATEGORY_ORDER.map((category) => {
     const representative = reservationCandidates.get(category);
     return [category, Object.freeze({
-      required: RESERVED_SEMANTIC_CATEGORY_SET.has(category) && Boolean(representative),
+      required: RESERVED_SEMANTIC_CATEGORY_SET.has(category) && requiredReservationCategories.has(category),
       path: representative?.path ?? null,
       bytes: representative?.bytes ?? 0,
       included: Boolean(representative && includedIndexes.has(representative.index))
@@ -230,11 +259,15 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
   })));
   const boundedText = orderedIncluded.map((entry) => entry.block).join('');
   const manifest = Object.freeze({
-    schemaVersion: 3,
+    schemaVersion: 4,
     strategy: 'bounded-semantic-class-representative-unified-diff',
     limits: resolvedLimits,
     categoryReservations,
     categoryBytes: Object.freeze(categoryBytes),
+    requiredReservationCount,
+    requiredReservationBytes,
+    reservationCoverageComplete,
+    reservationFailureReasons: Object.freeze([...reservationFailureReasons]),
     fullDiffBytes: Buffer.byteLength(text, 'utf8'),
     fullDiffSha256: sha256(text),
     changedPathCount: normalizedChangedPaths.length,

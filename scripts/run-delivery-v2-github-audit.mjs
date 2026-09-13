@@ -81,7 +81,7 @@ function auditPrompt(request) {
     '',
     'Your entire allowed context is the sanitized bundle in the current working directory: AUDIT_REQUEST.json, DELIVERY_CONTRACT.md, ISSUE.json, PULL_REQUEST.json, CANDIDATE.diff, DIFF_MANIFEST.json and MATERIAL_CONTEXT.json. ISSUE.json and PULL_REQUEST.json are deterministic bounded projections, not raw GitHub API objects. Do not seek implementation conversation history, hidden implementer reasoning, retired delivery snapshots, generated workflow locks or unrelated repository inventory. Do not modify files or Git state.',
     '',
-    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, derives each represented path from its own Git diff identity, lists every changed path, and records included or omitted diff blocks with explicit reasons. Within the fixed byte ceiling, the selector reserves one eligible representative from each semantic class before any spillover so executable source cannot starve tests, contract/config, evidence, canonical docs, or active worker prompts. MATERIAL_CONTEXT.json is supplemental and suppresses bounded-diff representatives only after exact diff-path identity is proven; if exact alignment cannot be proven, the runtime fails closed before material context or model invocation. Generated locks never displace semantic material; every changed path remains represented by the bounded diff, supplemental context, or an explicit omission reason. Respect both manifests and their limits. If a release-blocking conclusion genuinely depends on still-omitted diff or file context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
+    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, derives each represented path from its own Git diff identity, lists every changed path, and records included or omitted diff blocks with explicit reasons. Within the fixed byte ceiling, the selector reserves one eligible representative from each required semantic class before any spillover so executable source cannot starve tests, contract/config, evidence, canonical docs, or active worker prompts. If all required semantic reservations cannot fit simultaneously, the runtime marks the bundle blocked and returns a zero-provider-call context-insufficient rejection before model invocation. MATERIAL_CONTEXT.json is supplemental and suppresses bounded-diff representatives only after exact diff-path identity is proven; if exact alignment cannot be proven, the runtime fails closed before material context or model invocation. Generated locks never displace semantic material; every changed path remains represented by the bounded diff, supplemental context, or an explicit omission reason. Respect both manifests and their limits. If a release-blocking conclusion genuinely depends on still-omitted diff or file context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
     '',
     `Audit exactly candidate ${request.candidate.materialHeadSha}. Treat AUDIT_REQUEST.json identity/check evidence as authoritative. First verify the issue acceptance contract against the bounded candidate diff and supplemental material context available in the bundle, then apply Delivery V2 invariants. Return all cheap blocking findings in one pass. Findings must identify concrete candidate behavior/configuration and discriminating evidence. Do not reject hypothetical future code that is absent from this candidate.`,
     '',
@@ -123,7 +123,9 @@ function auditContextPayload({ budget, diffEvidence, materialContext }) {
       includedCount: diffEvidence.manifest.included.length,
       omittedCount: diffEvidence.manifest.omitted.length,
       categoryBytes: diffEvidence.manifest.categoryBytes ?? null,
-      categoryReservations: diffEvidence.manifest.categoryReservations ?? null
+      categoryReservations: diffEvidence.manifest.categoryReservations ?? null,
+      reservationCoverageComplete: diffEvidence.manifest.reservationCoverageComplete ?? false,
+      reservationFailureReasons: diffEvidence.manifest.reservationFailureReasons ?? []
     },
     materialContext: {
       strategy: materialContext.strategy,
@@ -180,6 +182,9 @@ export async function main() {
   ]);
   const diffEvidence = boundAuditDiff(compareEvidence.diffText, compareEvidence.changedPaths);
   if (!diffEvidence.manifest.alignmentExact) throw new Error('audit diff path alignment could not be proven; refusing semantic audit before model invocation');
+  const semanticReservationPreflightReasons = diffEvidence.manifest.reservationCoverageComplete
+    ? []
+    : diffEvidence.manifest.reservationFailureReasons.map((reason) => `bounded-diff:${reason}`);
   const representedPaths = diffEvidence.manifest.included.map((entry) => entry.path).filter(Boolean);
   const materialContext = await fetchBoundedAuditContext(repository, candidateSha, compareEvidence.changedPaths, token, { representedPaths });
   const stablePullRequest = await fetchJson(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}`, token);
@@ -208,7 +213,13 @@ export async function main() {
     : new URL('../docs/delivery-v2/AUDIT_CONTRACT.md', import.meta.url);
   const contractText = await readFile(contractUrl, 'utf8');
   const files = materialBundleFiles({ request, contractText, diffEvidence, materialContext });
-  const budget = evaluateAuditBundleBudget({ riskProfile, issue, pullRequest: stablePullRequest, files });
+  const budget = evaluateAuditBundleBudget({
+    riskProfile,
+    issue,
+    pullRequest: stablePullRequest,
+    files,
+    preflightReasons: semanticReservationPreflightReasons
+  });
   const contextPayload = auditContextPayload({ budget, diffEvidence, materialContext });
 
   if (!budget.allowed) {

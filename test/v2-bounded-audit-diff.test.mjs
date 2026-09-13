@@ -11,10 +11,9 @@ function block(path, payload) {
 test('bounded audit diff preserves full-diff identity while limiting model context', () => {
   const diff = [
     block('docs/readme.md', 'docs'),
-    block('src/core.mjs', 'core'),
-    block('test/core.test.mjs', 'test')
+    block('src/core.mjs', 'core')
   ].join('');
-  const changedPaths = ['docs/readme.md', 'src/core.mjs', 'test/core.test.mjs'];
+  const changedPaths = ['docs/readme.md', 'src/core.mjs'];
   const bounded = boundAuditDiff(diff, changedPaths, {
     limits: { maxFiles: 1, maxFileBytes: 4096, maxTotalBytes: 4096 }
   });
@@ -22,14 +21,14 @@ test('bounded audit diff preserves full-diff identity while limiting model conte
   assert.equal(bounded.manifest.fullDiffSha256, createHash('sha256').update(diff).digest('hex'));
   assert.equal(bounded.manifest.fullDiffBytes, Buffer.byteLength(diff));
   assert.equal(bounded.manifest.alignmentExact, true);
+  assert.equal(bounded.manifest.reservationCoverageComplete, true);
   assert.deepEqual(bounded.manifest.included.map((item) => item.path), ['src/core.mjs']);
-  assert.equal(bounded.manifest.omitted.length, 2);
+  assert.equal(bounded.manifest.omitted.length, 1);
   assert.match(bounded.text, /src\/core\.mjs/);
   assert.doesNotMatch(bounded.text, /docs\/readme\.md/);
-  assert.doesNotMatch(bounded.text, /test\/core\.test\.mjs/);
 });
 
-test('generated locks and repetitive worker prompts cannot evict source and tests', () => {
+test('generated locks cannot evict required source, tests and active worker prompts', () => {
   const paths = [
     '.github/workflows/delivery-v2-worker-codex-critical.lock.yml',
     '.github/workflows/delivery-v2-worker-codex-critical.md',
@@ -38,16 +37,15 @@ test('generated locks and repetitive worker prompts cannot evict source and test
   ];
   const diff = paths.map((filePath) => block(filePath, filePath)).join('');
   const bounded = boundAuditDiff(diff, paths, {
-    limits: { maxFiles: 2, maxFileBytes: 4096, maxTotalBytes: 8192 }
+    limits: { maxFiles: 3, maxFileBytes: 4096, maxTotalBytes: 8192 }
   });
+  const included = new Set(bounded.manifest.included.map((item) => item.path));
 
-  assert.deepEqual(bounded.manifest.included.map((item) => item.path), [
-    'src/v2/controller-observability.mjs',
-    'test/v2-controller-observability.test.mjs'
-  ]);
+  assert.equal(bounded.manifest.reservationCoverageComplete, true);
+  assert.ok(included.has('.github/workflows/delivery-v2-worker-codex-critical.md'));
+  assert.ok(included.has('src/v2/controller-observability.mjs'));
+  assert.ok(included.has('test/v2-controller-observability.test.mjs'));
   assert.equal(bounded.manifest.omitted.find((item) => item.path.endsWith('.lock.yml'))?.reason, 'generated-low-value');
-  assert.equal(bounded.manifest.omitted.find((item) => item.path.endsWith('-critical.md'))?.reason, 'max-files');
-  assert.doesNotMatch(bounded.text, /delivery-v2-worker-codex-critical/);
 });
 
 test('semantic representatives survive realistic code-heavy blocks under the unchanged 64 KiB ceiling', () => {
@@ -66,6 +64,7 @@ test('semantic representatives survive realistic code-heavy blocks under the unc
   });
   const included = new Set(bounded.manifest.included.map((item) => item.path));
 
+  assert.equal(bounded.manifest.reservationCoverageComplete, true);
   assert.ok([...included].some((filePath) => filePath.startsWith('src/v2/heavy-')));
   assert.ok(included.has('test/v2-heavy.test.mjs'));
   assert.ok(included.has('config/delivery-v2-requirements.json'));
@@ -77,6 +76,42 @@ test('semantic representatives survive realistic code-heavy blocks under the unc
   }
   assert.ok(bounded.manifest.boundedBytes <= 64 * 1024);
   assert.equal(bounded.manifest.strategy, 'bounded-semantic-class-representative-unified-diff');
+});
+
+test('semantic reservation overflow fails closed before spillover under the unchanged 64 KiB ceiling', () => {
+  const paths = [
+    'src/v2/heavy.mjs',
+    'test/v2-heavy.test.mjs',
+    'config/delivery-v2-requirements.json',
+    'docs/delivery-v2/evidence/dv2-013-training-system-fast.json',
+    'docs/delivery-v2/MASTER_SPEC.md',
+    '.github/workflows/delivery-v2-worker-codex-critical.md'
+  ];
+  const diff = paths.map((filePath, index) => block(filePath, String(index).repeat(8000))).join('');
+  const bounded = boundAuditDiff(diff, paths, {
+    limits: { maxFiles: 40, maxFileBytes: 24 * 1024, maxTotalBytes: 64 * 1024 }
+  });
+
+  assert.equal(bounded.manifest.requiredReservationCount, 6);
+  assert.ok(bounded.manifest.requiredReservationBytes > 64 * 1024);
+  assert.equal(bounded.manifest.reservationCoverageComplete, false);
+  assert.ok(bounded.manifest.reservationFailureReasons.includes('required-reservation-byte-limit-exceeded'));
+  assert.equal(bounded.manifest.included.length, 0);
+  assert.equal(bounded.manifest.boundedBytes, 0);
+  assert.ok(bounded.manifest.omitted.every((item) => item.reason === 'semantic-reservation-incomplete'));
+});
+
+test('required semantic category with no individually eligible block fails closed', () => {
+  const path = 'src/v2/oversized.mjs';
+  const bounded = boundAuditDiff(block(path, 'x'.repeat(3000)), [path], {
+    limits: { maxFiles: 4, maxFileBytes: 1024, maxTotalBytes: 4096 }
+  });
+
+  assert.equal(bounded.manifest.categoryReservations.executable.required, true);
+  assert.equal(bounded.manifest.categoryReservations.executable.included, false);
+  assert.equal(bounded.manifest.reservationCoverageComplete, false);
+  assert.ok(bounded.manifest.reservationFailureReasons.includes('required-category-no-eligible-representative:executable'));
+  assert.equal(bounded.manifest.omitted[0].reason, 'max-file-bytes');
 });
 
 test('canonical Delivery V2 docs cannot be displaced by a smaller noncanonical document', () => {
@@ -191,17 +226,20 @@ test('oversized diff blocks are omitted explicitly instead of being silently tru
   assert.equal(bounded.manifest.included.length, 0);
   assert.equal(bounded.manifest.omitted[0].path, 'src/large.mjs');
   assert.equal(bounded.manifest.omitted[0].reason, 'max-file-bytes');
-  assert.ok(bounded.manifest.omitted[0].bytes > 64);
+  assert.equal(bounded.manifest.reservationCoverageComplete, false);
+  assert.ok(bounded.manifest.reservationFailureReasons.includes('required-category-no-eligible-representative:executable'));
 });
 
-test('GitHub-native auditor materializes supplemental context only after verified diff-path alignment', async () => {
+test('GitHub-native auditor blocks incomplete semantic reservations through the deterministic bundle budget', async () => {
   const script = await import('node:fs/promises').then(({ readFile }) => readFile(new URL('../scripts/run-delivery-v2-github-audit.mjs', import.meta.url), 'utf8'));
   assert.match(script, /const diffEvidence = boundAuditDiff\(compareEvidence\.diffText, compareEvidence\.changedPaths\)/);
   assert.match(script, /if \(!diffEvidence\.manifest\.alignmentExact\) throw new Error\('audit diff path alignment could not be proven; refusing semantic audit before model invocation'\);/);
+  assert.match(script, /const semanticReservationPreflightReasons = diffEvidence\.manifest\.reservationCoverageComplete/);
+  assert.match(script, /bounded-diff:\$\{reason\}/);
+  assert.match(script, /preflightReasons: semanticReservationPreflightReasons/);
   assert.match(script, /const representedPaths = diffEvidence\.manifest\.included\.map\(\(entry\) => entry\.path\)\.filter\(Boolean\);/);
   assert.match(script, /fetchBoundedAuditContext\(repository, candidateSha, compareEvidence\.changedPaths, token, \{ representedPaths \}\)/);
-  assert.match(script, /if exact alignment cannot be proven, the runtime fails closed before material context or model invocation/);
-  assert.match(script, /reserves one eligible representative from each semantic class before any spillover/);
+  assert.match(script, /If all required semantic reservations cannot fit simultaneously, the runtime marks the bundle blocked and returns a zero-provider-call context-insufficient rejection before model invocation/);
   assert.match(script, /evaluateAuditBundleBudget/);
   assert.match(script, /providerCalls: 0/);
   assert.match(script, /'CANDIDATE\.diff': diffEvidence\.text/);
