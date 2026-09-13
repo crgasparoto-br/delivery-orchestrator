@@ -21,11 +21,12 @@ const GENERATED_LOW_VALUE_PATTERNS = Object.freeze([
   /(?:^|\/)\.github\/aw\/actions-lock\.json$/
 ]);
 const WORKER_PROMPT_PATTERN = /^\.github\/workflows\/delivery-v2-worker-(?:claude|codex|copilot)-(?:fast|standard|critical)\.md$/;
-const SEMANTIC_CATEGORY_ORDER = Object.freeze(['executable', 'tests', 'contract', 'docs', 'prompts', 'other']);
+const SEMANTIC_CATEGORY_ORDER = Object.freeze(['executable', 'tests', 'config', 'evidence', 'docs', 'prompts', 'other']);
 const SEMANTIC_CATEGORY_WEIGHTS = Object.freeze({
   executable: 5,
   tests: 3,
-  contract: 3,
+  config: 2,
+  evidence: 2,
   docs: 2,
   prompts: 2,
   other: 1
@@ -66,8 +67,9 @@ function semanticCategory(filePath) {
   const value = String(filePath ?? '');
   if (/^(?:src|scripts|actions)\//.test(value) || /^\.github\/scripts\//.test(value)) return 'executable';
   if (/^(?:test|tests|__tests__)\//.test(value) || /(?:^|\/)test\./.test(value)) return 'tests';
-  if (/^(?:config|schemas)\//.test(value) || /^docs\/delivery-v2\/evidence\//.test(value)) return 'contract';
-  if (/^\.github\/workflows\//.test(value) && !WORKER_PROMPT_PATTERN.test(value)) return 'contract';
+  if (/^docs\/delivery-v2\/evidence\//.test(value)) return 'evidence';
+  if (/^(?:config|schemas)\//.test(value)) return 'config';
+  if (/^\.github\/workflows\//.test(value) && !WORKER_PROMPT_PATTERN.test(value)) return 'config';
   if (/^(?:docs|README)/.test(value)) return 'docs';
   if (WORKER_PROMPT_PATTERN.test(value)) return 'prompts';
   return 'other';
