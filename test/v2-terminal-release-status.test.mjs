@@ -28,7 +28,7 @@ test('CI emits generated worker bytes in logs only when strict compile detects d
   const body = await readFile('.github/workflows/delivery-v2-ci.yml', 'utf8');
   assert.match(body, /gh aw compile --strict/);
   assert.match(body, /name: Emit compiled worker drift for deterministic remediation/);
-  assert.match(body, /if: steps\.compiled-workers\.outputs\.drift == 'true'/);
+  assert.match(body, /if: steps\.worker-identity\.outputs\.changed == 'true' && steps\.compiled-workers\.outputs\.drift == 'true'/);
   assert.match(body, /DV2_LOCK_ARCHIVE_SHA256/);
   assert.match(body, /DV2_LOCK_ARCHIVE_CHUNK/);
   assert.match(body, /git diff --exit-code -- \.github\/workflows\/delivery-v2-worker-\*\.lock\.yml \.github\/aw\/actions-lock\.json/);
