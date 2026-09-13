@@ -7,6 +7,8 @@ export const DELIVERY_V2_PERSISTENT_STATE_SCHEMA_VERSION = 1;
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const STATE_SET = new Set(DELIVERY_V2_STATES);
+const CI_FAILURE_CLASSES = new Set(['actionable', 'external', 'preexisting']);
+const AUDIT_DECISIONS = new Set(['approved', 'rejected']);
 
 function requireObject(value, label) {
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be an object`);
@@ -77,13 +79,45 @@ function normalizeCheck(check, index) {
 
 function normalizeFinding(finding, index) {
   const value = requireObject(finding, `blockingFindings[${index}]`);
+  const remediationMode = requireString(value.remediationMode, `blockingFindings[${index}].remediationMode`).toLowerCase();
+  if (!['targeted', 'systemic'].includes(remediationMode)) throw new Error(`blockingFindings[${index}].remediationMode must be targeted or systemic`);
   return Object.freeze({
     id: requireString(value.id, `blockingFindings[${index}].id`),
     candidateSha: requireSha(value.candidateSha, `blockingFindings[${index}].candidateSha`),
+    severity: requireString(value.severity, `blockingFindings[${index}].severity`).toLowerCase(),
+    violatedContract: requireString(value.violatedContract, `blockingFindings[${index}].violatedContract`),
     surface: requireString(value.surface, `blockingFindings[${index}].surface`),
     failureMode: requireString(value.failureMode, `blockingFindings[${index}].failureMode`),
+    evidence: requireString(value.evidence, `blockingFindings[${index}].evidence`),
+    remediationMode,
+    blocksRelease: value.blocksRelease === true,
     evidenceRef: requireString(value.evidenceRef, `blockingFindings[${index}].evidenceRef`)
   });
+}
+
+function normalizeCiFailure(value, materialHeadSha) {
+  if (value == null) return null;
+  const failure = requireObject(value, 'ciFailure');
+  const candidateSha = requireSha(failure.candidateSha, 'ciFailure.candidateSha');
+  if (candidateSha !== materialHeadSha) throw new Error('ciFailure is stale for material head');
+  const failureClass = requireString(failure.failureClass, 'ciFailure.failureClass').toLowerCase();
+  if (!CI_FAILURE_CLASSES.has(failureClass)) throw new Error('ciFailure.failureClass is unsupported');
+  return Object.freeze({
+    candidateSha,
+    failureClass,
+    cause: requireString(failure.cause, 'ciFailure.cause'),
+    evidenceRef: requireString(failure.evidenceRef, 'ciFailure.evidenceRef')
+  });
+}
+
+function normalizeAuditEvidence(value, materialHeadSha) {
+  if (value == null) return null;
+  const evidence = requireObject(value, 'auditEvidence');
+  const candidateSha = requireSha(evidence.candidateSha, 'auditEvidence.candidateSha');
+  if (candidateSha !== materialHeadSha) throw new Error('auditEvidence is stale for material head');
+  const decision = requireString(evidence.decision, 'auditEvidence.decision').toLowerCase();
+  if (!AUDIT_DECISIONS.has(decision)) throw new Error('auditEvidence.decision is unsupported');
+  return Object.freeze({ candidateSha, decision, evidenceRef: requireString(evidence.evidenceRef, 'auditEvidence.evidenceRef') });
 }
 
 function normalizeEvidenceRefs(value = []) {
@@ -112,6 +146,11 @@ export function normalizePersistentDeliveryState(rawState) {
 
   const workflowChecks = (value.workflowChecks ?? []).map(normalizeCheck);
   const blockingFindings = (value.blockingFindings ?? []).map(normalizeFinding);
+  const ciFailure = normalizeCiFailure(value.ciFailure, materialHeadSha);
+  const auditEvidence = normalizeAuditEvidence(value.auditEvidence, materialHeadSha);
+  const status = normalizeStatus(value.status);
+  if (status === 'ci-failed-remediable' && (!ciFailure || ciFailure.failureClass !== 'actionable')) throw new Error('ci-failed-remediable requires a persisted actionable ciFailure');
+  if (status === 'audit-failed-remediable' && blockingFindings.filter((finding) => finding.blocksRelease).length === 0) throw new Error('audit-failed-remediable requires persisted blocking findings');
 
   return Object.freeze({
     schemaVersion: DELIVERY_V2_PERSISTENT_STATE_SCHEMA_VERSION,
@@ -126,9 +165,11 @@ export function normalizePersistentDeliveryState(rawState) {
     effectiveRisk: policy.profile,
     classifier: normalizeClassifier(value.classifier, materialHeadSha),
     provider: requireString(value.provider, 'provider').toLowerCase(),
-    status: normalizeStatus(value.status),
+    status,
     attempts,
     workflowChecks: Object.freeze(workflowChecks),
+    ciFailure,
+    auditEvidence,
     blockingFindings: Object.freeze(blockingFindings),
     evidenceRefs: normalizeEvidenceRefs(value.evidenceRefs),
     lastReason: value.lastReason == null ? null : requireString(value.lastReason, 'lastReason'),
@@ -154,6 +195,8 @@ export function createPersistentDeliveryState(input) {
     status: value.status ?? 'queued',
     attempts: value.attempts ?? { implementation: 0, audit: 0, auditRemediation: 0 },
     workflowChecks: value.workflowChecks ?? [],
+    ciFailure: value.ciFailure ?? null,
+    auditEvidence: value.auditEvidence ?? null,
     blockingFindings: value.blockingFindings ?? [],
     evidenceRefs: value.evidenceRefs ?? [],
     lastReason: value.lastReason ?? null,
@@ -217,6 +260,8 @@ export function reconcilePersistentState(rawState, rawObserved) {
     status: 'queued',
     classifier: { ...state.classifier, subjectSha: observed.remoteHeadSha, current: false },
     workflowChecks: [],
+    ciFailure: null,
+    auditEvidence: null,
     blockingFindings: [],
     evidenceRefs: [],
     lastReason: headDrift ? 'remote-head-drift' : 'remote-base-drift'
@@ -265,6 +310,8 @@ export function applyPersistentCheckpoint(rawState, checkpoint) {
   const attempts = value.attempts == null ? state.attempts : normalizeAttempts(value.attempts);
   monotonicAttempts(state.attempts, attempts);
   const workflowChecks = value.workflowChecks == null ? state.workflowChecks : value.workflowChecks.map(normalizeCheck);
+  const ciFailure = value.ciFailure === undefined ? state.ciFailure : normalizeCiFailure(value.ciFailure, state.materialHeadSha);
+  const auditEvidence = value.auditEvidence === undefined ? state.auditEvidence : normalizeAuditEvidence(value.auditEvidence, state.materialHeadSha);
   const blockingFindings = value.blockingFindings == null ? state.blockingFindings : value.blockingFindings.map(normalizeFinding);
   assertEvidenceBoundToHead(workflowChecks, blockingFindings, state.materialHeadSha);
 
@@ -282,6 +329,8 @@ export function applyPersistentCheckpoint(rawState, checkpoint) {
     provider: value.provider ?? state.provider,
     attempts,
     workflowChecks,
+    ciFailure,
+    auditEvidence,
     blockingFindings,
     evidenceRefs: value.evidenceRefs == null ? state.evidenceRefs : normalizeEvidenceRefs(value.evidenceRefs),
     lastReason: value.lastReason === undefined ? state.lastReason : value.lastReason,

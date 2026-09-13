@@ -37,13 +37,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  merge_preview:
+    name: V2 merge preview compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout merge preview
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+node-version: 22
+cache: npm
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Validate merge-preview contract compatibility
+        run: npm run verify:v2
+
   foundation:
     name: V2 platform checks
+    needs: merge_preview
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout
+      - name: Checkout exact PR head
         uses: actions/checkout@v4
+        with:
+ref: ${{ github.event.pull_request.head.sha }}
+fetch-depth: 0
+
+      - name: Assert exact-head identity
+        shell: bash
+        env:
+EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

@@ -8,7 +8,8 @@ import {
   evaluateOperationalRelease,
   nextOperationalAction,
   operationalRemediationInput,
-  persistentStateFromOperational
+  persistentStateFromOperational,
+  operationalStateFromPersistent
 } from '../src/v2/operational-controller.mjs';
 
 const A = 'a'.repeat(40);
@@ -83,4 +84,21 @@ test('release evaluation is impossible before operational state is ready', () =>
   const result = evaluateOperationalRelease({ state, releaseInput: {} });
   assert.equal(result.readiness, false);
   assert.deepEqual(result.reasons, ['operational-state:ci-pending']);
+});
+
+
+test('persistent resume preserves actionable CI and semantic audit remediation packets without degradation', () => {
+  let ciState = createOperationalDelivery({ plan: planFor('critical'), materialHeadSha: A });
+  ciState = applyOperationalEvent(ciState, { type: 'ci-result', result: { candidateSha: A, conclusion: 'failure', failureClass: 'actionable', cause: 'unit assertion failed', evidenceRef: 'run:ci-fail' } });
+  const ciPersistent = persistentStateFromOperational({ state: ciState, identity: identity(), classifier: { version: 'v1', fingerprint: 'fingerprint' } });
+  const ciRestored = operationalStateFromPersistent(ciPersistent);
+  assert.deepEqual(operationalRemediationInput(ciRestored).ciFailure, ciState.ciFailure);
+
+  let auditState = createOperationalDelivery({ plan: planFor('critical'), materialHeadSha: A });
+  auditState = applyOperationalEvent(auditState, { type: 'ci-result', result: { candidateSha: A, conclusion: 'success', evidenceRef: 'run:ok' } });
+  auditState = applyOperationalEvent(auditState, { type: 'audit-result', result: { candidateSha: A, decision: 'rejected', evidenceRef: 'audit:reject', findings: [{ id: 'DV2-TEST-ROUNDTRIP', candidateSha: A, severity: 'critical', violatedContract: 'DV2-009', blocksRelease: true, remediationMode: 'systemic', surface: 'src/v2/example.mjs', failureMode: 'resume loses evidence', evidence: 'round-trip mismatch' }] } });
+  const auditPersistent = persistentStateFromOperational({ state: auditState, identity: identity(), classifier: { version: 'v1', fingerprint: 'fingerprint' } });
+  const auditRestored = operationalStateFromPersistent(auditPersistent);
+  assert.deepEqual(operationalRemediationInput(auditRestored).findings, auditState.blockingFindings);
+  assert.deepEqual(auditRestored.auditEvidence, auditState.auditEvidence);
 });

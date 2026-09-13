@@ -30,7 +30,7 @@ function ciSuccess(state) {
 }
 
 function blockingFinding(sha, id = 'DV2-TEST-001') {
-  return { id, candidateSha: sha, blocksRelease: true, remediationMode: 'targeted', surface: 'src/example.mjs', failureMode: 'contract violation' };
+  return { id, candidateSha: sha, severity: 'high', violatedContract: 'test contract', blocksRelease: true, remediationMode: 'targeted', surface: 'src/example.mjs', failureMode: 'contract violation', evidence: 'discriminating evidence' };
 }
 
 test('CRITICAL happy path is deterministic and reaches ready-for-human-merge with independent audit budget accounted', () => {

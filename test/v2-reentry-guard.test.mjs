@@ -13,6 +13,7 @@ import { controllerMetadataForNewMaterial, markExistingAuditInFlight, rebuildCiP
 import { ciFailureClassForEvidence } from '../src/v2/controller-runtime.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { operationalStateFromPersistent } from '../src/v2/operational-controller.mjs';
+import { validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
@@ -187,13 +188,14 @@ test('duplicate managed PRs fail closed rather than selecting one nondeterminist
 
 test('state and bootstrap parsers reject ambiguity and preserve one canonical envelope', () => {
   const stateBody = `<!-- delivery-v2-state -->\n## Delivery V2 controller state\n\n\`\`\`json\n${JSON.stringify(envelope())}\n\`\`\``;
-  const parsedState = parsePersistentStateEnvelope([{ id: 1, body: stateBody }]);
+  const parsedState = parsePersistentStateEnvelope([{ id: 1, body: stateBody, user: { login: 'owner' }, author_association: 'OWNER' }], { trustedLogin: 'owner' });
   assert.equal(parsedState.commentId, 1);
   assert.equal(parsedState.persistent.pullRequestNumber, 77);
-  assert.throws(() => parsePersistentStateEnvelope([{ id: 1, body: stateBody }, { id: 2, body: stateBody }]), /multiple Delivery V2 state comments/);
+  assert.throws(() => parsePersistentStateEnvelope([{ id: 1, body: stateBody, user: { login: 'owner' }, author_association: 'OWNER' }, { id: 2, body: stateBody, user: { login: 'owner' }, author_association: 'OWNER' }], { trustedLogin: 'owner' }), /multiple Delivery V2 state comments/);
+  assert.throws(() => parsePersistentStateEnvelope([{ id: 1, body: stateBody, user: { login: 'attacker' }, author_association: 'NONE' }], { trustedLogin: 'owner' }), /untrusted Delivery V2 state marker/);
 
   const bootstrapBody = `<!-- delivery-v2-bootstrap-state -->\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify({ schemaVersion: 1, repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex', requestedRisk: 'critical', effectiveRisk: 'critical', implementationAttempts: 1, status: 'reserved-initial-attempt', controllerRunId: 99, workerWorkflow: 'worker.yml', dispatchNonce: 'nonce-1' })}\n\`\`\``;
-  const lease = parseBootstrapLease([{ id: 3, body: bootstrapBody }]);
+  const lease = parseBootstrapLease([{ id: 3, body: bootstrapBody, user: { login: 'owner' }, author_association: 'OWNER' }], { trustedLogin: 'owner' });
   assert.equal(lease.implementationAttempts, 1);
   assert.equal(lease.controllerRunId, 99);
 });

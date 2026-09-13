@@ -13,6 +13,8 @@ run-name: "Delivery V2 worker ${{ github.event.inputs.dispatch_nonce }}"
 permissions:
   contents: read
   issues: read
+env:
+  GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "${{ github.event.inputs.target_pr == '' && 'true' || 'false' }}"
 engine: codex
 max-turns: 80
 max-ai-credits: 500

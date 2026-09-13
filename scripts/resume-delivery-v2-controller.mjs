@@ -15,7 +15,8 @@ import {
   persistentStateFromOperational
 } from '../src/v2/operational-controller.mjs';
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
-import { ciFailureClassForEvidence, collectCiFailureEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { parseTrustedJsonEnvelope, selectTrustedMarkerComment, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const AUDIT_MARKER = '<!-- delivery-v2-independent-audit -->';
@@ -119,15 +120,12 @@ async function listComments(repository, prNumber, token) {
   return comments;
 }
 
-function parseStateComment(comments) {
-  const matching = comments.filter((comment) => String(comment.body ?? '').startsWith(STATE_MARKER));
-  if (matching.length > 1) throw new Error('multiple Delivery V2 state comments found; refusing ambiguous resume');
-  if (matching.length === 0) return null;
-  const fenced = String(matching[0].body ?? '').match(/```json\s*([\s\S]*?)\s*```/);
-  if (!fenced) throw new Error('Delivery V2 state comment is missing JSON envelope');
-  const envelope = JSON.parse(fenced[1]);
+function parseStateComment(comments, trustedLogin) {
+  const parsed = parseTrustedJsonEnvelope(comments, { marker: STATE_MARKER, label: 'Delivery V2 state', trustedLogin });
+  if (!parsed) return null;
+  const envelope = parsed.value;
   if (!envelope?.persistent) throw new Error('Delivery V2 state comment is missing persistent state');
-  return Object.freeze({ commentId: matching[0].id, persistent: envelope.persistent, controller: envelope.controller ?? {} });
+  return Object.freeze({ commentId: parsed.commentId, persistent: envelope.persistent, controller: envelope.controller ?? {} });
 }
 
 async function classifierIdentity(repository, ref, token) {
@@ -167,7 +165,7 @@ async function upsertStateComment({ repository, prNumber, state, identity, class
   });
   const body = `${STATE_MARKER}\n## Delivery V2 controller state\n\n\`\`\`json\n${JSON.stringify({ persistent, controller: extra }, null, 2)}\n\`\`\``;
   const comments = await listComments(repository, prNumber, token);
-  const existing = comments.find((comment) => String(comment.body ?? '').startsWith(STATE_MARKER));
+  const existing = selectTrustedMarkerComment(comments, { marker: STATE_MARKER, label: 'Delivery V2 state', trustedLogin: trustedCommentAuthorForRepository(repository) });
   if (existing) await patchJson(`https://api.github.com/repos/${repository}/issues/comments/${existing.id}`, token, { body });
   else await postJson(`https://api.github.com/repos/${repository}/issues/${prNumber}/comments`, token, { body });
   return persistent;
@@ -304,6 +302,7 @@ export async function main() {
   const targetReadToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
   const actionsToken = requiredEnv('GITHUB_TOKEN');
+  const controllerRunId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
   const resultPath = process.env.CONTROLLER_RESULT_PATH || path.join(process.env.RUNNER_TEMP || '/tmp', 'delivery-v2-controller-result.json');
   const targetPolicy = await loadControllerTarget(targetRepository, baseBranch);
   const repositoryPolicy = await loadRepositoryRiskPolicy(targetRepository);
@@ -324,9 +323,14 @@ export async function main() {
   let latestSourceRun = null;
   let providerCalls = 0;
 
-  const stateEnvelope = parseStateComment(await listComments(targetRepository, resumePr, targetReadToken));
+  const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
+  const stateEnvelope = parseStateComment(await listComments(targetRepository, resumePr, targetReadToken), trustedLogin);
+  if (!stateEnvelope) throw new Error('managed PR is missing authoritative Delivery V2 persistent state');
+  const priorControllerRunId = positiveInteger(stateEnvelope.controller?.controllerRunId, 'persisted controllerRunId');
+  const priorControllerRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${priorControllerRunId}`, actionsToken);
+  validateControllerRunProvenance(priorControllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
   let state;
-  let controller = stateEnvelope?.controller ?? {};
+  let controller = { ...stateEnvelope.controller, controllerRunId, controllerRepository: orchestratorRepository, controllerRef: orchestratorRef, controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml' };
   if (stateEnvelope) {
     const reconciled = reconcilePersistentState(stateEnvelope.persistent, {
       repository: targetRepository,
@@ -570,11 +574,12 @@ export async function main() {
     }
     const finalPullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
     const releaseIdentity = releaseIdentityFromPullRequest(finalPullRequest, { materialHeadSha, baseSha: expectedBaseSha });
+    const mergePreview = await collectMergePreviewEvidence({ repository: targetRepository, pullRequest: finalPullRequest, materialHeadSha, baseSha: expectedBaseSha, workflowRun: latestSourceRun, requiredJobName: targetPolicy.mergePreviewJobName, token: targetReadToken });
     const releaseInput = {
       schemaVersion: 1, repository: targetRepository, pullRequestNumber: resumePr, materialHeadSha, currentRemoteHeadSha: releaseIdentity.currentRemoteHeadSha,
       evidenceCollection: { materialHeadSha, remoteHeadSha: materialHeadSha, evidenceRef: `github:${targetRepository}#${resumePr}@${materialHeadSha}` },
       classifier: { subjectSha: materialHeadSha, profile: state.riskProfile, version: classifier.version, fingerprint: classifier.fingerprint, expectedFingerprint: classifier.fingerprint, evidenceRef: classifier.evidenceRef },
-      mergePreview: releaseIdentity.mergePreview,
+      mergePreview,
       checks: [{ name: latestCheck.name, required: true, subjectSha: materialHeadSha, status: latestCheck.status, conclusion: latestCheck.conclusion, workflowRunId: latestSourceRun.id, evidenceRef: latestCheck.details_url ?? latestSourceRun.html_url }],
       standardAuditRequired: targetPolicy.standardAuditRequired !== false, audit, unresolvedFindings: [], blockers: []
     };

@@ -38,6 +38,7 @@ for (const provider of ['copilot', 'codex', 'claude']) {
       assert.match(body, /fetch: \["refs\/pulls\/open\/\*"\]/);
       assert.match(body, /github-token: \$\{\{ secrets\.DELIVERY_GITHUB_READ_TOKEN \}\}/);
       assert.match(body, /safe-outputs:[\s\S]*github-token: \$\{\{ secrets\.DELIVERY_GITHUB_WRITE_TOKEN \}\}/);
+      assert.match(body, /GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "\$\{\{ github\.event\.inputs\.target_pr == '' && 'true' \|\| 'false' \}\}"/);
       assert.match(body, /create-pull-request:/);
       assert.match(body, /title-prefix: "\[delivery-v2\] "/);
       assert.match(body, /push-to-pull-request-branch:/);
@@ -47,6 +48,7 @@ for (const provider of ['copilot', 'codex', 'claude']) {
       assert.match(body, /fallback-as-pull-request: false/);
       assert.match(body, /Remediation mode/);
       assert.match(body, /Do \*\*not\*\* create a replacement PR/);
+      assert.match(lockBody, /GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST/);
       assert.doesNotMatch(body, /merge-pull-request:/);
       assert.doesNotMatch(body, /entregar-issue|auditar-issue/i);
       assert.doesNotMatch(body, /permissions:[\s\S]{0,200}contents: write/);

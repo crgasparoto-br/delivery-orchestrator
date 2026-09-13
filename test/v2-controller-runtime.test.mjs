@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ciFailureClassForEvidence, expectedDispatchTitle, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForEvidence, expectedDispatchTitle, mergePreviewEvidenceFromWorkflow, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload } from '../src/v2/controller-runtime.mjs';
 
 const SHA = 'a'.repeat(40);
 
@@ -31,17 +31,29 @@ test('authoritative audit artifact is exact-run exact-head and fingerprint bound
 });
 
 
-test('release identity fails closed on base drift and requires a mergeable preview', () => {
+test('release identity never fabricates merge-preview validation from GitHub mergeability', () => {
   const baseSha = 'c'.repeat(40);
   const previewSha = 'd'.repeat(40);
   const pr = { number: 64, html_url: 'https://github.com/owner/target/pull/64', head: { sha: SHA }, base: { sha: baseSha }, merge_commit_sha: previewSha, mergeable: true };
   const identity = releaseIdentityFromPullRequest(pr, { materialHeadSha: SHA, baseSha });
   assert.equal(identity.currentBaseSha, baseSha);
-  assert.equal(identity.mergePreview.required, true);
   assert.equal(identity.mergePreview.previewSha, previewSha);
-  assert.equal(identity.mergePreview.conclusion, 'success');
+  assert.equal(identity.mergePreview.status, 'pending');
+  assert.equal(identity.mergePreview.conclusion, null);
   assert.throws(() => releaseIdentityFromPullRequest({ ...pr, base: { sha: 'e'.repeat(40) } }, { materialHeadSha: SHA, baseSha }), /base drift/);
-  const pending = releaseIdentityFromPullRequest({ ...pr, merge_commit_sha: null, mergeable: null }, { materialHeadSha: SHA, baseSha });
-  assert.equal(pending.mergePreview.status, 'pending');
-  assert.equal(pending.mergePreview.conclusion, null);
+});
+
+test('merge-preview release evidence requires a successful named job from the exact PR/head/base workflow run', () => {
+  const baseSha = 'c'.repeat(40);
+  const previewSha = 'd'.repeat(40);
+  const pr = { number: 64, html_url: 'https://github.com/owner/target/pull/64', head: { sha: SHA }, base: { sha: baseSha }, merge_commit_sha: previewSha };
+  const run = { id: 10, event: 'pull_request', head_sha: SHA, html_url: 'run:10', pull_requests: [{ number: 64, head: { sha: SHA }, base: { sha: baseSha } }] };
+  const evidence = mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: run, jobs: [{ name: 'Merge preview compatibility', status: 'completed', conclusion: 'success', html_url: 'job:1' }], requiredJobName: 'Merge preview compatibility' });
+  assert.equal(evidence.previewSha, previewSha);
+  assert.equal(evidence.status, 'completed');
+  assert.equal(evidence.conclusion, 'success');
+  assert.equal(evidence.evidenceRef, 'job:1');
+  const missing = mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: run, jobs: [], requiredJobName: 'Merge preview compatibility' });
+  assert.equal(missing.status, 'pending');
+  assert.throws(() => mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: { ...run, head_sha: 'e'.repeat(40) }, jobs: [], requiredJobName: 'Merge preview compatibility' }), /head mismatch/);
 });

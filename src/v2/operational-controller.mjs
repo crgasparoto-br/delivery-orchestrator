@@ -97,7 +97,6 @@ export function persistentStateFromOperational({ state, identity, classifier, wo
   const target = requiredObject(identity, 'identity');
   const classification = requiredObject(classifier, 'classifier');
   const materialHeadSha = requiredSha(current.materialHeadSha, 'state.materialHeadSha');
-  const findingEvidenceRef = current.auditEvidence?.evidenceRef ?? 'delivery-v2:operational-state';
   return createPersistentDeliveryState({
     repository: current.repository,
     issueNumber: requiredPositiveInteger(target.issueNumber, 'identity.issueNumber'),
@@ -121,12 +120,19 @@ export function persistentStateFromOperational({ state, identity, classifier, wo
       auditRemediation: current.auditRemediationAttempts
     },
     workflowChecks,
+    ciFailure: current.ciFailure,
+    auditEvidence: current.auditEvidence,
     blockingFindings: (current.blockingFindings ?? []).map((finding) => ({
       id: finding.id,
       candidateSha: finding.candidateSha,
+      severity: finding.severity,
+      violatedContract: finding.violatedContract,
       surface: finding.surface,
       failureMode: finding.failureMode,
-      evidenceRef: findingEvidenceRef
+      evidence: finding.evidence,
+      remediationMode: finding.remediationMode,
+      blocksRelease: finding.blocksRelease,
+      evidenceRef: current.auditEvidence?.evidenceRef ?? 'delivery-v2:operational-state'
     })),
     evidenceRefs,
     lastReason: current.terminalReason
@@ -155,15 +161,18 @@ export function operationalStateFromPersistent(rawPersistentState) {
     auditRequired: policy.auditRequired,
     auditMode: policy.auditMode,
     ciEvidence: successfulCheck ? Object.freeze({ candidateSha: persistent.materialHeadSha, conclusion: 'success', evidenceRef: successfulCheck.evidenceRef }) : null,
-    auditEvidence: null,
-    ciFailure: null,
+    auditEvidence: persistent.auditEvidence,
+    ciFailure: persistent.ciFailure,
     blockingFindings: Object.freeze(persistent.blockingFindings.map((finding) => Object.freeze({
       id: finding.id,
       candidateSha: finding.candidateSha,
-      blocksRelease: true,
-      remediationMode: 'targeted',
+      severity: finding.severity,
+      violatedContract: finding.violatedContract,
+      blocksRelease: finding.blocksRelease,
+      remediationMode: finding.remediationMode,
       surface: finding.surface,
-      failureMode: finding.failureMode
+      failureMode: finding.failureMode,
+      evidence: finding.evidence
     }))),
     auditInFlight: false,
     terminalReason: persistent.lastReason,
