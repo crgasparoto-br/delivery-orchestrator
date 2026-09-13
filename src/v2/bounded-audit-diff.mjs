@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 export const DEFAULT_AUDIT_DIFF_LIMITS = Object.freeze({
   maxFiles: 24,
-  maxFileBytes: 16 * 1024,
+  maxFileBytes: 24 * 1024,
   maxTotalBytes: 64 * 1024
 });
 
@@ -11,6 +11,16 @@ export const STANDARD_AUDIT_DIFF_LIMITS = Object.freeze({
   maxFileBytes: 12 * 1024,
   maxTotalBytes: 32 * 1024
 });
+
+const GENERATED_LOW_VALUE_PATTERNS = Object.freeze([
+  /(?:^|\/)\.audit(?:\/|$)/,
+  /(?:^|\/)skills\/catalog(?:\/|$)/,
+  /(?:^|\/)\.generated(?:\/|$)/,
+  /\.lock\.ya?ml$/,
+  /(?:^|\/)package-lock\.json$/,
+  /(?:^|\/)\.github\/aw\/actions-lock\.json$/
+]);
+const WORKER_PROMPT_PATTERN = /^\.github\/workflows\/delivery-v2-worker-(?:claude|codex|copilot)-(?:fast|standard|critical)\.md$/;
 
 export function auditDiffLimitsForRisk(riskProfile) {
   const risk = String(riskProfile ?? '').trim().toLowerCase();
@@ -38,12 +48,21 @@ function splitDiffBlocks(diffText) {
   return starts.map((start, index) => text.slice(start, starts[index + 1] ?? text.length));
 }
 
+function generatedLowValuePath(filePath) {
+  const value = String(filePath ?? '');
+  return GENERATED_LOW_VALUE_PATTERNS.some((pattern) => pattern.test(value));
+}
+
 function pathPriority(filePath) {
   const value = String(filePath ?? '');
-  if (/^(?:src|scripts|actions|config|schemas)\//.test(value) || /^\.github\/(?:scripts|workflows)\//.test(value)) return 0;
+  if (generatedLowValuePath(value)) return 6;
+  if (/^(?:src|scripts|actions)\//.test(value)) return 0;
   if (/^(?:test|tests|__tests__)\//.test(value) || /(?:^|\/)test\./.test(value)) return 1;
-  if (/^(?:docs|README)/.test(value)) return 2;
-  return 3;
+  if (/^(?:config|schemas)\//.test(value) || /^\.github\/scripts\//.test(value)) return 2;
+  if (/^\.github\/workflows\//.test(value) && !WORKER_PROMPT_PATTERN.test(value)) return 2;
+  if (/^(?:docs|README)/.test(value)) return 3;
+  if (WORKER_PROMPT_PATTERN.test(value)) return 4;
+  return 5;
 }
 
 export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
@@ -68,6 +87,10 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
   let totalBytes = 0;
 
   for (const entry of ordered) {
+    if (alignmentExact && generatedLowValuePath(entry.path)) {
+      omitted.push({ index: entry.index, path: entry.path, bytes: entry.bytes, sha256: entry.sha256, reason: 'generated-low-value' });
+      continue;
+    }
     if (entry.bytes > resolvedLimits.maxFileBytes) {
       omitted.push({ index: entry.index, path: entry.path, bytes: entry.bytes, sha256: entry.sha256, reason: 'max-file-bytes' });
       continue;
