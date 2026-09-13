@@ -6,6 +6,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { CodexExecutor } from '../src/codex-executor.mjs';
+import { boundAuditDiff } from '../src/v2/bounded-audit-diff.mjs';
 import {
   buildGithubNativeAuditRequest,
   finalizeGithubNativeAuditResult,
@@ -44,7 +45,7 @@ function linuxHome(user) {
   if (!home) throw new Error(`could not resolve Linux home for ${user}`);
   return home;
 }
-async function prepareBundle({ request, contractText, diffText, materialContext, issue, pullRequest }) {
+async function prepareBundle({ request, contractText, diffEvidence, materialContext, issue, pullRequest }) {
   const root = await mkdtemp(path.join(tmpdir(), 'delivery-v2-github-audit-'));
   await chmod(root, 0o755);
   execFileSync('git', ['init', '-q'], { cwd: root });
@@ -53,7 +54,8 @@ async function prepareBundle({ request, contractText, diffText, materialContext,
     'DELIVERY_CONTRACT.md': contractText,
     'ISSUE.json': `${JSON.stringify({ number: issue.number, title: issue.title, body: issue.body, labels: issue.labels?.map((item) => item.name) ?? [] }, null, 2)}\n`,
     'PULL_REQUEST.json': `${JSON.stringify({ number: pullRequest.number, title: pullRequest.title, body: pullRequest.body, base: pullRequest.base, head: pullRequest.head }, null, 2)}\n`,
-    'CANDIDATE.diff': diffText,
+    'CANDIDATE.diff': diffEvidence.text,
+    'DIFF_MANIFEST.json': `${JSON.stringify(diffEvidence.manifest, null, 2)}\n`,
     'MATERIAL_CONTEXT.json': `${JSON.stringify(materialContext, null, 2)}\n`
   };
   for (const [name, content] of Object.entries(files)) {
@@ -67,11 +69,11 @@ function auditPrompt(request) {
   return [
     'You are the independent semantic reviewer for a Delivery V2 candidate.',
     '',
-    'Your entire allowed context is the sanitized bundle in the current working directory: AUDIT_REQUEST.json, DELIVERY_CONTRACT.md, ISSUE.json, PULL_REQUEST.json, CANDIDATE.diff and MATERIAL_CONTEXT.json. Do not seek implementation conversation history, hidden implementer reasoning, legacy V1 handoff material, generated workflow locks or unrelated repository inventory. Do not modify files or Git state.',
+    'Your entire allowed context is the sanitized bundle in the current working directory: AUDIT_REQUEST.json, DELIVERY_CONTRACT.md, ISSUE.json, PULL_REQUEST.json, CANDIDATE.diff, DIFF_MANIFEST.json and MATERIAL_CONTEXT.json. Do not seek implementation conversation history, hidden implementer reasoning, legacy V1 handoff material, generated workflow locks or unrelated repository inventory. Do not modify files or Git state.',
     '',
-    'MATERIAL_CONTEXT.json is deterministic exact-SHA expansion prepared by the control plane. It contains bounded full contents for prioritized changed source files plus one-hop direct relative dependencies when resolvable. Respect its limits and omitted manifest. If a release-blocking conclusion genuinely depends on a changed file omitted by that manifest, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
+    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, lists every changed path, and records included or omitted diff blocks with explicit reasons. MATERIAL_CONTEXT.json contains bounded full contents for prioritized changed source files plus one-hop direct relative dependencies when resolvable. Respect both manifests and their limits. If a release-blocking conclusion genuinely depends on omitted diff or file context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
     '',
-    `Audit exactly candidate ${request.candidate.materialHeadSha}. Treat AUDIT_REQUEST.json identity/check evidence as authoritative. First verify the issue acceptance contract against the candidate diff and full material context, then apply Delivery V2 invariants. Return all cheap blocking findings in one pass. Findings must identify concrete candidate behavior/configuration and discriminating evidence. Do not reject hypothetical future code that is absent from this candidate.`,
+    `Audit exactly candidate ${request.candidate.materialHeadSha}. Treat AUDIT_REQUEST.json identity/check evidence as authoritative. First verify the issue acceptance contract against the bounded candidate diff and full material context available in the bundle, then apply Delivery V2 invariants. Return all cheap blocking findings in one pass. Findings must identify concrete candidate behavior/configuration and discriminating evidence. Do not reject hypothetical future code that is absent from this candidate.`,
     '',
     'Use decision=approved only when no release-blocking finding exists. Return only the requested JSON object.'
   ].join('\n');
@@ -128,6 +130,7 @@ export async function main() {
     fetchAuditClassifier(repository, candidateSha, token, { orchestratorRepository }),
     fetchImmutableCompareEvidence(repository, baseSha, candidateSha, token)
   ]);
+  const diffEvidence = boundAuditDiff(compareEvidence.diffText, compareEvidence.changedPaths);
   const materialContext = await fetchBoundedAuditContext(repository, candidateSha, compareEvidence.changedPaths, token);
   const stablePullRequest = await fetchJson(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}`, token);
   assertPullRequestSnapshotStable(pullRequest, stablePullRequest);
@@ -157,7 +160,7 @@ export async function main() {
 
   let bundle;
   try {
-    bundle = await prepareBundle({ request, contractText, diffText: compareEvidence.diffText, materialContext, issue, pullRequest: stablePullRequest });
+    bundle = await prepareBundle({ request, contractText, diffEvidence, materialContext, issue, pullRequest: stablePullRequest });
     const codexHome = process.env.CODEX_AUDITOR_HOME || path.join(linuxHome(auditorUser), '.codex-delivery', 'auditor');
     const executor = new CodexExecutor({ apiKey: process.env.OPENAI_API_KEY, authMode, model, implementerUser, auditorUser });
     const response = await executor.runFresh({
@@ -183,6 +186,15 @@ export async function main() {
       outcome: finalized.outcome,
       modelUsage: response.usage ?? null,
       reviewerContextId: response.contextId,
+      diffContext: {
+        strategy: diffEvidence.manifest.strategy,
+        limits: diffEvidence.manifest.limits,
+        fullDiffBytes: diffEvidence.manifest.fullDiffBytes,
+        fullDiffSha256: diffEvidence.manifest.fullDiffSha256,
+        boundedBytes: diffEvidence.manifest.boundedBytes,
+        includedCount: diffEvidence.manifest.included.length,
+        omittedCount: diffEvidence.manifest.omitted.length
+      },
       materialContext: {
         strategy: materialContext.strategy,
         limits: materialContext.limits,

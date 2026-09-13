@@ -60,11 +60,12 @@ The reviewer receives a deterministic sanitized bundle containing:
 - exact GitHub audit request and check evidence;
 - target issue contract;
 - PR metadata;
-- immutable candidate diff;
+- a bounded prioritized subset of the immutable candidate diff;
+- `DIFF_MANIFEST.json`, which binds the full raw diff by SHA-256 and byte count, lists every changed path and records every included/omitted diff block;
 - Delivery V2 audit contract;
 - bounded exact-SHA material context with prioritized full changed text files plus one-hop direct relative dependencies when resolvable.
 
-The material-context expansion has explicit file, per-file byte, total-byte and dependency-probe ceilings. Historical/generated roots remain excluded. When the bounded context omits material that is genuinely required to support a release-blocking conclusion, the reviewer must fail closed with an `audit-context-insufficient` finding rather than guess or browse the repository. This preserves evidence strength while avoiding unconditional repository-wide context.
+Both the diff context and material-context expansion have explicit file, per-file and total-byte ceilings; material context also limits dependency probes. Historical/generated roots remain excluded. The exact base/head SHAs remain the candidate identity, while the diff manifest preserves integrity of the full raw diff without placing all of its bytes in the model context. When either bounded manifest omits material that is genuinely required to support a release-blocking conclusion, the reviewer must fail closed with an `audit-context-insufficient` finding rather than guess or browse the repository. This preserves evidence strength while capping audit tokens on large PRs.
 
 Product repositories use the compact `docs/delivery-v2/AUDIT_CONTRACT.md` projection to reduce repeated tokens. Changes to the Delivery V2 control plane itself use the full `MASTER_SPEC.md`. Hidden implementer reasoning, historical `.audit/**` / `skills/catalog/**`, generated worker locks and unrelated repository inventory are not reviewer context.
 
@@ -76,7 +77,9 @@ Metrics preserve unknown values as `null`; a provider that does not report token
 
 ## Deterministic work deduplication
 
-`Delivery V2 CI` remains the trusted automatic exact-head gate. Its aggregate `verify:v2` command runs the strict terminal-completeness verifier exactly once and the target-policy verifier exactly once. `verify:v2:complete` remains available as the focused strict-completeness command, but the CI does not invoke it a second time after `verify:v2`. The same trusted CI performs the single automatic `gh-aw` compile. `Delivery V2 - Compile gh-aw` is manual preflight only and cannot create a second automatic compile for a PR.
+`Delivery V2 CI` remains the trusted automatic exact-head gate. Its aggregate `verify:v2` command runs the strict terminal-completeness verifier exactly once and the target-policy verifier exactly once. `verify:v2:complete` remains available as the focused strict-completeness command, but the CI does not invoke it a second time after `verify:v2`.
+
+Before installing `gh-aw`, the CI compares the worker compilation identity with the trusted base. When worker Markdown sources, generated worker locks/actions lock and compiler-workflow identity are unchanged, the previously trusted base attestation is reused and the `gh-aw` setup/compile steps are skipped. When that identity changes, the same CI performs exactly one strict compile and verifies zero generated drift. `Delivery V2 - Compile gh-aw` remains manual preflight only and cannot create a second automatic compile for a PR.
 
 ## V1 retirement
 
