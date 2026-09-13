@@ -24,7 +24,9 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - name: Apply systemic remediation
-        run: node scripts/delivery-v2-r5-patch.mjs
+        run: |
+          node scripts/delivery-v2-r5-fix-patcher.mjs
+          node scripts/delivery-v2-r5-patch.mjs
       - name: Install pinned gh-aw
         uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
         with:
