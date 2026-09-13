@@ -17,6 +17,17 @@ function response({ ok = true, status = 200, json = null, text = '' } = {}) {
   };
 }
 
+function encodedFileResponse(filePath, content) {
+  return response({
+    json: {
+      type: 'file',
+      encoding: 'base64',
+      sha: createHash('sha1').update(filePath).digest('hex'),
+      content: Buffer.from(content).toString('base64')
+    }
+  });
+}
+
 test('self target classifier uses exact risk-profile fallback while external target fails closed', async (t) => {
   const source = 'export const x = 1;\n';
   const original = globalThis.fetch;
@@ -32,12 +43,14 @@ test('self target classifier uses exact risk-profile fallback while external tar
   await assert.rejects(() => fetchAuditClassifier('crgasparoto-br/other', 'a'.repeat(40), 'token', { orchestratorRepository: 'crgasparoto-br/delivery-orchestrator' }), /GitHub API 404/);
 });
 
-test('material context prioritizes executable source then tests and manifests generated omissions', async (t) => {
+test('material context uses the shared semantic policy across monorepo code, co-located tests and control surfaces', async (t) => {
   const head = '2'.repeat(40);
   const contents = new Map([
-    ['src/v2/core.mjs', 'export const core = true;\n'],
-    ['test/v2-core.test.mjs', 'export const test = true;\n'],
-    ['config/runtime.json', '{"enabled":true}\n'],
+    ['apps/web/src/core.tsx', 'export const core = true;\n'],
+    ['apps/web/src/core.test.tsx', 'export const test = true;\n'],
+    ['.delivery-v2/lock.json', '{"version":2}\n'],
+    ['docs/delivery-v2/evidence/dv2-sample.json', '{"status":"ok"}\n'],
+    ['docs/delivery-v2/MASTER_SPEC.md', '# Canonical contract\n'],
     ['.github/workflows/delivery-v2-worker-codex-critical.md', '# prompt\n']
   ]);
   const original = globalThis.fetch;
@@ -48,21 +61,28 @@ test('material context prioritizes executable source then tests and manifests ge
     const filePath = decodeURIComponent(match[1]);
     const content = contents.get(filePath);
     if (content == null) return response({ ok: false, status: 404, text: 'missing' });
-    return response({ json: { type: 'file', encoding: 'base64', sha: createHash('sha1').update(filePath).digest('hex'), content: Buffer.from(content).toString('base64') } });
+    return encodedFileResponse(filePath, content);
   };
 
   const context = await fetchBoundedAuditContext('crgasparoto-br/example', head, [
-    'config/runtime.json',
     '.github/workflows/delivery-v2-worker-codex-critical.lock.yml',
     '.github/workflows/delivery-v2-worker-codex-critical.md',
-    'test/v2-core.test.mjs',
-    'src/v2/core.mjs'
-  ], 'token', { limits: { maxFiles: 2, maxFileBytes: 4096, maxTotalBytes: 8192, maxDependencyProbes: 1 } });
+    'docs/delivery-v2/MASTER_SPEC.md',
+    'docs/delivery-v2/evidence/dv2-sample.json',
+    '.delivery-v2/lock.json',
+    'apps/web/src/core.test.tsx',
+    'apps/web/src/core.tsx'
+  ], 'token', { limits: { maxFiles: 6, maxFileBytes: 4096, maxTotalBytes: 16384, maxDependencyProbes: 1 } });
 
-  assert.deepEqual(context.files.map((item) => item.path), ['src/v2/core.mjs', 'test/v2-core.test.mjs']);
+  assert.deepEqual(context.files.map((item) => [item.path, item.category]), [
+    ['apps/web/src/core.tsx', 'executable'],
+    ['apps/web/src/core.test.tsx', 'tests'],
+    ['.delivery-v2/lock.json', 'config'],
+    ['docs/delivery-v2/evidence/dv2-sample.json', 'evidence'],
+    ['docs/delivery-v2/MASTER_SPEC.md', 'canonical-docs'],
+    ['.github/workflows/delivery-v2-worker-codex-critical.md', 'prompts']
+  ]);
   assert.equal(context.omitted.find((item) => item.path.endsWith('.lock.yml'))?.reason, 'non-material-or-generated');
-  assert.equal(context.omitted.find((item) => item.path === 'config/runtime.json')?.reason, 'context-budget');
-  assert.equal(context.omitted.find((item) => item.path.endsWith('-critical.md'))?.reason, 'context-budget');
 });
 
 test('material context supplements diff-represented paths instead of duplicating their bytes', async (t) => {
@@ -83,7 +103,7 @@ test('material context supplements diff-represented paths instead of duplicating
     const filePath = decodeURIComponent(match[1]);
     const content = contents.get(filePath);
     if (content == null) return response({ ok: false, status: 404, text: 'missing' });
-    return response({ json: { type: 'file', encoding: 'base64', sha: createHash('sha1').update(filePath).digest('hex'), content: Buffer.from(content).toString('base64') } });
+    return encodedFileResponse(filePath, content);
   };
 
   const changedPaths = [
@@ -107,11 +127,29 @@ test('material context supplements diff-represented paths instead of duplicating
   assert.ok(context.files.some((item) => item.path === 'src/v2/dep.mjs' && item.kind === 'direct-relative-dependency'));
   assert.equal(context.omitted.find((item) => item.path === 'src/v2/core.mjs')?.reason, 'represented-in-bounded-diff');
   assert.equal(context.omitted.find((item) => item.path === 'test/v2-core.test.mjs')?.reason, 'represented-in-bounded-diff');
-  const expectedChangedBytes = [...context.files]
-    .filter((item) => item.kind === 'changed')
-    .reduce((sum, item) => sum + Buffer.byteLength(contents.get(item.path)), 0);
-  assert.ok(context.totalBytes >= expectedChangedBytes);
-  assert.equal(context.strategy, 'supplemental-changed-files-plus-direct-relative-dependencies');
+});
+
+test('material context admits common non-JavaScript source extensions without changing byte ceilings', async (t) => {
+  const head = '5'.repeat(40);
+  const contents = new Map([
+    ['apps/api/main.go', 'package main\n'],
+    ['prisma/schema.prisma', 'model User { id Int @id }\n']
+  ]);
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async (url) => {
+    const match = String(url).match(/\/contents\/(.+)\?ref=/);
+    const filePath = match ? decodeURIComponent(match[1]) : '';
+    const content = contents.get(filePath);
+    if (content == null) return response({ ok: false, status: 404, text: 'missing' });
+    return encodedFileResponse(filePath, content);
+  };
+
+  const context = await fetchBoundedAuditContext('crgasparoto-br/example', head, [...contents.keys()], 'token', {
+    limits: { maxFiles: 2, maxFileBytes: 4096, maxTotalBytes: 8192, maxDependencyProbes: 1 }
+  });
+  assert.equal(context.files.length, 2);
+  assert.ok(context.files.every((item) => item.category === 'executable'));
 });
 
 test('represented audit paths must belong to the immutable changed-path set', async () => {

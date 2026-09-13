@@ -18,6 +18,7 @@ import {
 } from '../src/v2/github-native-audit-runtime.mjs';
 import {
   assertPullRequestSnapshotStable,
+  auditContextLimitsForRisk,
   fetchAuditClassifier,
   fetchBoundedAuditContext,
   fetchFileEvidenceAtRef,
@@ -81,7 +82,7 @@ function auditPrompt(request) {
     '',
     'Your entire allowed context is the sanitized bundle in the current working directory: AUDIT_REQUEST.json, DELIVERY_CONTRACT.md, ISSUE.json, PULL_REQUEST.json, CANDIDATE.diff, DIFF_MANIFEST.json and MATERIAL_CONTEXT.json. ISSUE.json and PULL_REQUEST.json are deterministic bounded projections, not raw GitHub API objects. Do not seek implementation conversation history, hidden implementer reasoning, retired delivery snapshots, generated workflow locks or unrelated repository inventory. Do not modify files or Git state.',
     '',
-    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, derives each represented path from its own Git diff identity, lists every changed path, and records included or omitted diff blocks with explicit reasons. Within the fixed byte ceiling, the selector reserves one eligible representative from each required semantic class before any spillover so executable source cannot starve tests, contract/config, evidence, canonical docs, or active worker prompts. If all required semantic reservations cannot fit simultaneously, the runtime marks the bundle blocked and returns a zero-provider-call context-insufficient rejection before model invocation. MATERIAL_CONTEXT.json is supplemental and suppresses bounded-diff representatives only after exact diff-path identity is proven; if exact alignment cannot be proven, the runtime fails closed before material context or model invocation. Generated locks never displace semantic material; every changed path remains represented by the bounded diff, supplemental context, or an explicit omission reason. Respect both manifests and their limits. If a release-blocking conclusion genuinely depends on still-omitted diff or file context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
+    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, derives each represented path from its own Git diff identity, and uses the same shared semantic classifier as MATERIAL_CONTEXT.json. Before any supplemental file reads or model invocation, the runtime requires exact diff-path alignment and complete representation of every material required semantic class present in the candidate: executable source, tests, contract/config, evidence, canonical docs and active worker prompts. File-count, per-file, aggregate-byte, malformed-path and reservation failures all use the same deterministic fail-closed preflight and produce a zero-provider-call context-insufficient rejection. Only a ready bounded diff may seed supplemental material context; represented paths are never charged twice. Generated locks never displace semantic material and every changed path remains represented or explicitly omitted with a reason. Respect both manifests and their fixed limits. If a release-blocking conclusion genuinely depends on still-omitted context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
     '',
     `Audit exactly candidate ${request.candidate.materialHeadSha}. Treat AUDIT_REQUEST.json identity/check evidence as authoritative. First verify the issue acceptance contract against the bounded candidate diff and supplemental material context available in the bundle, then apply Delivery V2 invariants. Return all cheap blocking findings in one pass. Findings must identify concrete candidate behavior/configuration and discriminating evidence. Do not reject hypothetical future code that is absent from this candidate.`,
     '',
@@ -103,6 +104,38 @@ function priorFindingsFromEnv() {
   });
 }
 
+function boundedDiffPreflightReasons(manifest) {
+  const reasons = new Set(Array.isArray(manifest?.preflightReasons) ? manifest.preflightReasons.map((value) => String(value).trim()).filter(Boolean) : []);
+  if (manifest?.alignmentExact !== true) reasons.add('path-alignment-unproven');
+  if (manifest?.reservationCoverageComplete !== true) reasons.add('semantic-reservation-incomplete');
+  for (const [category, reservation] of Object.entries(manifest?.categoryReservations ?? {})) {
+    if (reservation?.required === true && reservation?.included !== true) reasons.add(`required-reservation-not-included:${category}`);
+  }
+  if (manifest?.contextReady !== true) reasons.add('context-readiness-unproven');
+  return Object.freeze([...reasons]);
+}
+
+function blockedMaterialContext(candidateSha, changedPaths, riskProfile, preflightReasons) {
+  const uniqueChangedPaths = [...new Set(changedPaths.map((value) => String(value).trim()).filter(Boolean))];
+  return Object.freeze({
+    schemaVersion: 2,
+    candidateSha,
+    strategy: 'blocked-before-supplemental-context-fetch',
+    limits: auditContextLimitsForRisk(riskProfile),
+    totalBytes: 0,
+    dependencyProbes: 0,
+    representedPaths: Object.freeze([]),
+    files: Object.freeze([]),
+    omitted: Object.freeze(uniqueChangedPaths.map((filePath) => Object.freeze({
+      path: filePath,
+      kind: 'changed',
+      reason: 'bounded-diff-preflight-blocked',
+      importedBy: null
+    }))),
+    preflightReasons: Object.freeze([...preflightReasons])
+  });
+}
+
 function auditContextPayload({ budget, diffEvidence, materialContext }) {
   return {
     bundleContext: {
@@ -119,6 +152,8 @@ function auditContextPayload({ budget, diffEvidence, materialContext }) {
       fullDiffBytes: diffEvidence.manifest.fullDiffBytes,
       fullDiffSha256: diffEvidence.manifest.fullDiffSha256,
       boundedBytes: diffEvidence.manifest.boundedBytes,
+      contextReady: diffEvidence.manifest.contextReady ?? false,
+      preflightReasons: diffEvidence.manifest.preflightReasons ?? [],
       alignmentExact: diffEvidence.manifest.alignmentExact,
       includedCount: diffEvidence.manifest.included.length,
       omittedCount: diffEvidence.manifest.omitted.length,
@@ -181,12 +216,14 @@ export async function main() {
     fetchImmutableCompareEvidence(repository, baseSha, candidateSha, token)
   ]);
   const diffEvidence = boundAuditDiff(compareEvidence.diffText, compareEvidence.changedPaths);
-  if (!diffEvidence.manifest.alignmentExact) throw new Error('audit diff path alignment could not be proven; refusing semantic audit before model invocation');
-  const semanticReservationPreflightReasons = diffEvidence.manifest.reservationCoverageComplete
-    ? []
-    : diffEvidence.manifest.reservationFailureReasons.map((reason) => `bounded-diff:${reason}`);
-  const representedPaths = diffEvidence.manifest.included.map((entry) => entry.path).filter(Boolean);
-  const materialContext = await fetchBoundedAuditContext(repository, candidateSha, compareEvidence.changedPaths, token, { representedPaths });
+  const diffPreflightReasons = boundedDiffPreflightReasons(diffEvidence.manifest);
+  const boundedDiffPreflightReasons = diffPreflightReasons.map((reason) => `bounded-diff:${reason}`);
+  const representedPaths = boundedDiffPreflightReasons.length === 0
+    ? diffEvidence.manifest.included.map((entry) => entry.path).filter(Boolean)
+    : [];
+  const materialContext = boundedDiffPreflightReasons.length === 0
+    ? await fetchBoundedAuditContext(repository, candidateSha, compareEvidence.changedPaths, token, { representedPaths })
+    : blockedMaterialContext(candidateSha, compareEvidence.changedPaths, riskProfile, boundedDiffPreflightReasons);
   const stablePullRequest = await fetchJson(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}`, token);
   assertPullRequestSnapshotStable(pullRequest, stablePullRequest);
 
@@ -218,7 +255,7 @@ export async function main() {
     issue,
     pullRequest: stablePullRequest,
     files,
-    preflightReasons: semanticReservationPreflightReasons
+    preflightReasons: boundedDiffPreflightReasons
   });
   const contextPayload = auditContextPayload({ budget, diffEvidence, materialContext });
 

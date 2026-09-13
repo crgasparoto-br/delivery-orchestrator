@@ -2,67 +2,44 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  auditDiffLimitsForRisk,
-  boundAuditDiff,
-  DEFAULT_AUDIT_DIFF_LIMITS,
-  STANDARD_AUDIT_DIFF_LIMITS
-} from '../src/v2/bounded-audit-diff.mjs';
-import {
-  auditContextLimitsForRisk,
-  DEFAULT_AUDIT_CONTEXT_LIMITS,
-  fetchBoundedAuditContext,
-  STANDARD_AUDIT_CONTEXT_LIMITS
-} from '../src/v2/github-audit-evidence.mjs';
+  AUDIT_RESERVED_SEMANTIC_CATEGORIES,
+  AUDIT_SEMANTIC_CATEGORY_ORDER,
+  auditSemanticCategory,
+  isActiveWorkerPromptAuditPath,
+  isCanonicalDeliveryV2DocAuditPath,
+  isGeneratedLowValueAuditPath
+} from '../src/v2/audit-context-policy.mjs';
 
-test('STANDARD audit context budget is half the CRITICAL aggregate byte ceiling', () => {
-  const standardBytes = STANDARD_AUDIT_DIFF_LIMITS.maxTotalBytes + STANDARD_AUDIT_CONTEXT_LIMITS.maxTotalBytes;
-  const criticalBytes = DEFAULT_AUDIT_DIFF_LIMITS.maxTotalBytes + DEFAULT_AUDIT_CONTEXT_LIMITS.maxTotalBytes;
+test('shared semantic policy classifies monorepo code, co-located tests and delivery control surfaces consistently', () => {
+  const cases = new Map([
+    ['apps/web/src/page.tsx', 'executable'],
+    ['packages/core/index.ts', 'executable'],
+    ['services/api/handler.py', 'executable'],
+    ['apps/web/src/page.test.tsx', 'tests'],
+    ['src/__tests__/controller.spec.mjs', 'tests'],
+    ['config/delivery-v2-requirements.json', 'config'],
+    ['.delivery-v2/lock.json', 'config'],
+    ['package.json', 'config'],
+    ['vite.config.ts', 'config'],
+    ['docs/delivery-v2/evidence/dv2-013.json', 'evidence'],
+    ['docs/delivery-v2/MASTER_SPEC.md', 'canonical-docs'],
+    ['.github/workflows/delivery-v2-worker-codex-critical.md', 'prompts'],
+    ['docs/changelog.md', 'docs'],
+    ['assets/logo.bin', 'other']
+  ]);
 
-  assert.equal(standardBytes, 80 * 1024);
-  assert.equal(criticalBytes, 160 * 1024);
-  assert.equal(standardBytes / criticalBytes, 0.5);
-  assert.deepEqual(auditDiffLimitsForRisk('critical'), DEFAULT_AUDIT_DIFF_LIMITS);
-  assert.deepEqual(auditContextLimitsForRisk('critical'), DEFAULT_AUDIT_CONTEXT_LIMITS);
+  for (const [filePath, expected] of cases) assert.equal(auditSemanticCategory(filePath), expected, filePath);
+  assert.deepEqual(AUDIT_RESERVED_SEMANTIC_CATEGORIES, ['executable', 'tests', 'config', 'evidence', 'canonical-docs', 'prompts']);
+  assert.deepEqual(AUDIT_SEMANTIC_CATEGORY_ORDER.slice(0, AUDIT_RESERVED_SEMANTIC_CATEGORIES.length), AUDIT_RESERVED_SEMANTIC_CATEGORIES);
 });
 
-test('audit context policy fails closed for unsupported risk profiles', () => {
-  assert.throws(() => auditDiffLimitsForRisk('fast'), /unsupported audit diff risk profile/);
-  assert.throws(() => auditContextLimitsForRisk('fast'), /unsupported audit context risk profile/);
-});
-
-test('AUDIT_RISK_PROFILE automatically selects STANDARD limits without weakening explicit test overrides', async (t) => {
-  const previousRisk = process.env.AUDIT_RISK_PROFILE;
-  const originalFetch = globalThis.fetch;
-  t.after(() => {
-    if (previousRisk == null) delete process.env.AUDIT_RISK_PROFILE;
-    else process.env.AUDIT_RISK_PROFILE = previousRisk;
-    globalThis.fetch = originalFetch;
-  });
-  process.env.AUDIT_RISK_PROFILE = 'standard';
-
-  const diff = 'diff --git a/src/a.mjs b/src/a.mjs\n--- a/src/a.mjs\n+++ b/src/a.mjs\n@@ -1 +1 @@\n-a\n+b\n';
-  const bounded = boundAuditDiff(diff, ['src/a.mjs']);
-  assert.deepEqual(bounded.manifest.limits, STANDARD_AUDIT_DIFF_LIMITS);
-
-  globalThis.fetch = async () => ({
-    ok: true,
-    status: 200,
-    async json() {
-      return {
-        type: 'file',
-        encoding: 'base64',
-        sha: 'a'.repeat(40),
-        content: Buffer.from('export const value = 1;\n').toString('base64')
-      };
-    },
-    async text() { return ''; }
-  });
-
-  const context = await fetchBoundedAuditContext('owner/repo', 'b'.repeat(40), ['src/a.mjs'], 'token');
-  assert.deepEqual(context.limits, STANDARD_AUDIT_CONTEXT_LIMITS);
-
-  const explicit = boundAuditDiff(diff, ['src/a.mjs'], {
-    limits: { maxFiles: 1, maxFileBytes: 128, maxTotalBytes: 128 }
-  });
-  assert.equal(explicit.manifest.limits.maxTotalBytes, 128);
+test('specific audit identities win over generic path classes and generated exclusions stay explicit', () => {
+  assert.equal(isActiveWorkerPromptAuditPath('.github/workflows/delivery-v2-worker-claude-fast.md'), true);
+  assert.equal(auditSemanticCategory('.github/workflows/delivery-v2-worker-claude-fast.md'), 'prompts');
+  assert.equal(auditSemanticCategory('.github/workflows/delivery-v2-ci.yml'), 'config');
+  assert.equal(isCanonicalDeliveryV2DocAuditPath('docs/delivery-v2/AUDIT_CONTRACT.md'), true);
+  assert.equal(auditSemanticCategory('docs/delivery-v2/AUDIT_CONTRACT.md'), 'canonical-docs');
+  assert.equal(isGeneratedLowValueAuditPath('.github/workflows/delivery-v2-worker-codex-critical.lock.yml'), true);
+  assert.equal(isGeneratedLowValueAuditPath('package-lock.json'), true);
+  assert.equal(isGeneratedLowValueAuditPath('apps/web/src/page.tsx'), false);
 });
