@@ -142,15 +142,43 @@ test('diff blocks bind to their own headers even when GitHub changed-path order 
   assert.doesNotMatch(bounded.text, /diff --git a\/src\/b\.mjs b\/src\/b\.mjs/);
 });
 
-test('path-set mismatch cannot be mistaken for exact alignment', () => {
-  const diff = [block('src/a.mjs', 'a'), block('src/b.mjs', 'b')].join('');
-  const bounded = boundAuditDiff(diff, ['src/a.mjs', 'src/c.mjs'], {
-    limits: { maxFiles: 2, maxFileBytes: 4096, maxTotalBytes: 8192 }
-  });
+test('rename-only, mode-only, binary and C-quoted paths retain exact identity without hunk headers', () => {
+  const cases = [
+    {
+      path: 'src/new-name.mjs',
+      diff: 'diff --git a/src/old-name.mjs b/src/new-name.mjs\nsimilarity index 100%\nrename from src/old-name.mjs\nrename to src/new-name.mjs\n'
+    },
+    {
+      path: 'scripts/run.sh',
+      diff: 'diff --git a/scripts/run.sh b/scripts/run.sh\nold mode 100644\nnew mode 100755\n'
+    },
+    {
+      path: 'assets/logo.bin',
+      diff: 'diff --git a/assets/logo.bin b/assets/logo.bin\nnew file mode 100644\nindex 0000000..1111111\nBinary files /dev/null and b/assets/logo.bin differ\n'
+    },
+    {
+      path: 'docs/café.md',
+      diff: 'diff --git "a/docs/caf\\303\\251.md" "b/docs/caf\\303\\251.md"\nold mode 100644\nnew mode 100755\n'
+    }
+  ];
 
-  assert.equal(bounded.manifest.alignmentExact, false);
-  assert.equal(bounded.manifest.strategy, 'bounded-unified-diff-unverified-path-alignment');
-  assert.equal(bounded.manifest.included.find((item) => item.index === 1)?.path, null);
+  for (const current of cases) {
+    const bounded = boundAuditDiff(current.diff, [current.path], {
+      limits: { maxFiles: 2, maxFileBytes: 4096, maxTotalBytes: 8192 }
+    });
+    assert.equal(bounded.manifest.alignmentExact, true, current.path);
+    assert.equal(bounded.manifest.included[0]?.path, current.path);
+  }
+});
+
+test('unverified diff-path identity fails closed instead of disabling semantic reservations', () => {
+  const diff = [block('src/a.mjs', 'a'), block('src/b.mjs', 'b')].join('');
+  assert.throws(
+    () => boundAuditDiff(diff, ['src/a.mjs', 'src/c.mjs'], {
+      limits: { maxFiles: 2, maxFileBytes: 4096, maxTotalBytes: 8192 }
+    }),
+    /audit diff path alignment could not be proven; refusing semantic audit context/
+  );
 });
 
 test('oversized diff blocks are omitted explicitly instead of being silently truncated', () => {
