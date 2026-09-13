@@ -129,11 +129,13 @@ test('material context supplements diff-represented paths instead of duplicating
   assert.equal(context.omitted.find((item) => item.path === 'test/v2-core.test.mjs')?.reason, 'represented-in-bounded-diff');
 });
 
-test('material context admits common non-JavaScript source and schema extensions without changing byte ceilings', async (t) => {
+test('material context admits source and shared-contract formats without changing byte ceilings', async (t) => {
   const head = '5'.repeat(40);
   const contents = new Map([
     ['apps/api/main.go', 'package main\n'],
-    ['prisma/schema.prisma', 'model User { id Int @id }\n']
+    ['prisma/schema.prisma', 'model User { id Int @id }\n'],
+    ['graphql/user.gql', 'type User { id: ID! }\n'],
+    ['proto/service.proto', 'syntax = "proto3";\n']
   ]);
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
@@ -146,12 +148,14 @@ test('material context admits common non-JavaScript source and schema extensions
   };
 
   const context = await fetchBoundedAuditContext('crgasparoto-br/example', head, [...contents.keys()], 'token', {
-    limits: { maxFiles: 2, maxFileBytes: 4096, maxTotalBytes: 8192, maxDependencyProbes: 1 }
+    limits: { maxFiles: 4, maxFileBytes: 4096, maxTotalBytes: 8192, maxDependencyProbes: 1 }
   });
-  assert.deepEqual(context.files.map((item) => [item.path, item.category]), [
-    ['apps/api/main.go', 'executable'],
-    ['prisma/schema.prisma', 'contract']
-  ]);
+  assert.equal(context.files.length, 4);
+  for (const filePath of ['prisma/schema.prisma', 'graphql/user.gql', 'proto/service.proto']) {
+    assert.equal(context.files.find((item) => item.path === filePath)?.category, 'contract', filePath);
+    assert.equal(context.omitted.some((item) => item.path === filePath && item.reason === 'non-material-or-generated'), false, filePath);
+  }
+  assert.equal(context.files.find((item) => item.path === 'apps/api/main.go')?.category, 'executable');
 });
 
 test('represented audit paths must belong to the immutable changed-path set', async () => {
