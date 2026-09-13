@@ -41,10 +41,13 @@ function cloneFindings(findings = []) {
     return Object.freeze({
       id: requiredString(finding.id, `findings[${index}].id`),
       candidateSha: requiredSha(finding.candidateSha, `findings[${index}].candidateSha`),
+      severity: requiredString(finding.severity, `findings[${index}].severity`),
+      violatedContract: requiredString(finding.violatedContract, `findings[${index}].violatedContract`),
       blocksRelease: finding.blocksRelease === true,
       remediationMode: requiredString(finding.remediationMode, `findings[${index}].remediationMode`),
       surface: requiredString(finding.surface, `findings[${index}].surface`),
-      failureMode: requiredString(finding.failureMode, `findings[${index}].failureMode`)
+      failureMode: requiredString(finding.failureMode, `findings[${index}].failureMode`),
+      evidence: requiredString(finding.evidence, `findings[${index}].evidence`)
     });
   });
 }

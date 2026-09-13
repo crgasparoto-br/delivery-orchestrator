@@ -196,8 +196,6 @@ export function releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, b
   if (currentBase !== expectedBase) throw new Error('release base drift detected');
   const rawPreview = String(pullRequest.merge_commit_sha ?? '').trim().toLowerCase();
   const previewSha = SHA_RE.test(rawPreview) ? rawPreview : null;
-  const mergeable = pullRequest.mergeable;
-  const terminal = previewSha != null && mergeable != null;
   const evidenceRef = requiredString(pullRequest.html_url ?? pullRequest.url ?? ('github:pull:' + (pullRequest.number ?? 'unknown')), 'pullRequest evidence URL');
   return Object.freeze({
     currentRemoteHeadSha: currentHead,
@@ -206,11 +204,45 @@ export function releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, b
       required: true,
       materialHeadSha: expectedHead,
       previewSha,
-      status: terminal ? 'completed' : 'pending',
-      conclusion: terminal ? (mergeable === true ? 'success' : 'failure') : null,
+      status: 'pending',
+      conclusion: null,
       evidenceRef
     })
   });
+}
+
+export function mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs = [], requiredJobName } = {}) {
+  const identity = releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, baseSha });
+  if (!identity.mergePreview.previewSha) return identity.mergePreview;
+  if (!workflowRun || typeof workflowRun !== 'object' || Array.isArray(workflowRun)) throw new Error('merge-preview source workflow run is required');
+  const expectedHead = requiredSha(materialHeadSha, 'materialHeadSha');
+  const expectedBase = requiredSha(baseSha, 'baseSha');
+  if (String(workflowRun.event ?? '') !== 'pull_request') throw new Error('merge-preview evidence must come from a pull_request workflow run');
+  if (requiredSha(workflowRun.head_sha, 'workflowRun.head_sha') !== expectedHead) throw new Error('merge-preview workflow run head mismatch');
+  const prNumber = requiredPositiveInteger(pullRequest.number, 'pullRequest.number');
+  const runPr = (workflowRun.pull_requests ?? []).find((item) => Number(item?.number) === prNumber);
+  if (!runPr) throw new Error('merge-preview workflow run is not bound to the target PR');
+  if (requiredSha(runPr.head?.sha, 'workflowRun.pullRequest.head.sha') !== expectedHead) throw new Error('merge-preview workflow PR head mismatch');
+  if (requiredSha(runPr.base?.sha, 'workflowRun.pullRequest.base.sha') !== expectedBase) throw new Error('merge-preview workflow PR base mismatch');
+  if (!Array.isArray(jobs)) throw new Error('merge-preview jobs must be an array');
+  const jobName = requiredString(requiredJobName, 'requiredJobName');
+  const matches = jobs.filter((job) => String(job?.name ?? '') === jobName);
+  if (matches.length > 1) throw new Error('ambiguous merge-preview validation jobs');
+  const job = matches[0];
+  if (!job) return identity.mergePreview;
+  return Object.freeze({
+    ...identity.mergePreview,
+    status: String(job.status ?? '').toLowerCase() || 'pending',
+    conclusion: job.conclusion == null ? null : String(job.conclusion).toLowerCase(),
+    evidenceRef: requiredString(job.html_url ?? workflowRun.html_url, 'merge-preview job evidence URL')
+  });
+}
+
+export async function collectMergePreviewEvidence({ repository, pullRequest, materialHeadSha, baseSha, workflowRun, requiredJobName, token } = {}) {
+  const repo = requiredString(repository, 'repository');
+  const runId = requiredPositiveInteger(workflowRun?.id, 'workflowRun.id');
+  const payload = await fetchJson(`https://api.github.com/repos/${repo}/actions/runs/${runId}/jobs?per_page=100`, token);
+  return mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs: payload.jobs ?? [], requiredJobName });
 }
 
 export async function publishReleaseStatus({ repository, sha, context, state, description, token, targetUrl = null } = {}) {

@@ -67,8 +67,13 @@ test('persistent state retains the minimum resumable Delivery V2 identity and ev
     blockingFindings: [{
       id: 'DV2-AUDIT-001',
       candidateSha: SHA_A,
+      severity: 'critical',
+      violatedContract: 'DV2-009',
       surface: 'src/api.mjs',
       failureMode: 'missing guard',
+      evidence: 'guard is absent',
+      remediationMode: 'systemic',
+      blocksRelease: true,
       evidenceRef: 'github:finding/1'
     }]
   }));

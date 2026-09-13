@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
 import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { parseTrustedJsonEnvelope, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
@@ -46,28 +47,23 @@ export function selectManagedPullRequest(pulls, { issueNumber, baseBranch } = {}
   const closing = closingPattern(positiveInteger(issueNumber, 'issueNumber'));
   const base = String(baseBranch ?? '').trim();
   if (!base) throw new Error('baseBranch is required');
+  const trustedLogin = arguments[1]?.trustedLogin == null ? null : String(arguments[1].trustedLogin).toLowerCase();
   const candidates = pulls.filter((pr) =>
     String(pr?.base?.ref ?? '') === base
     && String(pr?.title ?? '').startsWith('[delivery-v2] ')
     && closing.test(String(pr?.body ?? ''))
+    && (!trustedLogin || String(pr?.user?.login ?? '').toLowerCase() === trustedLogin)
   );
   if (candidates.length > 1) throw new Error(`multiple open Delivery V2 PRs found for issue #${issueNumber}`);
   return candidates[0] ?? null;
 }
 
-function parseJsonEnvelope(comments, marker, label) {
-  if (!Array.isArray(comments)) throw new Error('comments must be an array');
-  const matching = comments.filter((comment) => String(comment?.body ?? '').startsWith(marker));
-  if (matching.length === 0) return null;
-  if (matching.length > 1) throw new Error(`multiple ${label} comments found; refusing ambiguous recovery`);
-  const body = String(matching[0].body ?? '');
-  const fenced = body.match(/```json\s*([\s\S]*?)\s*```/);
-  if (!fenced) throw new Error(`${label} comment is missing its JSON envelope`);
-  return Object.freeze({ commentId: matching[0].id ?? null, value: JSON.parse(fenced[1]) });
+function parseJsonEnvelope(comments, marker, label, trustedLogin) {
+  return parseTrustedJsonEnvelope(comments, { marker, label, trustedLogin });
 }
 
-export function parsePersistentStateEnvelope(comments) {
-  const parsed = parseJsonEnvelope(comments, STATE_MARKER, 'Delivery V2 state');
+export function parsePersistentStateEnvelope(comments, { trustedLogin } = {}) {
+  const parsed = parseJsonEnvelope(comments, STATE_MARKER, 'Delivery V2 state', trustedLogin);
   if (!parsed) return null;
   if (!parsed.value?.persistent || typeof parsed.value.persistent !== 'object' || Array.isArray(parsed.value.persistent)) {
     throw new Error('Delivery V2 state comment is missing persistent state');
@@ -75,8 +71,8 @@ export function parsePersistentStateEnvelope(comments) {
   return Object.freeze({ commentId: parsed.commentId, persistent: parsed.value.persistent, controller: parsed.value.controller ?? null });
 }
 
-export function parseBootstrapLease(comments) {
-  const parsed = parseJsonEnvelope(comments, BOOTSTRAP_MARKER, 'Delivery V2 bootstrap state');
+export function parseBootstrapLease(comments, { trustedLogin } = {}) {
+  const parsed = parseJsonEnvelope(comments, BOOTSTRAP_MARKER, 'Delivery V2 bootstrap state', trustedLogin);
   if (!parsed) return null;
   const value = parsed.value;
   return Object.freeze({
@@ -230,13 +226,20 @@ async function main() {
   const orchestratorRef = requiredEnv('ORCHESTRATOR_WORKER_REF');
   const resultPath = String(process.env.CONTROLLER_RESULT_PATH ?? '').trim();
 
+  const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
   const pulls = await listOpenPullRequests(targetRepository, baseBranch, readToken);
-  const pullRequest = selectManagedPullRequest(pulls, { issueNumber, baseBranch });
+  const pullRequest = selectManagedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin });
   let stateEnvelope = null;
   let bootstrapLease = null;
-  if (pullRequest) stateEnvelope = parsePersistentStateEnvelope(await listIssueComments(targetRepository, pullRequest.number, readToken));
-  else bootstrapLease = parseBootstrapLease(await listIssueComments(targetRepository, issueNumber, readToken));
+  if (pullRequest) stateEnvelope = parsePersistentStateEnvelope(await listIssueComments(targetRepository, pullRequest.number, readToken), { trustedLogin });
+  else bootstrapLease = parseBootstrapLease(await listIssueComments(targetRepository, issueNumber, readToken), { trustedLogin });
 
+  const provenance = stateEnvelope?.controller ?? bootstrapLease;
+  if (provenance) {
+    const controllerRunId = positiveInteger(provenance.controllerRunId, 'controllerRunId');
+    const controllerRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${controllerRunId}`, actionsToken);
+    validateControllerRunProvenance(controllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
+  }
   const recoveredWorkerRun = bootstrapLease ? await recoverBootstrapWorkerRun(bootstrapLease, orchestratorRepository, orchestratorRef, actionsToken) : null;
   const decision = evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, recoveredWorkerRun });
   await writeGithubOutput(decision);

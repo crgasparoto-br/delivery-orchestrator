@@ -7,6 +7,7 @@ import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { createDispatchDecision } from '../src/v2/dispatch-policy.mjs';
 import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { createDispatchNonce } from '../src/v2/controller-runtime.mjs';
+import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
 
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
 
@@ -136,7 +137,7 @@ async function main() {
   if (lease) {
     const body = `${BOOTSTRAP_MARKER}\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify(lease, null, 2)}\n\`\`\``;
     const comments = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=100`, readToken);
-    const existing = comments.find((comment) => String(comment.body ?? '').startsWith(BOOTSTRAP_MARKER));
+    const existing = selectTrustedMarkerComment(comments, { marker: BOOTSTRAP_MARKER, label: 'Delivery V2 bootstrap state', trustedLogin: trustedCommentAuthorForRepository(repository) });
     if (existing) await api(`https://api.github.com/repos/${repository}/issues/comments/${existing.id}`, writeToken, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
     else await postJson(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`, writeToken, { body });
   }

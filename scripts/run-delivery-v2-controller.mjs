@@ -17,7 +17,8 @@ import {
 } from '../src/v2/operational-controller.mjs';
 import { createDeliveryMetrics } from '../src/v2/metrics.mjs';
 import { mergeGhAwUsage, normalizeGhAwUsage, parseGhAwUsageJsonl } from '../src/v2/usage-telemetry.mjs';
-import { ciFailureClassForEvidence, collectCiFailureEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const AUDIT_MARKER = '<!-- delivery-v2-independent-audit -->';
@@ -145,7 +146,8 @@ async function findManagedPullRequest({ repository, issueNumber, baseBranch, sin
   const closing = new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
   while (Date.now() < deadline) {
     const pulls = await api(`https://api.github.com/repos/${repository}/pulls?state=open&base=${encodeURIComponent(baseBranch)}&per_page=100`, token);
-    const candidates = pulls.filter((pr) => Date.parse(pr.created_at) >= since - 5000 && String(pr.title ?? '').startsWith('[delivery-v2] ') && closing.test(String(pr.body ?? '')));
+    const trustedLogin = trustedCommentAuthorForRepository(repository);
+    const candidates = pulls.filter((pr) => Date.parse(pr.created_at) >= since - 5000 && String(pr.title ?? '').startsWith('[delivery-v2] ') && closing.test(String(pr.body ?? '')) && String(pr.user?.login ?? '').toLowerCase() === trustedLogin && String(pr.head?.repo?.full_name ?? repository) === repository);
     if (candidates.length === 1) return candidates[0];
     if (candidates.length > 1) throw new Error(`multiple Delivery V2 PRs found for issue #${issueNumber}`);
     await sleep(POLL_MS);
@@ -212,7 +214,7 @@ async function upsertStateComment({ repository, prNumber, state, identity, class
   const persistent = persistentStateFromOperational({ state, identity, classifier, workflowChecks, evidenceRefs });
   const body = `${STATE_MARKER}\n## Delivery V2 controller state\n\n\`\`\`json\n${JSON.stringify({ persistent, controller: extra }, null, 2)}\n\`\`\``;
   const comments = await api(`https://api.github.com/repos/${repository}/issues/${prNumber}/comments?per_page=100`, token);
-  const existing = comments.find((comment) => String(comment.body ?? '').startsWith(STATE_MARKER));
+  const existing = selectTrustedMarkerComment(comments, { marker: STATE_MARKER, label: 'Delivery V2 state', trustedLogin: trustedCommentAuthorForRepository(repository) });
   if (existing) await patchJson(`https://api.github.com/repos/${repository}/issues/comments/${existing.id}`, token, { body });
   else await postJson(`https://api.github.com/repos/${repository}/issues/${prNumber}/comments`, token, { body });
   return persistent;
@@ -337,6 +339,7 @@ export async function main() {
   const targetReadToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
   const actionsToken = requiredEnv('GITHUB_TOKEN');
+  const controllerRunId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
   const resultPath = process.env.CONTROLLER_RESULT_PATH || path.join(process.env.RUNNER_TEMP || tmpdir(), 'delivery-v2-controller-result.json');
   const initialAttempts = positiveInteger(process.env.DELIVERY_V2_INITIAL_ATTEMPTS || '1', 'DELIVERY_V2_INITIAL_ATTEMPTS');
   const recoverWorkerRunId = String(process.env.DELIVERY_V2_RECOVER_WORKER_RUN_ID ?? '').trim() ? positiveInteger(process.env.DELIVERY_V2_RECOVER_WORKER_RUN_ID, 'DELIVERY_V2_RECOVER_WORKER_RUN_ID') : null;
@@ -391,7 +394,7 @@ export async function main() {
   let latestSourceRun = null;
   let lastAudit = null;
 
-  let controller = {};
+  let controller = { controllerRunId, controllerRepository: orchestratorRepository, controllerRef: orchestratorRef, controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml' };
   const identity = () => ({
     issueNumber,
     pullRequestNumber: pullRequest.number,
@@ -601,6 +604,7 @@ export async function main() {
       } : null;
       const finalPullRequest = await fetchPullRequest(targetRepository, pullRequest.number, targetReadToken);
       const releaseIdentity = releaseIdentityFromPullRequest(finalPullRequest, { materialHeadSha, baseSha: expectedBaseSha });
+      const mergePreview = await collectMergePreviewEvidence({ repository: targetRepository, pullRequest: finalPullRequest, materialHeadSha, baseSha: expectedBaseSha, workflowRun: latestSourceRun, requiredJobName: targetPolicy.mergePreviewJobName, token: targetReadToken });
       const releaseInput = {
         schemaVersion: 1,
         repository: targetRepository,
@@ -616,7 +620,7 @@ export async function main() {
           expectedFingerprint: classifier.fingerprint,
           evidenceRef: classifier.evidenceRef
         },
-        mergePreview: releaseIdentity.mergePreview,
+        mergePreview,
         checks: [{ name: latestCheck.name, required: true, subjectSha: materialHeadSha, status: latestCheck.status, conclusion: latestCheck.conclusion, workflowRunId: latestSourceRun.id, evidenceRef: latestCheck.details_url ?? latestSourceRun.html_url }],
         standardAuditRequired: targetPolicy.standardAuditRequired !== false,
         audit,

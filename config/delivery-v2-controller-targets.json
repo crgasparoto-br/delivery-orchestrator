@@ -6,6 +6,7 @@
       "requiredStatusName": "Agent-first gate",
       "ciWorkflowName": "Agent-first gate",
       "ciWorkflowPath": ".github/workflows/agent-check.yml",
+      "mergePreviewJobName": "Merge preview integration",
       "standardAuditRequired": true,
       "finalStatusName": "Delivery V2 release"
     },
@@ -14,6 +15,7 @@
       "requiredStatusName": "Validate repository",
       "ciWorkflowName": "Validate PR",
       "ciWorkflowPath": ".github/workflows/validate-pr.yml",
+      "mergePreviewJobName": "Merge preview compatibility",
       "standardAuditRequired": true,
       "finalStatusName": "Delivery V2 release"
     },
@@ -22,6 +24,7 @@
       "requiredStatusName": "V2 platform checks",
       "ciWorkflowName": "Delivery V2 CI",
       "ciWorkflowPath": ".github/workflows/delivery-v2-ci.yml",
+      "mergePreviewJobName": "V2 merge preview compatibility",
       "standardAuditRequired": true,
       "finalStatusName": "Delivery V2 release"
     }
