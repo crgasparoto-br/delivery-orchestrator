@@ -1,8 +1,12 @@
 import fs from 'node:fs';
 const file = 'scripts/delivery-v2-r5-patch.mjs';
 let text = fs.readFileSync(file, 'utf8');
-const oldLine = `    text = once(text, "materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider", "materialWorkerIdentity: initialWorkerIdentity, materialWorkerProvider: initialWorkerProvider", file + ': initial persisted producer');`;
-const newLine = `    text = once(text, "  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider });", "  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce, materialWorkerRunId: worker.id, materialWorkerIdentity: initialWorkerIdentity, materialWorkerProvider: initialWorkerProvider });", file + ': initial persisted producer');`;
-if (!text.includes(oldLine)) throw new Error('r5 producer patcher anchor missing');
-text = text.replace(oldLine, newLine);
+const oldProducer = `    text = once(text, "materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider", "materialWorkerIdentity: initialWorkerIdentity, materialWorkerProvider: initialWorkerProvider", file + ': initial persisted producer');`;
+const newProducer = `    text = once(text, "  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider });", "  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce, materialWorkerRunId: worker.id, materialWorkerIdentity: initialWorkerIdentity, materialWorkerProvider: initialWorkerProvider });", file + ': initial persisted producer');`;
+if (!text.includes(oldProducer)) throw new Error('r5 producer patcher anchor missing');
+text = text.replace(oldProducer, newProducer);
+const oldWait = `  text = all(text, "      requiredStatusName: targetPolicy.requiredStatusName,\\n      token: targetReadToken", "      requiredStatusName: targetPolicy.requiredStatusName,\\n      workflowName: targetPolicy.ciWorkflowName,\\n      token: targetReadToken", 1, file + ': wait workflow name');`;
+const newWait = `  const waitIndent = isResume ? '        ' : '      ';\n  text = all(text, waitIndent + "requiredStatusName: targetPolicy.requiredStatusName,\\n" + waitIndent + "token: targetReadToken", waitIndent + "requiredStatusName: targetPolicy.requiredStatusName,\\n" + waitIndent + "workflowName: targetPolicy.ciWorkflowName,\\n" + waitIndent + "token: targetReadToken", 1, file + ': wait workflow name');`;
+if (!text.includes(oldWait)) throw new Error('r5 wait-indent patcher anchor missing');
+text = text.replace(oldWait, newWait);
 fs.writeFileSync(file, text);
