@@ -7,7 +7,8 @@ import {
   auditSemanticCategory,
   isActiveWorkerPromptAuditPath,
   isCanonicalDeliveryV2DocAuditPath,
-  isGeneratedLowValueAuditPath
+  isGeneratedLowValueAuditPath,
+  isSharedContractAuditPath
 } from '../src/v2/audit-context-policy.mjs';
 
 test('shared semantic policy classifies monorepo code, co-located tests and delivery control surfaces consistently', () => {
@@ -17,6 +18,11 @@ test('shared semantic policy classifies monorepo code, co-located tests and deli
     ['services/api/handler.py', 'executable'],
     ['apps/web/src/page.test.tsx', 'tests'],
     ['src/__tests__/controller.spec.mjs', 'tests'],
+    ['contracts/api.yaml', 'contract'],
+    ['schemas/public-api.json', 'contract'],
+    ['api/openapi.yaml', 'contract'],
+    ['proto/service.proto', 'contract'],
+    ['docs/schema.graphql', 'contract'],
     ['config/delivery-v2-requirements.json', 'config'],
     ['.delivery-v2/lock.json', 'config'],
     ['package.json', 'config'],
@@ -29,8 +35,29 @@ test('shared semantic policy classifies monorepo code, co-located tests and deli
   ]);
 
   for (const [filePath, expected] of cases) assert.equal(auditSemanticCategory(filePath), expected, filePath);
-  assert.deepEqual(AUDIT_RESERVED_SEMANTIC_CATEGORIES, ['executable', 'tests', 'config', 'evidence', 'canonical-docs', 'prompts']);
+  assert.deepEqual(AUDIT_RESERVED_SEMANTIC_CATEGORIES, ['executable', 'tests', 'contract', 'config', 'evidence', 'canonical-docs', 'prompts']);
   assert.deepEqual(AUDIT_SEMANTIC_CATEGORY_ORDER.slice(0, AUDIT_RESERVED_SEMANTIC_CATEGORIES.length), AUDIT_RESERVED_SEMANTIC_CATEGORIES);
+});
+
+test('shared contract detection covers protocol, schema and API-definition forms without stealing generic config', () => {
+  for (const filePath of [
+    'contracts/api.yaml',
+    'contract/public.json',
+    'schemas/event.avsc',
+    'idl/payment.proto',
+    'api/openapi.json',
+    'docs/asyncapi.yml',
+    'service.wsdl',
+    'types/user.schema.json'
+  ]) {
+    assert.equal(isSharedContractAuditPath(filePath), true, filePath);
+    assert.equal(auditSemanticCategory(filePath), 'contract', filePath);
+  }
+
+  for (const filePath of ['config/runtime.yaml', 'vite.config.ts', '.delivery-v2/lock.json']) {
+    assert.equal(isSharedContractAuditPath(filePath), false, filePath);
+    assert.equal(auditSemanticCategory(filePath), 'config', filePath);
+  }
 });
 
 test('specific audit identities win over generic path classes and generated exclusions stay explicit', () => {

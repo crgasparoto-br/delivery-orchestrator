@@ -3,6 +3,7 @@ import { extname, posix as pathPosix } from 'node:path';
 export const AUDIT_RESERVED_SEMANTIC_CATEGORIES = Object.freeze([
   'executable',
   'tests',
+  'contract',
   'config',
   'evidence',
   'canonical-docs',
@@ -26,8 +27,15 @@ const WORKER_PROMPT_PATTERN = /^\.github\/workflows\/delivery-v2-worker-(?:claud
 const CANONICAL_DOC_PATTERN = /^docs\/delivery-v2\/(?:MASTER_SPEC|AUDIT_CONTRACT|ROADMAP)\.md$/;
 const TEST_DIRECTORY_PATTERN = /(?:^|\/)(?:test|tests|__tests__)(?:\/|$)/;
 const TEST_FILE_PATTERN = /(?:^|\/)[^/]*\.(?:test|spec)\.[^/]+$/;
+const CONTRACT_PATH_PATTERNS = Object.freeze([
+  /^(?:contracts?|schemas?|idl|protos?|openapi|asyncapi|api[-_](?:contracts?|specs?))(?:\/|$)/i,
+  /(?:^|\/)(?:openapi|swagger|asyncapi)(?:\.[^/]+)?$/i,
+  /(?:^|\/)(?:schema|contract)\.(?:graphqls?|json|prisma|sql|toml|xml|ya?ml)$/i,
+  /(?:^|\/)[^/]+\.(?:schema|contract)\.(?:json|toml|xml|ya?ml)$/i,
+  /(?:^|\/)[^/]+\.(?:avsc|proto|raml|wsdl|xsd)$/i
+]);
 const CONFIG_PATH_PATTERNS = Object.freeze([
-  /^(?:config|schemas)(?:\/|$)/,
+  /^config(?:\/|$)/,
   /^\.delivery-v2(?:\/|$)/,
   /^\.github\/workflows(?:\/|$)/,
   /(?:^|\/)(?:package|tsconfig|jsconfig)\.json$/,
@@ -63,6 +71,11 @@ export function isCanonicalDeliveryV2DocAuditPath(filePath) {
   return Boolean(value && CANONICAL_DOC_PATTERN.test(value));
 }
 
+export function isSharedContractAuditPath(filePath) {
+  const value = normalizeAuditSemanticPath(filePath);
+  return Boolean(value && CONTRACT_PATH_PATTERNS.some((pattern) => pattern.test(value)));
+}
+
 export function auditSemanticCategory(filePath) {
   const value = normalizeAuditSemanticPath(filePath);
   if (!value) return 'other';
@@ -70,6 +83,7 @@ export function auditSemanticCategory(filePath) {
   if (/^docs\/delivery-v2\/evidence\//.test(value)) return 'evidence';
   if (CANONICAL_DOC_PATTERN.test(value)) return 'canonical-docs';
   if (WORKER_PROMPT_PATTERN.test(value)) return 'prompts';
+  if (CONTRACT_PATH_PATTERNS.some((pattern) => pattern.test(value))) return 'contract';
   if (CONFIG_PATH_PATTERNS.some((pattern) => pattern.test(value))) return 'config';
   if (/^(?:docs)(?:\/|$)/.test(value) || /(?:^|\/)README(?:\.[^/]*)?$/i.test(value)) return 'docs';
   if (EXECUTABLE_EXTENSIONS.has(extname(value).toLowerCase()) || EXECUTABLE_ROOT_PATTERN.test(value) || /^\.github\/scripts(?:\/|$)/.test(value)) return 'executable';
