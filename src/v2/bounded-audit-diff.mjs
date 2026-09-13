@@ -52,19 +52,59 @@ function splitDiffBlocks(diffText) {
   return starts.map((start, index) => text.slice(start, starts[index + 1] ?? text.length));
 }
 
+function decodeGitQuotedPath(raw) {
+  const text = String(raw ?? '');
+  if (!text.startsWith('"')) return null;
+  const bytes = [];
+  const simpleEscapes = Object.freeze({ a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 });
+  for (let index = 1; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '"') return Buffer.from(bytes).toString('utf8');
+    if (character !== '\\') {
+      bytes.push(...Buffer.from(character, 'utf8'));
+      continue;
+    }
+    index += 1;
+    if (index >= text.length) return null;
+    const escape = text[index];
+    if (Object.prototype.hasOwnProperty.call(simpleEscapes, escape)) {
+      bytes.push(simpleEscapes[escape]);
+      continue;
+    }
+    if (/[0-7]/.test(escape)) {
+      let octal = escape;
+      while (octal.length < 3 && index + 1 < text.length && /[0-7]/.test(text[index + 1])) {
+        octal += text[index + 1];
+        index += 1;
+      }
+      bytes.push(Number.parseInt(octal, 8));
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
 function decodeDiffPath(value) {
   const raw = String(value ?? '').trim();
   if (!raw || raw === '/dev/null') return null;
-  let decoded = raw;
-  if (decoded.startsWith('"')) {
-    try {
-      decoded = JSON.parse(decoded);
-    } catch {
-      return null;
-    }
+  let decoded;
+  if (raw.startsWith('"')) {
+    decoded = decodeGitQuotedPath(raw);
+    if (!decoded) return null;
+  } else {
+    decoded = raw.split('\t', 1)[0];
   }
   if (decoded.startsWith('a/') || decoded.startsWith('b/')) decoded = decoded.slice(2);
   return decoded || null;
+}
+
+function diffGitHeaderPath(lines) {
+  const header = lines.find((candidate) => candidate.startsWith('diff --git '));
+  if (!header) return null;
+  const rawTokens = header.slice('diff --git '.length).match(/"(?:\\.|[^"\\])*"|\S+/g) ?? [];
+  if (rawTokens.length !== 2) return null;
+  return decodeDiffPath(rawTokens[1]) ?? decodeDiffPath(rawTokens[0]);
 }
 
 function diffBlockPath(block) {
@@ -75,7 +115,7 @@ function diffBlockPath(block) {
     const parsed = decodeDiffPath(line.slice(prefix.length));
     if (parsed) return parsed;
   }
-  return null;
+  return diffGitHeaderPath(lines);
 }
 
 function generatedLowValuePath(filePath) {
@@ -111,17 +151,17 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
     && parsedPathSet.size === parsedBlockPaths.length
     && parsedPathSet.size === changedPathSet.size
     && parsedBlockPaths.every((filePath) => changedPathSet.has(filePath));
+  if (!alignmentExact) throw new Error('audit diff path alignment could not be proven; refusing semantic audit context');
 
   const entries = blocks.map((block, index) => {
-    const parsedPath = parsedBlockPaths[index];
-    const path = parsedPath && changedPathSet.has(parsedPath) ? parsedPath : null;
+    const path = parsedBlockPaths[index];
     return {
       index,
       path,
       block,
       bytes: Buffer.byteLength(block, 'utf8'),
       sha256: sha256(block),
-      category: path ? semanticCategory(path) : 'other'
+      category: semanticCategory(path)
     };
   });
 
@@ -144,7 +184,7 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
 
   const eligible = [];
   for (const entry of entries) {
-    if (entry.path && generatedLowValuePath(entry.path)) {
+    if (generatedLowValuePath(entry.path)) {
       omitted.push({ index: entry.index, path: entry.path, bytes: entry.bytes, sha256: entry.sha256, category: entry.category, reason: 'generated-low-value' });
       continue;
     }
@@ -156,24 +196,20 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
   }
 
   const reservationCandidates = new Map();
-  if (alignmentExact) {
-    for (const category of RESERVED_SEMANTIC_CATEGORIES) {
-      const candidates = eligible
-        .filter((entry) => entry.category === category)
-        .sort((a, b) => a.bytes - b.bytes || a.index - b.index);
-      if (candidates.length > 0) reservationCandidates.set(category, candidates[0]);
-    }
-    for (const category of RESERVED_SEMANTIC_CATEGORIES) {
-      const representative = reservationCandidates.get(category);
-      if (representative) include(representative);
-    }
+  for (const category of RESERVED_SEMANTIC_CATEGORIES) {
+    const candidates = eligible
+      .filter((entry) => entry.category === category)
+      .sort((a, b) => a.bytes - b.bytes || a.index - b.index);
+    if (candidates.length > 0) reservationCandidates.set(category, candidates[0]);
+  }
+  for (const category of RESERVED_SEMANTIC_CATEGORIES) {
+    const representative = reservationCandidates.get(category);
+    if (representative) include(representative);
   }
 
-  const spillover = alignmentExact
-    ? eligible
-      .filter((entry) => !includedIndexes.has(entry.index))
-      .sort((a, b) => SEMANTIC_CATEGORY_ORDER.indexOf(a.category) - SEMANTIC_CATEGORY_ORDER.indexOf(b.category) || a.index - b.index)
-    : eligible;
+  const spillover = eligible
+    .filter((entry) => !includedIndexes.has(entry.index))
+    .sort((a, b) => SEMANTIC_CATEGORY_ORDER.indexOf(a.category) - SEMANTIC_CATEGORY_ORDER.indexOf(b.category) || a.index - b.index);
   for (const entry of spillover) include(entry);
 
   for (const entry of eligible) {
@@ -195,7 +231,7 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
   const boundedText = orderedIncluded.map((entry) => entry.block).join('');
   const manifest = Object.freeze({
     schemaVersion: 3,
-    strategy: alignmentExact ? 'bounded-semantic-class-representative-unified-diff' : 'bounded-unified-diff-unverified-path-alignment',
+    strategy: 'bounded-semantic-class-representative-unified-diff',
     limits: resolvedLimits,
     categoryReservations,
     categoryBytes: Object.freeze(categoryBytes),
@@ -203,7 +239,7 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
     fullDiffSha256: sha256(text),
     changedPathCount: normalizedChangedPaths.length,
     blockCount: blocks.length,
-    alignmentExact,
+    alignmentExact: true,
     boundedBytes: totalBytes,
     included: Object.freeze(orderedIncluded.map(({ block, ...entry }) => Object.freeze(entry))),
     omitted: Object.freeze(omitted.sort((a, b) => a.index - b.index).map((entry) => Object.freeze(entry))),
