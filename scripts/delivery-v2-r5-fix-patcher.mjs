@@ -9,4 +9,8 @@ const oldWait = `  text = all(text, "      requiredStatusName: targetPolicy.requ
 const newWait = `  const waitIndent = isResume ? '        ' : '      ';\n  text = all(text, waitIndent + "requiredStatusName: targetPolicy.requiredStatusName,\\n" + waitIndent + "token: targetReadToken", waitIndent + "requiredStatusName: targetPolicy.requiredStatusName,\\n" + waitIndent + "workflowName: targetPolicy.ciWorkflowName,\\n" + waitIndent + "token: targetReadToken", 1, file + ': wait workflow name');`;
 if (!text.includes(oldWait)) throw new Error('r5 wait-indent patcher anchor missing');
 text = text.replace(oldWait, newWait);
+const oldDispatch = `  text = all(text, "orchestratorRepository, orchestratorRef, plan, targetRepository", "orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository", 1, file + ': dispatch call provenance');`;
+const newDispatch = `  if (isResume) {\n    text = once(text, "        orchestratorRef,\\n        plan,\\n        targetRepository,", "        orchestratorRef,\\n        plan,\\n        controllerRunId,\\n        targetRepository,", file + ': dispatch call provenance');\n  } else {\n    text = all(text, "orchestratorRepository, orchestratorRef, plan, targetRepository", "orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository", 1, file + ': dispatch call provenance');\n  }`;
+if (!text.includes(oldDispatch)) throw new Error('r5 dispatch-call patcher anchor missing');
+text = text.replace(oldDispatch, newDispatch);
 fs.writeFileSync(file, text);
