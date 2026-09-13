@@ -1,0 +1,205 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+const expr = (value) => '$' + '{{ ' + value + ' }}';
+function read(p) { return fs.readFileSync(p, 'utf8'); }
+function write(p, v) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, v); }
+function once(text, oldValue, newValue, label) {
+  const first = text.indexOf(oldValue);
+  if (first < 0) throw new Error('missing anchor: ' + label);
+  if (text.indexOf(oldValue, first + oldValue.length) >= 0) throw new Error('ambiguous anchor: ' + label);
+  return text.slice(0, first) + newValue + text.slice(first + oldValue.length);
+}
+function all(text, oldValue, newValue, min, label) {
+  const count = text.split(oldValue).length - 1;
+  if (count < min) throw new Error('insufficient anchors ' + label + ': ' + count);
+  return text.split(oldValue).join(newValue);
+}
+
+const corr = `const RUN_URL_RE = /\\/actions\\/runs\\/(\\d+)(?:\\/|$)/;
+
+function requiredPositiveInteger(value, label) {
+  const result = Number(value);
+  if (!Number.isInteger(result) || result < 1) throw new Error(\`${'${label}'} must be a positive integer\`);
+  return result;
+}
+
+function requiredSha(value, label) {
+  const result = String(value ?? '').trim().toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(result)) throw new Error(\`${'${label}'} must be a 40-character Git SHA\`);
+  return result;
+}
+
+export function workflowRunIdFromCheck(check) {
+  const match = String(check?.details_url ?? '').match(RUN_URL_RE);
+  return match ? requiredPositiveInteger(match[1], 'workflow run id from check') : null;
+}
+
+export function selectAuthoritativeSourceWorkflowRun(runs, { workflowName, sha } = {}) {
+  if (!Array.isArray(runs)) throw new Error('workflow runs must be an array');
+  const expectedName = String(workflowName ?? '').trim();
+  if (!expectedName) throw new Error('workflowName is required');
+  const expectedSha = requiredSha(sha, 'sha');
+  const matches = runs.filter((run) =>
+    String(run?.name ?? '') === expectedName
+    && String(run?.event ?? '') === 'pull_request'
+    && String(run?.head_sha ?? '').toLowerCase() === expectedSha
+  ).sort((a, b) => Number(b?.run_number ?? 0) - Number(a?.run_number ?? 0) || Number(b?.id ?? 0) - Number(a?.id ?? 0));
+  return matches[0] ?? null;
+}
+
+export function selectCheckForWorkflowRun(checks, { requiredStatusName, workflowRunId } = {}) {
+  if (!Array.isArray(checks)) throw new Error('check runs must be an array');
+  const expectedName = String(requiredStatusName ?? '').trim();
+  if (!expectedName) throw new Error('requiredStatusName is required');
+  const expectedRunId = requiredPositiveInteger(workflowRunId, 'workflowRunId');
+  const matches = checks.filter((check) => String(check?.name ?? '') === expectedName && workflowRunIdFromCheck(check) === expectedRunId);
+  if (matches.length > 1) throw new Error(\`ambiguous required check ${'${expectedName}'} for workflow run ${'${expectedRunId}'}\`);
+  return matches[0] ?? null;
+}
+`;
+write('src/v2/ci-evidence-correlation.mjs', corr);
+
+const corrTest = `import assert from 'node:assert/strict';
+import test from 'node:test';
+import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun, workflowRunIdFromCheck } from '../src/v2/ci-evidence-correlation.mjs';
+
+const SHA = 'a'.repeat(40);
+
+test('CI evidence selects the newest exact-head workflow run even when an older green run exists', () => {
+  const older = { id: 10, run_number: 7, name: 'Delivery V2 CI', event: 'pull_request', head_sha: SHA, status: 'completed', conclusion: 'success' };
+  const newer = { id: 11, run_number: 8, name: 'Delivery V2 CI', event: 'pull_request', head_sha: SHA, status: 'in_progress', conclusion: null };
+  assert.equal(selectAuthoritativeSourceWorkflowRun([older, newer], { workflowName: 'Delivery V2 CI', sha: SHA }).id, 11);
+});
+
+test('required check is accepted only when details_url binds it to the authoritative workflow run', () => {
+  const oldCheck = { id: 1, name: 'V2 platform checks', details_url: 'https://github.com/o/r/actions/runs/10/job/1' };
+  const currentCheck = { id: 2, name: 'V2 platform checks', details_url: 'https://github.com/o/r/actions/runs/11/job/2' };
+  assert.equal(workflowRunIdFromCheck(currentCheck), 11);
+  assert.equal(selectCheckForWorkflowRun([oldCheck, currentCheck], { requiredStatusName: 'V2 platform checks', workflowRunId: 11 }).id, 2);
+  assert.throws(() => selectCheckForWorkflowRun([currentCheck, { ...currentCheck, id: 3 }], { requiredStatusName: 'V2 platform checks', workflowRunId: 11 }), /ambiguous/);
+});
+`;
+write('test/v2-ci-evidence-correlation.test.mjs', corrTest);
+
+function patchController(file, isResume) {
+  let text = read(file);
+  const importAnchor = "import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';\n";
+  text = once(text, importAnchor, importAnchor + "import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';\n", file + ': correlation import');
+  const drift = isResume
+    ? "    if (String(pr.head.sha).toLowerCase() !== sha.toLowerCase()) return { kind: 'head-drift', pullRequest: pr };"
+    : "    const current = String(pr.head.sha).toLowerCase();\n    if (current !== sha.toLowerCase()) return { kind: 'head-drift', pullRequest: pr };";
+  const oldFns = `async function waitRequiredCheck({ repository, prNumber, sha, requiredStatusName, token }) {
+  const deadline = Date.now() + MAX_STAGE_MS;
+  while (Date.now() < deadline) {
+    const pr = await fetchPullRequest(repository, prNumber, token);
+${drift}
+    const check = (await fetchCheckRuns(repository, sha, token)).find((item) => item.name === requiredStatusName);
+    if (check?.status === 'completed') return { kind: 'check', check, pullRequest: pr };
+    await sleep(POLL_MS);
+  }
+  throw new Error(\`required check ${'${requiredStatusName}'} did not become terminal within bounded timeout\`);
+}
+
+async function sourceWorkflowRunForHead({ repository, sha, workflowName, token }) {
+  const payload = await api(\`https://api.github.com/repos/${'${repository}'}/actions/runs?head_sha=${'${sha}'}&event=pull_request&per_page=100\`, token);
+  const matches = (payload.workflow_runs ?? []).filter((run) => run.name === workflowName && run.status === 'completed' && run.conclusion === 'success');
+  if (matches.length === 0) throw new Error(\`no terminal green source workflow ${'${workflowName}'} found for ${'${sha}'}\`);
+  return matches.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0];
+}`;
+  const newFns = `async function sourceWorkflowRunForHead({ repository, sha, workflowName, token }) {
+  const payload = await api(\`https://api.github.com/repos/${'${repository}'}/actions/runs?head_sha=${'${sha}'}&event=pull_request&per_page=100\`, token);
+  return selectAuthoritativeSourceWorkflowRun(payload.workflow_runs ?? [], { workflowName, sha });
+}
+
+async function waitRequiredCheck({ repository, prNumber, sha, requiredStatusName, workflowName, token }) {
+  const deadline = Date.now() + MAX_STAGE_MS;
+  while (Date.now() < deadline) {
+    const pr = await fetchPullRequest(repository, prNumber, token);
+${drift}
+    const sourceRun = await sourceWorkflowRunForHead({ repository, sha, workflowName, token });
+    if (!sourceRun) { await sleep(POLL_MS); continue; }
+    const check = selectCheckForWorkflowRun(await fetchCheckRuns(repository, sha, token), { requiredStatusName, workflowRunId: sourceRun.id });
+    if (sourceRun.status === 'completed' && check?.status === 'completed') return { kind: 'check', check, sourceRun, pullRequest: pr };
+    if (sourceRun.status === 'completed' && !check) throw new Error(\`required check ${'${requiredStatusName}'} is missing for authoritative workflow run ${'${sourceRun.id}'}\`);
+    await sleep(POLL_MS);
+  }
+  throw new Error(\`required check ${'${requiredStatusName}'} did not become terminal within bounded timeout\`);
+}`;
+  text = once(text, oldFns, newFns, file + ': CI correlation functions');
+  text = all(text, "      requiredStatusName: targetPolicy.requiredStatusName,\n      token: targetReadToken", "      requiredStatusName: targetPolicy.requiredStatusName,\n      workflowName: targetPolicy.ciWorkflowName,\n      token: targetReadToken", 1, file + ': wait workflow name');
+  if (isResume) {
+    text = once(text, "      latestCheck = observed.check;\n      if (latestCheck.conclusion === 'success') {\n        latestSourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });", "      latestCheck = observed.check;\n      latestSourceRun = observed.sourceRun;\n      const ciConclusion = latestCheck.conclusion === 'success' ? latestSourceRun.conclusion : latestCheck.conclusion;\n      if (ciConclusion === 'success') {", file + ': observed source run');
+    text = once(text, "      const failureClass = ciFailureClassForEvidence({ conclusion: latestCheck.conclusion, failedJobs: failureEvidence.failedJobs });", "      const failureClass = ciFailureClassForEvidence({ conclusion: ciConclusion, failedJobs: failureEvidence.failedJobs });", file + ': failure class conclusion');
+    text = all(text, "cause: `${latestCheck.name}:${latestCheck.conclusion}:${failureClass}`", "cause: `${latestCheck.name}:${ciConclusion}:${failureClass}`", 1, file + ': failure cause');
+  } else {
+    text = once(text, "    latestCheck = observed.check;\n    latestSourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken }).catch(() => null);\n    if (latestCheck.conclusion !== 'success') {", "    latestCheck = observed.check;\n    latestSourceRun = observed.sourceRun;\n    const ciConclusion = latestCheck.conclusion === 'success' ? latestSourceRun.conclusion : latestCheck.conclusion;\n    if (ciConclusion !== 'success') {", file + ': observed source run');
+    text = once(text, "      const failureClass = ciFailureClassForEvidence({ conclusion: latestCheck.conclusion, failedJobs: failureEvidence.failedJobs });", "      const failureClass = ciFailureClassForEvidence({ conclusion: ciConclusion, failedJobs: failureEvidence.failedJobs });", file + ': failure class conclusion');
+    text = all(text, "cause: `${latestCheck.name}:${latestCheck.conclusion}:${failureClass}`", "cause: `${latestCheck.name}:${ciConclusion}:${failureClass}`", 1, file + ': failure cause');
+  }
+  const sigOld = isResume
+    ? "async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef, targetPr, remediationContext, token, dispatchNonce = createDispatchNonce() }) {"
+    : "async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, targetRepository, issueNumber, baseBranch, targetRef, targetPr = '', remediationContext = '', token, dispatchNonce = createDispatchNonce() }) {";
+  text = once(text, sigOld, sigOld.replace('plan, targetRepository', 'plan, controllerRunId, targetRepository'), file + ': dispatch signature');
+  text = once(text, "      target_repository: targetRepository,\n      target_issue: String(issueNumber),", "      controller_run_id: String(controllerRunId),\n      target_repository: targetRepository,\n      target_issue: String(issueNumber),", file + ': controller run input');
+  text = all(text, "orchestratorRepository, orchestratorRef, plan, targetRepository", "orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository", 1, file + ': dispatch call provenance');
+  if (!isResume) {
+    text = once(text, "  const dispatchDecision = createDispatchDecision(plan);", "  const dispatchDecision = createDispatchDecision(plan);\n  const initialWorkerIdentity = plan.implementation.workflow;\n  const initialWorkerProvider = plan.implementation.provider;", file + ': initial producer identity');
+    text = once(text, "materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider", "materialWorkerIdentity: initialWorkerIdentity, materialWorkerProvider: initialWorkerProvider", file + ': initial persisted producer');
+    text = once(text, "          implementer_provider: plan.implementation.provider,\n          implementer_worker_identity: plan.implementation.workflow,\n          implementer_run_id: String(worker.id),", "          implementer_provider: controller.materialWorkerProvider ?? initialWorkerProvider,\n          implementer_worker_identity: controller.materialWorkerIdentity ?? initialWorkerIdentity,\n          implementer_run_id: String(controller.materialWorkerRunId ?? worker.id),", file + ': audit producer identity');
+  }
+  write(file, text);
+}
+patchController('scripts/run-delivery-v2-controller.mjs', false);
+patchController('scripts/resume-delivery-v2-controller.mjs', true);
+
+let dispatch = read('.github/workflows/delivery-v2-dispatch.yml');
+dispatch = once(dispatch, "permissions:\n  actions: write", "run-name: \"Delivery V2 controller " + expr('inputs.target_repository') + " #" + expr('inputs.target_issue') + "\"\n\npermissions:\n  actions: write", 'dispatch run-name');
+write('.github/workflows/delivery-v2-dispatch.yml', dispatch);
+
+const workerFiles = fs.readdirSync('.github/workflows').filter((name) => /^delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)\.md$/.test(name)).map((name) => '.github/workflows/' + name);
+if (workerFiles.length !== 9) throw new Error('expected 9 worker sources, got ' + workerFiles.length);
+for (const file of workerFiles) {
+  let text = read(file);
+  text = once(text, "      dispatch_nonce: {description: Deterministic controller dispatch correlation nonce, required: true, type: string}\n", "      dispatch_nonce: {description: Deterministic controller dispatch correlation nonce, required: true, type: string}\n      controller_run_id: {description: Authoritative Delivery V2 controller workflow run id, required: true, type: string}\n", file + ': controller_run_id');
+  text = once(text, "permissions:\n  contents: read\n  issues: read", "permissions:\n  actions: read\n  contents: read\n  issues: read", file + ': actions permission');
+  const guard = [
+    'pre-steps:',
+    '  - name: Validate controller provenance',
+    '    shell: bash',
+    '    env:',
+    '      CONTROLLER_RUN_ID: ' + expr('github.event.inputs.controller_run_id'),
+    '      TARGET_REPOSITORY: ' + expr('github.event.inputs.target_repository'),
+    '      TARGET_ISSUE: ' + expr('github.event.inputs.target_issue'),
+    '      DEFAULT_BRANCH: ' + expr('github.event.repository.default_branch'),
+    '      GITHUB_TOKEN: ' + expr('github.token'),
+    '    run: |',
+    "      node <<'PROVENANCE'",
+    "      const id = Number(process.env.CONTROLLER_RUN_ID);",
+    "      if (!Number.isInteger(id) || id < 1) throw new Error('invalid controller run id');",
+    "      const response = await fetch('https://api.github.com/repos/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + id, { headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + process.env.GITHUB_TOKEN, 'X-GitHub-Api-Version': '2022-11-28' } });",
+    "      if (!response.ok) throw new Error('controller run lookup failed: ' + response.status);",
+    "      const run = await response.json();",
+    "      const expectedTitle = 'Delivery V2 controller ' + process.env.TARGET_REPOSITORY + ' #' + process.env.TARGET_ISSUE;",
+    "      if (run.path !== '.github/workflows/delivery-v2-dispatch.yml') throw new Error('untrusted controller workflow path');",
+    "      if (run.event !== 'workflow_dispatch') throw new Error('untrusted controller event');",
+    "      if (run.head_branch !== process.env.DEFAULT_BRANCH) throw new Error('untrusted controller ref');",
+    "      if (!['queued', 'in_progress'].includes(run.status)) throw new Error('controller run is not live');",
+    "      if (run.display_title !== expectedTitle) throw new Error('controller target identity mismatch');",
+    '      PROVENANCE',
+    ''
+  ].join('\n');
+  text = once(text, 'engine:', guard + 'engine:', file + ': provenance guard');
+  write(file, text);
+}
+
+let runtime = read('src/v2/controller-runtime.mjs');
+runtime = once(runtime, "export function mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs = [], requiredJobName } = {}) {", "export function mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs = [], requiredJobName, jobLogById = {} } = {}) {", 'merge preview helper signature');
+runtime = once(runtime, "  const job = matches[0];\n  if (!job) return identity.mergePreview;\n  return Object.freeze({", "  const job = matches[0];\n  if (!job) return identity.mergePreview;\n  const jobId = requiredPositiveInteger(job.id, 'merge-preview job.id');\n  const log = String(jobLogById?.[jobId] ?? '');\n  const previewSha = identity.mergePreview.previewSha;\n  const prMergeRef = `refs/pull/${prNumber}/merge`;\n  if (!log.includes(previewSha) || (!log.includes(prMergeRef) && !log.includes(`pull/${prNumber}/merge`))) {\n    return identity.mergePreview;\n  }\n  return Object.freeze({", 'merge preview log proof');
+runtime = once(runtime, "  const payload = await fetchJson(`https://api.github.com/repos/${repo}/actions/runs/${runId}/jobs?per_page=100`, token);\n  return mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs: payload.jobs ?? [], requiredJobName });", "  const payload = await fetchJson(`https://api.github.com/repos/${repo}/actions/runs/${runId}/jobs?per_page=100`, token);\n  const jobs = payload.jobs ?? [];\n  const jobName = requiredString(requiredJobName, 'requiredJobName');\n  const matchingJobs = jobs.filter((job) => String(job?.name ?? '') === jobName);\n  if (matchingJobs.length > 1) throw new Error('ambiguous merge-preview validation jobs');\n  const jobLogById = {};\n  if (matchingJobs[0]) {\n    const jobId = requiredPositiveInteger(matchingJobs[0].id, 'merge-preview job.id');\n    const response = await fetch(`https://api.github.com/repos/${repo}/actions/jobs/${jobId}/logs`, { headers: githubHeaders(token) });\n    if (response.ok) jobLogById[jobId] = (await response.text()).slice(-300000);\n  }\n  return mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs, requiredJobName, jobLogById });", 'merge preview collector proof');
+write('src/v2/controller-runtime.mjs', runtime);
+
+let rt = read('test/v2-controller-runtime.test.mjs');
+rt = once(rt, "jobs: [{ name: 'Merge preview compatibility', status: 'completed', conclusion: 'success', html_url: 'job:1' }], requiredJobName: 'Merge preview compatibility'", "jobs: [{ id: 1, name: 'Merge preview compatibility', status: 'completed', conclusion: 'success', html_url: 'job:1' }], requiredJobName: 'Merge preview compatibility', jobLogById: { 1: `checkout refs/pull/64/merge ${previewSha}` }", 'runtime test positive log');
+rt = once(rt, "  assert.equal(missing.status, 'pending');\n", "  assert.equal(missing.status, 'pending');\n  const unbound = mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: run, jobs: [{ id: 2, name: 'Merge preview compatibility', status: 'completed', conclusion: 'success', html_url: 'job:2' }], requiredJobName: 'Merge preview compatibility', jobLogById: { 2: 'checkout unrelated-ref' } });\n  assert.equal(unbound.status, 'pending');\n", 'runtime test negative log');
+write('test/v2-controller-runtime.test.mjs', rt);
