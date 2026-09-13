@@ -1,0 +1,85 @@
+{
+  "parent": "e4267ddbc357ae511a8cc69b98b1422c0ceef11a",
+  "files": [
+    {
+      "path": ".github/workflows/delivery-v2-audit.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-ci.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/.v2-r2-part-00",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-r2-part-01",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-r2-part-02",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-r2-part-03",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-r2-part-04",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/apply-v2-audit-round2.mjs",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/guard-delivery-v2-reentry.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/resume-delivery-v2-controller.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/run-delivery-v2-controller.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/run-delivery-v2-github-audit.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "src/v2/controller-runtime.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-controller-runtime.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-github-native-audit-runtime.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-reentry-guard.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    }
+  ]
+}

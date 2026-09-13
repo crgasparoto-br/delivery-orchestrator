@@ -1,0 +1,97 @@
+name: Delivery V2 CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/v2/**'
+      - 'test/v2-*.test.mjs'
+      - 'actions/delivery-v2-risk/**'
+      - 'src/cli.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'config/delivery-v2-requirements.json'
+      - 'config/delivery-v2-targets/**'
+      - 'schemas/delivery-v2-metrics.schema.json'
+      - 'schemas/delivery-v2-requirements.schema.json'
+      - 'schemas/delivery-v2-target-policy.schema.json'
+      - 'scripts/export-delivery-v2-classifier.mjs'
+      - 'scripts/run-delivery-v2-independent-audit.mjs'
+      - 'scripts/verify-delivery-v2-completeness.mjs'
+      - 'scripts/verify-delivery-v2-targets.mjs'
+      - '.github/delivery-orchestrator-capabilities.json'
+      - '.github/aw/actions-lock.json'
+      - '.github/workflows/delivery-v2-*.yml'
+      - '.github/workflows/delivery-v2-*.md'
+      - '.github/workflows/delivery-v2-*.lock.yml'
+      - 'docs/delivery-v2.md'
+      - 'docs/delivery-v2/**'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: delivery-v2-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    name: V2 platform checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: V2 unit tests
+        run: node --test test/v2-*.test.mjs
+
+      - name: Verify Delivery V2 contract
+        run: npm run verify:v2
+
+      - name: Verify Delivery V2 terminal completeness
+        run: npm run verify:v2:complete
+
+      - name: Syntax checks
+        shell: bash
+        run: |
+          node --check src/cli.mjs
+          for file in src/v2/*.mjs; do
+            node --check "$file"
+          done
+          node --check actions/delivery-v2-risk/index.cjs
+          node --check scripts/export-delivery-v2-classifier.mjs
+          node --check scripts/run-delivery-v2-independent-audit.mjs
+          node --check scripts/verify-delivery-v2-completeness.mjs
+          node --check scripts/verify-delivery-v2-targets.mjs
+
+      - name: Install pinned gh-aw
+        uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
+        with:
+          version: v0.88.7
+
+      - name: Verify compiled gh-aw workers
+        shell: bash
+        run: |
+          gh aw compile --strict
+          git diff --exit-code -- .github/workflows/delivery-v2-worker-*.lock.yml .github/aw/actions-lock.json
+
+      - name: Smoke deterministic plan
+        run: >-
+          node src/cli.mjs plan-v2
+          --repo crgasparoto-br/example
+          --issue 1
+          --provider copilot
+          --risk fast
+          --path apps/web/src/components/Example.tsx
