@@ -1,0 +1,90 @@
+{
+  "parent": "493d55a2fe8dc776a2b13426e2a982390d12d64b",
+  "files": [
+    {
+      "path": ".github/workflows/delivery-v2-audit.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-ci.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/.v2-final-part-00",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-final-part-01",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-final-part-02",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-final-part-03",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/apply-v2-final-audit-remediation.mjs",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/guard-delivery-v2-reentry.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/resume-delivery-v2-controller.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/run-delivery-v2-controller.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/run-delivery-v2-github-audit.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "src/v2/controller-runtime.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "src/v2/persistent-state.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-controller-runtime.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-github-native-audit-runtime.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-persistent-state.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-reentry-guard.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    }
+  ]
+}

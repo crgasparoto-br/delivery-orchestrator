@@ -1,0 +1,199 @@
+name: Delivery V2 - GitHub Native Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repository:
+        description: Target repository in owner/repo form
+        required: true
+        type: string
+      target_issue:
+        description: Target issue number
+        required: true
+        type: string
+      target_pr:
+        description: Exact target pull request number
+        required: true
+        type: string
+      risk_profile:
+        description: Effective risk profile for this exact material head
+        required: true
+        type: choice
+        options: [standard, critical]
+      source_workflow_run_id:
+        description: Exact-head target CI workflow run id
+        required: true
+        type: string
+      source_workflow_name:
+        description: Trusted target CI workflow name
+        required: true
+        type: string
+      source_workflow_path:
+        description: Trusted target CI workflow path
+        required: true
+        type: string
+      implementation_attempt:
+        description: Material implementation/remediation attempt count
+        required: true
+        default: '1'
+        type: string
+      implementer_provider:
+        description: AI provider that produced the audited material head
+        required: true
+        type: string
+      implementer_worker_identity:
+        description: Exact implementation worker workflow identity
+        required: true
+        type: string
+      implementer_run_id:
+        description: Exact implementation worker run that produced the audited material head
+        required: true
+        type: string
+      dispatch_nonce:
+        description: Deterministic controller dispatch correlation nonce
+        required: true
+        type: string
+
+run-name: Delivery V2 audit ${{ inputs.dispatch_nonce }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delivery-v2-audit-${{ inputs.target_repository }}-${{ inputs.target_pr }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Independent semantic audit
+    runs-on: [self-hosted, linux, delivery-orchestrator]
+    timeout-minutes: 60
+    env:
+      TARGET_REPOSITORY: ${{ inputs.target_repository }}
+      TARGET_ISSUE: ${{ inputs.target_issue }}
+      TARGET_PR: ${{ inputs.target_pr }}
+      AUDIT_RISK_PROFILE: ${{ inputs.risk_profile }}
+      SOURCE_WORKFLOW_RUN_ID: ${{ inputs.source_workflow_run_id }}
+      SOURCE_WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
+      SOURCE_WORKFLOW_PATH: ${{ inputs.source_workflow_path }}
+      IMPLEMENTATION_ATTEMPT: ${{ inputs.implementation_attempt }}
+      IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider }}
+      IMPLEMENTER_WORKER_IDENTITY: ${{ inputs.implementer_worker_identity }}
+      IMPLEMENTER_RUN_ID: ${{ inputs.implementer_run_id }}
+      AUDIT_RESULT_PATH: /tmp/delivery-v2-github-audit-${{ github.run_id }}.json
+      DELIVERY_ROLE_RUNTIME_ROOT: /tmp/delivery-v2-auditor-${{ github.run_id }}
+      DELIVERY_ROLE_RUNTIME_WORKER: /tmp/delivery-v2-auditor-${{ github.run_id }}/role-runtime-worker.mjs
+      CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'chatgpt' }}
+      CODEX_AUDITOR_HOME: ${{ vars.CODEX_AUDITOR_HOME }}
+      DELIVERY_IMPLEMENTER_USER: ${{ vars.DELIVERY_IMPLEMENTER_USER || 'delivery-implementer' }}
+      DELIVERY_AUDITOR_USER: ${{ vars.DELIVERY_AUDITOR_USER || 'delivery-auditor' }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.6-sol' }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
+    steps:
+      - name: Restrict target repository
+        shell: bash
+        run: |
+          case "$TARGET_REPOSITORY" in
+            crgasparoto-br/*) ;;
+            *) echo "Target repository is outside the allowed owner: $TARGET_REPOSITORY" >&2; exit 2 ;;
+          esac
+
+      - name: Checkout trusted audit runtime
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate isolated auditor runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin=/usr/local/bin/node
+          npm_bin=/usr/local/bin/npm
+          test -x "$node_bin"
+          test -x "$npm_bin"
+          test "$("$node_bin" -p 'Number(process.versions.node.split(".")[0])')" -ge 22
+          test "$DELIVERY_IMPLEMENTER_USER" != "$DELIVERY_AUDITOR_USER"
+          id "$DELIVERY_AUDITOR_USER" >/dev/null
+          auditor_home="${CODEX_AUDITOR_HOME:-$(getent passwd "$DELIVERY_AUDITOR_USER" | cut -d: -f6)/.codex-delivery/auditor}"
+          if [ "$CODEX_AUTH_MODE" = "chatgpt" ]; then
+            sudo -n -u "$DELIVERY_AUDITOR_USER" -H -- test -r "$auditor_home/auth.json"
+          elif [ "$CODEX_AUTH_MODE" = "api-key" ]; then
+            test -n "$OPENAI_API_KEY"
+          else
+            echo "CODEX_AUTH_MODE must be chatgpt or api-key" >&2
+            exit 2
+          fi
+          test -n "$DELIVERY_GITHUB_READ_TOKEN"
+
+      - name: Install trusted runtime dependencies
+        run: /usr/local/bin/npm ci --no-audit --no-fund
+
+      - name: Prepare isolated auditor role runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -n rm -rf "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n mkdir -p "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n cp src/role-runtime-worker.mjs src/files.mjs "$DELIVERY_ROLE_RUNTIME_ROOT/"
+          sudo -n cp -a node_modules "$DELIVERY_ROLE_RUNTIME_ROOT/node_modules"
+          sudo -n chown -R "$DELIVERY_AUDITOR_USER:$DELIVERY_AUDITOR_USER" "$DELIVERY_ROLE_RUNTIME_ROOT"
+          sudo -n chmod -R u+rwX,go-rwx "$DELIVERY_ROLE_RUNTIME_ROOT"
+
+      - name: Run exact-head GitHub-native audit
+        run: /usr/local/bin/node scripts/run-delivery-v2-github-audit.mjs
+
+      - name: Publish machine-readable result to target PR
+        uses: actions/github-script@v7
+        env:
+          RESULT_PATH: ${{ env.AUDIT_RESULT_PATH }}
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          TARGET_PR: ${{ inputs.target_pr }}
+        with:
+          github-token: ${{ secrets.DELIVERY_GITHUB_WRITE_TOKEN }}
+          script: |
+            const fs = require('node:fs');
+            const payload = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, 'utf8'));
+            const [owner, repo] = process.env.TARGET_REPOSITORY.split('/');
+            const compact = Buffer.from(JSON.stringify({
+              candidateSha: payload.result.candidateSha,
+              decision: payload.result.decision,
+              requestFingerprint: payload.result.requestFingerprint,
+              auditWorkflowRunId: payload.auditWorkflowRunId,
+              findings: payload.result.findings,
+              modelUsage: payload.modelUsage ?? null,
+            })).toString('base64');
+            const body = [
+              '<!-- delivery-v2-independent-audit -->',
+              `<!-- delivery-v2-audit-json:${compact} -->`,
+              '## Delivery V2 independent audit',
+              '',
+              `- Candidate: \`${payload.result.candidateSha}\``,
+              `- Risk: \`${payload.request.candidate.risk.profile}\``,
+              `- Decision: **${payload.result.decision}**`,
+              `- Audit run: ${payload.auditWorkflowRunId}`,
+              `- Request fingerprint: \`${payload.result.requestFingerprint}\``,
+              `- Blocking findings: ${payload.result.findings.filter((finding) => finding.blocksRelease).length}`,
+              '',
+              '```json',
+              JSON.stringify(payload.result.findings, null, 2),
+              '```',
+            ].join('\n');
+            await github.rest.issues.createComment({ owner, repo, issue_number: Number(process.env.TARGET_PR), body });
+
+      - name: Upload audit result
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-v2-audit-${{ inputs.target_pr }}-${{ github.run_id }}
+          path: ${{ env.AUDIT_RESULT_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Cleanup isolated auditor runtime
+        if: always()
+        shell: bash
+        run: |
+          sudo -n rm -rf "$DELIVERY_ROLE_RUNTIME_ROOT"
+          rm -f "$AUDIT_RESULT_PATH"
