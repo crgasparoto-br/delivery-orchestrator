@@ -49,6 +49,8 @@ test('oversized issue body fails closed before model invocation', () => {
     files: { contract: 'contract' }
   });
   assert.equal(budget.allowed, false);
+  assert.equal(budget.issue.bodyContext.truncated, true);
+  assert.equal(budget.issue.bodyContext.omittedBytes, 1);
   assert.ok(budget.reasons.includes('issue-body-truncated'));
   const finding = auditContextInsufficientFinding({ candidateSha: sha, budget });
   assert.equal(finding.blocksRelease, true);
@@ -64,6 +66,8 @@ test('oversized pull request body fails closed before model invocation', () => {
     files: { contract: 'contract' }
   });
   assert.equal(budget.allowed, false);
+  assert.equal(budget.pullRequest.bodyContext.truncated, true);
+  assert.equal(budget.pullRequest.bodyContext.omittedBytes, 1);
   assert.ok(budget.reasons.includes('pull-request-body-truncated'));
 });
 
@@ -74,6 +78,7 @@ test('total audit bundle has a risk-specific hard ceiling', () => {
     files: { large: 'x'.repeat(limits.maxTotalBytes + 1) }
   });
   assert.equal(budget.allowed, false);
+  assert.ok(budget.totalBytes > limits.maxTotalBytes);
   assert.ok(budget.reasons.includes('bundle-total-byte-limit-exceeded'));
   assert.throws(() => auditBundleLimitsForRisk('fast'), /unsupported audit bundle risk profile/);
 });

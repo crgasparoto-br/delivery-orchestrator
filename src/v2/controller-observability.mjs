@@ -29,12 +29,20 @@ function normalizeRefs(value = []) {
   return Object.freeze([...new Set(value.map((item) => requiredString(item, 'observability evidence ref')))]);
 }
 
+function normalizeRunIds(value, label) {
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  const normalized = value.map((item) => positiveInteger(item, `${label} entry`));
+  if (new Set(normalized).size !== normalized.length) throw new Error(`${label} must be unique`);
+  return normalized;
+}
+
 export function createControllerObservability({ startedAtMs = Date.now() } = {}) {
   return Object.freeze({
     schemaVersion: 1,
     startedAtMs: nonNegativeInteger(startedAtMs, 'startedAtMs'),
     providerCalls: 0,
     providerRunIds: Object.freeze([]),
+    observedRunIds: Object.freeze([]),
     aiUsageByStage: Object.freeze({
       implementation: normalizeGhAwUsage({}),
       audit: normalizeGhAwUsage({})
@@ -47,10 +55,11 @@ export function createControllerObservability({ startedAtMs = Date.now() } = {})
 export function normalizeControllerObservability(raw) {
   const value = requiredObject(raw, 'controller observability');
   if (value.schemaVersion !== 1) throw new Error('controller observability schemaVersion must be 1');
-  const runIds = value.providerRunIds ?? [];
-  if (!Array.isArray(runIds)) throw new Error('observability.providerRunIds must be an array');
-  const normalizedRunIds = runIds.map((item) => positiveInteger(item, 'observability provider run id'));
-  if (new Set(normalizedRunIds).size !== normalizedRunIds.length) throw new Error('observability.providerRunIds must be unique');
+  const normalizedRunIds = normalizeRunIds(value.providerRunIds ?? [], 'observability.providerRunIds');
+  const observedRunIds = normalizeRunIds(value.observedRunIds ?? normalizedRunIds, 'observability.observedRunIds');
+  for (const runId of normalizedRunIds) {
+    if (!observedRunIds.includes(runId)) throw new Error('observability.observedRunIds must include every provider run id');
+  }
   const providerCalls = nonNegativeInteger(value.providerCalls, 'observability.providerCalls');
   if (providerCalls !== normalizedRunIds.length) throw new Error('observability.providerCalls must equal providerRunIds length');
   const stages = requiredObject(value.aiUsageByStage, 'observability.aiUsageByStage');
@@ -59,6 +68,7 @@ export function normalizeControllerObservability(raw) {
     startedAtMs: nonNegativeInteger(value.startedAtMs, 'observability.startedAtMs'),
     providerCalls,
     providerRunIds: Object.freeze(normalizedRunIds),
+    observedRunIds: Object.freeze(observedRunIds),
     aiUsageByStage: Object.freeze({
       implementation: normalizeGhAwUsage(stages.implementation ?? {}),
       audit: normalizeGhAwUsage(stages.audit ?? {})
@@ -68,41 +78,55 @@ export function normalizeControllerObservability(raw) {
   });
 }
 
-export function recordControllerProviderObservation(raw, { runId, stage, usage = {}, durationMs = 0, evidenceRef = null } = {}) {
+export function recordControllerProviderObservation(raw, { runId, stage, usage = {}, durationMs = null, evidenceRef = null } = {}) {
   const current = normalizeControllerObservability(raw);
-  if (usage && typeof usage === 'object' && !Array.isArray(usage) && usage.providerCalls === 0) return current;
   const resolvedRunId = positiveInteger(runId, 'runId');
   const resolvedStage = requiredString(stage, 'stage').toLowerCase();
   if (!STAGES.has(resolvedStage)) throw new Error(`unsupported provider stage: ${resolvedStage}`);
-  if (current.providerRunIds.includes(resolvedRunId)) return current;
+  if (current.observedRunIds.includes(resolvedRunId)) return current;
+
+  const zeroProviderCalls = usage && typeof usage === 'object' && !Array.isArray(usage) && usage.providerCalls === 0;
+  const refs = evidenceRef ? [...current.evidenceRefs, requiredString(evidenceRef, 'evidenceRef')] : [...current.evidenceRefs];
+  const auditDurationMs = current.auditDurationMs + (resolvedStage === 'audit' ? nonNegativeInteger(durationMs, 'durationMs') : 0);
+  const observedRunIds = Object.freeze([...current.observedRunIds, resolvedRunId]);
+
+  if (zeroProviderCalls) {
+    return Object.freeze({
+      ...current,
+      observedRunIds,
+      auditDurationMs,
+      evidenceRefs: normalizeRefs(refs)
+    });
+  }
+
   const normalizedUsage = normalizeGhAwUsage(usage);
   const nextUsage = mergeGhAwUsage([current.aiUsageByStage[resolvedStage], normalizedUsage]);
-  const refs = evidenceRef ? [...current.evidenceRefs, requiredString(evidenceRef, 'evidenceRef')] : [...current.evidenceRefs];
   return Object.freeze({
     ...current,
     providerCalls: current.providerCalls + 1,
     providerRunIds: Object.freeze([...current.providerRunIds, resolvedRunId]),
+    observedRunIds,
     aiUsageByStage: Object.freeze({
       ...current.aiUsageByStage,
       [resolvedStage]: nextUsage
     }),
-    auditDurationMs: current.auditDurationMs + (resolvedStage === 'audit' ? nonNegativeInteger(durationMs, 'durationMs') : 0),
+    auditDurationMs,
     evidenceRefs: normalizeRefs(refs)
   });
 }
 
 export function runDurationMs(run) {
-  if (!run) return 0;
+  if (!run) return null;
   const started = Date.parse(run.run_started_at ?? run.created_at ?? run.updated_at);
   const ended = Date.parse(run.updated_at ?? run.run_started_at ?? run.created_at);
-  return Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : 0;
+  return Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : null;
 }
 
 export function ciQueueDurationMs(run) {
-  if (!run) return 0;
+  if (!run) return null;
   const created = Date.parse(run.created_at);
   const started = Date.parse(run.run_started_at ?? run.created_at);
-  return Number.isFinite(created) && Number.isFinite(started) ? Math.max(0, started - created) : 0;
+  return Number.isFinite(created) && Number.isFinite(started) ? Math.max(0, started - created) : null;
 }
 
 export function createControllerDeliveryMetrics({
@@ -127,6 +151,9 @@ export function createControllerDeliveryMetrics({
     observed.aiUsageByStage.implementation,
     observed.aiUsageByStage.audit
   ]);
+  const ciQueue = ciQueueDurationMs(finalCiRun);
+  const ciExecution = runDurationMs(finalCiRun);
+  if (ciQueue == null || ciExecution == null) throw new Error('final CI timing is unavailable; refusing to fabricate zero duration');
   return createDeliveryMetrics({
     repository,
     issueNumber,
@@ -141,8 +168,8 @@ export function createControllerDeliveryMetrics({
     aiUsageByStage: observed.aiUsageByStage,
     providerCost: { available: false, amount: null, currency: null },
     durationsMs: {
-      ciQueue: ciQueueDurationMs(finalCiRun),
-      ciExecution: runDurationMs(finalCiRun),
+      ciQueue,
+      ciExecution,
       audit: observed.auditDurationMs,
       endToEnd: Math.max(0, nonNegativeInteger(nowMs, 'nowMs') - observed.startedAtMs)
     },
