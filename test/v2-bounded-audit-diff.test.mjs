@@ -50,7 +50,7 @@ test('generated locks and repetitive worker prompts cannot evict source and test
   assert.doesNotMatch(bounded.text, /delivery-v2-worker-codex-critical/);
 });
 
-test('semantic class reservations keep contract docs and active prompts visible under code-heavy diffs', () => {
+test('semantic class reservations keep config evidence docs and active prompts visible under code-heavy diffs', () => {
   const paths = [
     ...Array.from({ length: 10 }, (_, index) => `src/v2/heavy-${index}.mjs`),
     'test/v2-heavy.test.mjs',
@@ -61,7 +61,7 @@ test('semantic class reservations keep contract docs and active prompts visible 
   ];
   const diff = paths.map((filePath) => block(filePath, 'x'.repeat(220))).join('');
   const bounded = boundAuditDiff(diff, paths, {
-    limits: { maxFiles: 20, maxFileBytes: 2048, maxTotalBytes: 4096 }
+    limits: { maxFiles: 20, maxFileBytes: 2048, maxTotalBytes: 8192 }
   });
   const included = new Set(bounded.manifest.included.map((item) => item.path));
 
@@ -71,7 +71,9 @@ test('semantic class reservations keep contract docs and active prompts visible 
   assert.ok(included.has('docs/delivery-v2/evidence/dv2-013-training-system-fast.json'));
   assert.ok(included.has('docs/delivery-v2/ADR-0006.md'));
   assert.ok(included.has('.github/workflows/delivery-v2-worker-codex-critical.md'));
-  assert.ok(bounded.manifest.boundedBytes <= 4096);
+  assert.ok(bounded.manifest.categoryBytes.config > 0);
+  assert.ok(bounded.manifest.categoryBytes.evidence > 0);
+  assert.ok(bounded.manifest.boundedBytes <= 8192);
   assert.equal(bounded.manifest.strategy, 'bounded-semantic-class-reserved-unified-diff');
 });
 
