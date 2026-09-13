@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import { boundAuditDiff } from '../src/v2/bounded-audit-diff.mjs';
-import { materialAuditContextPaths } from '../scripts/run-delivery-v2-github-audit.mjs';
 
 function block(path, payload) {
   return `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-${payload}\n+${payload}x\n`;
@@ -51,30 +50,6 @@ test('generated locks and repetitive worker prompts cannot evict source and test
   assert.doesNotMatch(bounded.text, /delivery-v2-worker-codex-critical/);
 });
 
-test('material context drops generated and repetitive prompts when core changes exist', () => {
-  const mixed = materialAuditContextPaths([
-    '.github/workflows/delivery-v2-worker-codex-critical.lock.yml',
-    '.github/workflows/delivery-v2-worker-codex-critical.md',
-    'scripts/resume-delivery-v2-controller.mjs',
-    'src/v2/controller-observability.mjs',
-    'test/v2-controller-observability.test.mjs'
-  ]);
-  assert.deepEqual(mixed, [
-    'scripts/resume-delivery-v2-controller.mjs',
-    'src/v2/controller-observability.mjs',
-    'test/v2-controller-observability.test.mjs'
-  ]);
-
-  const promptsOnly = materialAuditContextPaths([
-    '.github/workflows/delivery-v2-worker-codex-critical.md',
-    '.github/workflows/delivery-v2-worker-claude-critical.md'
-  ]);
-  assert.deepEqual(promptsOnly, [
-    '.github/workflows/delivery-v2-worker-codex-critical.md',
-    '.github/workflows/delivery-v2-worker-claude-critical.md'
-  ]);
-});
-
 test('oversized diff blocks are omitted explicitly instead of being silently truncated', () => {
   const diff = block('src/large.mjs', 'x'.repeat(200));
   const bounded = boundAuditDiff(diff, ['src/large.mjs'], {
@@ -88,10 +63,11 @@ test('oversized diff blocks are omitted explicitly instead of being silently tru
   assert.ok(bounded.manifest.omitted[0].bytes > 64);
 });
 
-test('GitHub-native auditor sends only bounded diff bytes plus an integrity manifest to the model bundle', async () => {
+test('GitHub-native auditor sends bounded evidence while preserving the full changed path set for manifests', async () => {
   const script = await import('node:fs/promises').then(({ readFile }) => readFile(new URL('../scripts/run-delivery-v2-github-audit.mjs', import.meta.url), 'utf8'));
   assert.match(script, /const diffEvidence = boundAuditDiff\(compareEvidence\.diffText, compareEvidence\.changedPaths\)/);
-  assert.match(script, /const contextPaths = materialAuditContextPaths\(compareEvidence\.changedPaths\)/);
+  assert.match(script, /fetchBoundedAuditContext\(repository, candidateSha, compareEvidence\.changedPaths, token\)/);
+  assert.doesNotMatch(script, /materialAuditContextPaths/);
   assert.match(script, /evaluateAuditBundleBudget/);
   assert.match(script, /providerCalls: 0/);
   assert.match(script, /'CANDIDATE\.diff': diffEvidence\.text/);
