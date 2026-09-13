@@ -91,7 +91,7 @@ The final controller artifact records provider calls, implementation/audit attem
 
 **V1 is retired.** The former `delivery-loop.yml`, `delivery-request:` queue, `max_cycles` controller, recursive implement/audit loop, nested-Skill normal path and mandatory `.audit/entregar-issue` handoff/certificate path are not active entrypoints.
 
-The former `.audit/entregar-issue/**` and `skills/catalog/**` snapshot roots are now physically removed from the active tree and ignored so local/generated tooling cannot reintroduce them accidentally. Minimal V1 provenance remains only under `docs/delivery-v2/history/v1/**` and in Git history; active V2 workflows and scripts have no dependency on the retired roots.
+The former `.audit/entregar-issue/**` and `skills/catalog/**` snapshot roots are now physically removed from the active tree and ignored so local/generated tooling cannot reintroduce them accidentally. Minimal V1 provenance for **historical traceability** remains only under `docs/delivery-v2/history/v1/**` and in Git history; active V2 workflows and scripts have no dependency on the retired roots.
 
 ## Canonical contract
 
