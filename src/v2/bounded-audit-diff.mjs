@@ -22,15 +22,6 @@ const GENERATED_LOW_VALUE_PATTERNS = Object.freeze([
 ]);
 const WORKER_PROMPT_PATTERN = /^\.github\/workflows\/delivery-v2-worker-(?:claude|codex|copilot)-(?:fast|standard|critical)\.md$/;
 const SEMANTIC_CATEGORY_ORDER = Object.freeze(['executable', 'tests', 'config', 'evidence', 'docs', 'prompts', 'other']);
-const SEMANTIC_CATEGORY_WEIGHTS = Object.freeze({
-  executable: 5,
-  tests: 3,
-  config: 2,
-  evidence: 2,
-  docs: 2,
-  prompts: 2,
-  other: 1
-});
 
 export function auditDiffLimitsForRisk(riskProfile) {
   const risk = String(riskProfile ?? '').trim().toLowerCase();
@@ -58,6 +49,32 @@ function splitDiffBlocks(diffText) {
   return starts.map((start, index) => text.slice(start, starts[index + 1] ?? text.length));
 }
 
+function decodeDiffPath(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw || raw === '/dev/null') return null;
+  let decoded = raw;
+  if (decoded.startsWith('"')) {
+    try {
+      decoded = JSON.parse(decoded);
+    } catch {
+      return null;
+    }
+  }
+  if (decoded.startsWith('a/') || decoded.startsWith('b/')) decoded = decoded.slice(2);
+  return decoded || null;
+}
+
+function diffBlockPath(block) {
+  const lines = String(block ?? '').split('\n');
+  for (const prefix of ['+++ ', '--- ']) {
+    const line = lines.find((candidate) => candidate.startsWith(prefix));
+    if (!line) continue;
+    const parsed = decodeDiffPath(line.slice(prefix.length));
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
 function generatedLowValuePath(filePath) {
   const value = String(filePath ?? '');
   return GENERATED_LOW_VALUE_PATTERNS.some((pattern) => pattern.test(value));
@@ -65,27 +82,14 @@ function generatedLowValuePath(filePath) {
 
 function semanticCategory(filePath) {
   const value = String(filePath ?? '');
-  if (/^(?:src|scripts|actions)\//.test(value) || /^\.github\/scripts\//.test(value)) return 'executable';
-  if (/^(?:test|tests|__tests__)\//.test(value) || /(?:^|\/)test\./.test(value)) return 'tests';
+  if (/^(?:test|tests|__tests__)\//.test(value) || /(?:^|\/)[^/]*\.test\.[^/]+$/.test(value) || /(?:^|\/)[^/]*\.spec\.[^/]+$/.test(value)) return 'tests';
   if (/^docs\/delivery-v2\/evidence\//.test(value)) return 'evidence';
-  if (/^(?:config|schemas)\//.test(value)) return 'config';
-  if (/^\.github\/workflows\//.test(value) && !WORKER_PROMPT_PATTERN.test(value)) return 'config';
-  if (/^(?:docs|README)/.test(value)) return 'docs';
   if (WORKER_PROMPT_PATTERN.test(value)) return 'prompts';
+  if (/^(?:src|scripts|actions)\//.test(value) || /^\.github\/scripts\//.test(value)) return 'executable';
+  if (/^(?:config|schemas)\//.test(value)) return 'config';
+  if (/^\.github\/workflows\//.test(value)) return 'config';
+  if (/^(?:docs|README)/.test(value)) return 'docs';
   return 'other';
-}
-
-function categoryBudgets(maxTotalBytes) {
-  const weightTotal = Object.values(SEMANTIC_CATEGORY_WEIGHTS).reduce((sum, value) => sum + value, 0);
-  const result = {};
-  let assigned = 0;
-  for (const category of SEMANTIC_CATEGORY_ORDER) {
-    const value = Math.floor((maxTotalBytes * SEMANTIC_CATEGORY_WEIGHTS[category]) / weightTotal);
-    result[category] = value;
-    assigned += value;
-  }
-  result.executable += maxTotalBytes - assigned;
-  return Object.freeze(result);
 }
 
 export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
@@ -93,21 +97,34 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
   const text = String(diffText ?? '');
   const resolvedLimits = normalizeLimits(limits);
   const blocks = splitDiffBlocks(text);
-  const alignmentExact = blocks.length === changedPaths.length;
-  const entries = blocks.map((block, index) => ({
-    index,
-    path: alignmentExact ? String(changedPaths[index]) : null,
-    block,
-    bytes: Buffer.byteLength(block, 'utf8'),
-    sha256: sha256(block),
-    category: alignmentExact ? semanticCategory(changedPaths[index]) : 'other'
-  }));
+  const normalizedChangedPaths = changedPaths.map((value) => String(value).trim()).filter(Boolean);
+  const changedPathSet = new Set(normalizedChangedPaths);
+  const parsedBlockPaths = blocks.map(diffBlockPath);
+  const parsedPathSet = new Set(parsedBlockPaths.filter(Boolean));
+  const alignmentExact = blocks.length === normalizedChangedPaths.length
+    && changedPathSet.size === normalizedChangedPaths.length
+    && parsedBlockPaths.every(Boolean)
+    && parsedPathSet.size === parsedBlockPaths.length
+    && parsedPathSet.size === changedPathSet.size
+    && parsedBlockPaths.every((filePath) => changedPathSet.has(filePath));
+
+  const entries = blocks.map((block, index) => {
+    const parsedPath = parsedBlockPaths[index];
+    const path = parsedPath && changedPathSet.has(parsedPath) ? parsedPath : null;
+    return {
+      index,
+      path,
+      block,
+      bytes: Buffer.byteLength(block, 'utf8'),
+      sha256: sha256(block),
+      category: path ? semanticCategory(path) : 'other'
+    };
+  });
 
   const included = [];
   const omitted = [];
   const includedIndexes = new Set();
   let totalBytes = 0;
-  const budgets = categoryBudgets(resolvedLimits.maxTotalBytes);
   const categoryBytes = Object.fromEntries(SEMANTIC_CATEGORY_ORDER.map((category) => [category, 0]));
 
   function include(entry) {
@@ -123,7 +140,7 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
 
   const eligible = [];
   for (const entry of entries) {
-    if (alignmentExact && generatedLowValuePath(entry.path)) {
+    if (entry.path && generatedLowValuePath(entry.path)) {
       omitted.push({ index: entry.index, path: entry.path, bytes: entry.bytes, sha256: entry.sha256, category: entry.category, reason: 'generated-low-value' });
       continue;
     }
@@ -134,18 +151,24 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
     eligible.push(entry);
   }
 
+  const reservationCandidates = new Map();
   if (alignmentExact) {
     for (const category of SEMANTIC_CATEGORY_ORDER) {
-      for (const entry of eligible.filter((item) => item.category === category)) {
-        if (included.length >= resolvedLimits.maxFiles) break;
-        if (categoryBytes[category] + entry.bytes > budgets[category]) continue;
-        include(entry);
-      }
+      const candidates = eligible
+        .filter((entry) => entry.category === category)
+        .sort((a, b) => a.bytes - b.bytes || a.index - b.index);
+      if (candidates.length > 0) reservationCandidates.set(category, candidates[0]);
+    }
+    for (const category of SEMANTIC_CATEGORY_ORDER) {
+      const representative = reservationCandidates.get(category);
+      if (representative) include(representative);
     }
   }
 
   const spillover = alignmentExact
-    ? eligible.filter((entry) => !includedIndexes.has(entry.index)).sort((a, b) => SEMANTIC_CATEGORY_ORDER.indexOf(a.category) - SEMANTIC_CATEGORY_ORDER.indexOf(b.category) || a.index - b.index)
+    ? eligible
+      .filter((entry) => !includedIndexes.has(entry.index))
+      .sort((a, b) => SEMANTIC_CATEGORY_ORDER.indexOf(a.category) - SEMANTIC_CATEGORY_ORDER.indexOf(b.category) || a.index - b.index)
     : eligible;
   for (const entry of spillover) include(entry);
 
@@ -156,22 +179,31 @@ export function boundAuditDiff(diffText, changedPaths, { limits } = {}) {
   }
 
   const orderedIncluded = [...included].sort((a, b) => a.index - b.index);
+  const categoryReservations = Object.freeze(Object.fromEntries(SEMANTIC_CATEGORY_ORDER.map((category) => {
+    const representative = reservationCandidates.get(category);
+    return [category, Object.freeze({
+      required: Boolean(representative),
+      path: representative?.path ?? null,
+      bytes: representative?.bytes ?? 0,
+      included: Boolean(representative && includedIndexes.has(representative.index))
+    })];
+  })));
   const boundedText = orderedIncluded.map((entry) => entry.block).join('');
   const manifest = Object.freeze({
-    schemaVersion: 2,
-    strategy: alignmentExact ? 'bounded-semantic-class-reserved-unified-diff' : 'bounded-unified-diff',
+    schemaVersion: 3,
+    strategy: alignmentExact ? 'bounded-semantic-class-representative-unified-diff' : 'bounded-unified-diff-unverified-path-alignment',
     limits: resolvedLimits,
-    categoryBudgets: budgets,
+    categoryReservations,
     categoryBytes: Object.freeze(categoryBytes),
     fullDiffBytes: Buffer.byteLength(text, 'utf8'),
     fullDiffSha256: sha256(text),
-    changedPathCount: changedPaths.length,
+    changedPathCount: normalizedChangedPaths.length,
     blockCount: blocks.length,
     alignmentExact,
     boundedBytes: totalBytes,
     included: Object.freeze(orderedIncluded.map(({ block, ...entry }) => Object.freeze(entry))),
     omitted: Object.freeze(omitted.sort((a, b) => a.index - b.index).map((entry) => Object.freeze(entry))),
-    changedPaths: Object.freeze(changedPaths.map((value) => String(value)))
+    changedPaths: Object.freeze(normalizedChangedPaths)
   });
 
   return Object.freeze({ text: boundedText, manifest });
