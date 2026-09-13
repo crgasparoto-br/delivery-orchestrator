@@ -32,7 +32,22 @@ jobs:
           end="$(grep -n '^          NODE$' /tmp/dv2-r3-old.yml | head -1 | cut -d: -f1)"
           test -n "$start" -a -n "$end" -a "$end" -gt "$start"
           sed -n "$((start + 1)),$((end - 1))p" /tmp/dv2-r3-old.yml | sed 's/^          //' > /tmp/dv2-r3-remediate.cjs
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('/tmp/dv2-r3-remediate.cjs')
+          lines = path.read_text().splitlines()
+          replacement = r"const body = marker + '\\n\\n' + String.fromCharCode(96).repeat(3) + 'json\\n{\"ok\":true}\\n' + String.fromCharCode(96).repeat(3);"
+          found = False
+          for index, line in enumerate(lines):
+              if line.startswith('const body = marker + '):
+                  lines[index] = replacement
+                  found = True
+          if not found:
+              raise SystemExit('controller provenance test body anchor not found')
+          path.write_text('\n'.join(lines) + '\n')
+          PY
           test -s /tmp/dv2-r3-remediate.cjs
+          node --check /tmp/dv2-r3-remediate.cjs
           node /tmp/dv2-r3-remediate.cjs
       - name: Install pinned gh-aw
         uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
