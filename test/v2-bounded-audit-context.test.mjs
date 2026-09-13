@@ -40,7 +40,7 @@ test('audit context expands exact-SHA changed source into bounded full file plus
   );
 
   assert.equal(context.candidateSha, head);
-  assert.equal(context.strategy, 'changed-files-plus-direct-relative-dependencies');
+  assert.equal(context.strategy, 'supplemental-changed-files-plus-direct-relative-dependencies');
   assert.deepEqual(context.files.map((item) => [item.path, item.kind]), [
     ['src/controller.mjs', 'changed'],
     ['src/helper.mjs', 'direct-relative-dependency']
