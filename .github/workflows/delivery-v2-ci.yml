@@ -47,8 +47,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-node-version: 22
-cache: npm
+          node-version: 22
+          cache: npm
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Validate merge-preview contract compatibility
@@ -63,13 +63,13 @@ cache: npm
       - name: Checkout exact PR head
         uses: actions/checkout@v4
         with:
-ref: ${{ github.event.pull_request.head.sha }}
-fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
 
       - name: Assert exact-head identity
         shell: bash
         env:
-EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
 
       - name: Setup Node.js
