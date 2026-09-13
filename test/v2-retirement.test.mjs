@@ -6,11 +6,13 @@ const root = new URL('../', import.meta.url);
 
 const retiredPaths = [
   '.github/workflows/delivery-loop.yml',
+  '.github/workflows/delivery-v2-independent-audit.yml',
   'scripts/normalize-delivery-request.mjs',
   'scripts/pump-control-queue.mjs',
   'scripts/resolve-bound-pr.mjs',
   'scripts/finalize-control-request.mjs',
   'scripts/generate-auditor-trust.sh',
+  'scripts/run-delivery-v2-independent-audit.mjs',
   'src/control-queue.mjs',
   'src/delivery-request.mjs',
   'src/orchestrator.mjs',
@@ -27,6 +29,7 @@ const retiredPaths = [
   'src/schemas.mjs',
   'src/constants.mjs',
   'src/pull-request-binding.mjs',
+  'src/v2/independent-audit-runtime.mjs',
   'schemas/run-state.schema.json',
   'prompts/implementer.md',
   'prompts/auditor.md',
@@ -52,7 +55,7 @@ const workerLockPattern = /^delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|
 const workerContextHygieneFragment = 'Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts';
 const declarativeRequirementSummaries = Object.freeze({
   'DV2-008': 'Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.',
-  'DV2-014': 'Delivery V2 is the only active normal-path entrypoint; the legacy delivery-request queue, recursive max-cycle controller, nested-Skill orchestration and mandatory V1 handoff/certificate path are retired, while historical evidence/catalog snapshots remain traceability-only.'
+  'DV2-014': 'Delivery V2 is the only active normal-path entrypoint; the legacy delivery-request queue, recursive max-cycle controller, nested-Skill orchestration, mandatory V1 handoff/certificate path and retired snapshot roots are physically absent from the active tree; only minimal provenance remains under docs/delivery-v2/history/v1 and Git history.'
 });
 
 async function exists(relativePath) {
@@ -107,6 +110,8 @@ test('DV2-014 removes every retired V1 orchestration surface', async () => {
 test('all GitHub workflow entrypoints are explicitly Delivery V2', async () => {
   const files = await workflowFiles();
   assert.ok(files.includes('delivery-v2-dispatch.yml'));
+  assert.ok(files.includes('delivery-v2-audit.yml'));
+  assert.equal(files.includes('delivery-v2-independent-audit.yml'), false);
   for (const fileName of files) {
     assert.match(fileName, /^delivery-v2-/, `${fileName} is an undeclared non-V2 workflow entrypoint`);
     const body = sanitizeDeclarativeWorkflowText(fileName, await readFile(new URL(`.github/workflows/${fileName}`, root), 'utf8'));
@@ -158,6 +163,7 @@ test('canonical requirements describe retirement without redefining the runtime 
   const retirement = contract.requirements.find((requirement) => requirement.id === 'DV2-014');
   assert.equal(retirement.status, 'validated');
   assert.match(retirement.summary, /only active normal-path entrypoint/);
+  assert.match(retirement.summary, /physically absent from the active tree/);
 });
 
 test('capability manifest describes only the active V2 architecture', async () => {
@@ -185,14 +191,14 @@ test('normal-path docs point to V2 and preserve legacy material only as history'
   assert.doesNotMatch(security, /signing private key|implementer can read the materialized auditor signing key/i);
 });
 
-test('retirement evidence defines normal-path structural proof and historical snapshots as inactive', async () => {
+test('retirement evidence distinguishes historical retention from the current physically-clean tree', async () => {
   const evidence = JSON.parse(await readFile(new URL('docs/delivery-v2/evidence/dv2-014-v1-retirement.json', root), 'utf8'));
   const archivedTrust = JSON.parse(await readFile(new URL('docs/delivery-v2/history/v1/trusted-auditors.json', root), 'utf8'));
   const archivedCatalog = JSON.parse(await readFile(new URL('docs/delivery-v2/history/v1/skills-catalog-sync-manifest.json', root), 'utf8'));
   assert.equal(evidence.requirement, 'DV2-014');
   assert.equal(evidence.openLegacyControlIssuesAtRetirement, 0);
   assert.equal(evidence.v2DefaultEntrypoint, '.github/workflows/delivery-v2-dispatch.yml');
-  assert.deepEqual(evidence.retainedForTraceability, [
+  assert.deepEqual(evidence.retainedForTraceabilityAtRetirement, [
     '.audit/entregar-issue/**',
     'skills/catalog/**',
     'docs/delivery-v2/history/v1/trusted-auditors.json',
@@ -218,6 +224,13 @@ test('retirement evidence defines normal-path structural proof and historical sn
   assert.equal(evidence.finalCleanup.normalPathProof, 'structural-entrypoints');
   assert.equal(evidence.finalCleanup.lexicalScannerIsSecurityBoundary, false);
   assert.equal(evidence.finalCleanup.ghAwUsageArtifactContract, true);
+  assert.equal(evidence.v2_1PhysicalCleanup.runtimeActive, false);
+  assert.deepEqual(evidence.v2_1PhysicalCleanup.removedResidualRoots, ['.audit/entregar-issue/**', 'skills/catalog/**']);
+  assert.equal(evidence.transitionalAuditPilotCleanup.issueNumber, 63);
+  assert.equal(evidence.transitionalAuditPilotCleanup.runtimeActive, false);
+  assert.equal(evidence.transitionalAuditPilotCleanup.replacementWorkflow, '.github/workflows/delivery-v2-audit.yml');
+  assert.equal(evidence.transitionalAuditPilotCleanup.replacementRunner, 'scripts/run-delivery-v2-github-audit.mjs');
+  assert.equal(evidence.transitionalAuditPilotCleanup.replacementRuntime, 'src/v2/github-native-audit-runtime.mjs');
   assert.equal(archivedTrust.auditors[0].key_id, 'delivery-independent-auditor-v1');
   assert.equal(archivedCatalog.source, 'chatgpt-web-installed-skills');
 });
