@@ -31,10 +31,10 @@ test('generic audit is target/PR driven and no longer requires the issue-27 pilo
   assert.doesNotMatch(body, /DV2-AUDIT-PILOT|TARGET_ISSUE: '27'/);
 });
 
-test('trusted platform CI remains the single automatic exact-head compile while verification scripts avoid duplicate target scans', async () => {
+test('trusted platform CI performs one strict completeness scan, one target scan and one automatic exact-head compile', async () => {
   const ci = await readFile('.github/workflows/delivery-v2-ci.yml', 'utf8');
-  assert.match(ci, /npm run verify:v2\s*(?:\n|$)/);
-  assert.match(ci, /npm run verify:v2:complete/);
+  assert.equal((ci.match(/run: npm run verify:v2\s*(?:\n|$)/g) ?? []).length, 1);
+  assert.doesNotMatch(ci, /run: npm run verify:v2:complete/);
   assert.match(ci, /gh aw compile --strict/);
 
   const compile = await readFile('.github/workflows/delivery-v2-gh-aw-compile.yml', 'utf8');
@@ -45,8 +45,9 @@ test('trusted platform CI remains the single automatic exact-head compile while 
   assert.doesNotMatch(compile, /git push|contents: write/);
 
   const pkg = JSON.parse(await readFile('package.json', 'utf8'));
-  assert.match(pkg.scripts['verify:v2'], /verify-delivery-v2-targets\.mjs/);
-  assert.doesNotMatch(pkg.scripts['verify:v2:complete'], /verify-delivery-v2-targets\.mjs/);
+  assert.equal(pkg.scripts['verify:v2'], 'npm run verify:v2:complete && npm run verify:v2:targets');
+  assert.match(pkg.scripts['verify:v2:complete'], /verify-delivery-v2-completeness\.mjs --require-complete/);
+  assert.match(pkg.scripts['verify:v2:targets'], /verify-delivery-v2-targets\.mjs/);
 });
 
 test('controller target policy binds each rollout repository to one stable required check and trusted workflow', async () => {

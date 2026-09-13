@@ -21,9 +21,11 @@
 ## Independent audit
 
 - FAST has no mandatory LLM audit.
-- STANDARD uses focused independent audit when repository/risk policy requires it.
-- CRITICAL requires independent semantic audit.
+- STANDARD uses focused independent audit only when repository/risk policy requires it; that applicability is resolved before provider dispatch.
+- CRITICAL requires independent semantic audit and cannot be disabled by a STANDARD policy switch.
 - The reviewer receives candidate code/evidence and the contract, not hidden implementer reasoning.
+- Candidate context is bounded and exact-SHA: immutable diff plus prioritized full changed text files and resolvable one-hop direct relative dependencies, under deterministic file/byte/probe ceilings.
+- Historical/generated delivery artifacts and unrelated repository inventory are excluded from normal context. If a bounded omission prevents a supported blocking conclusion, review fails closed as context-insufficient rather than inventing evidence.
 - Every finding is candidate-SHA-bound and machine-usable: stable ID, severity, violated contract/requisite, affected surface, concrete failure mode, discriminating/reproducible evidence, remediation mode and release-blocking flag.
 - Approval from another material SHA is never reusable.
 

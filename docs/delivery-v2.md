@@ -49,17 +49,22 @@ CI and audit evidence is exact-material-SHA-bound. Actionable CI failure becomes
 
 The release gate becomes ready only when the current remote PR head equals the evaluated material head, the classifier/fingerprint applies to that candidate, the stable required check is terminal green, risk-required audit approves the same candidate, and no blocking finding or budget blocker remains.
 
+STANDARD audit applicability is resolved before any audit-provider call from the effective risk plus the target repository policy. A target with `standardAuditRequired: false` goes directly from exact-head CI success to release evaluation; CRITICAL remains mandatory-audit and cannot be downgraded by that switch.
+
 ## Generic independent audit
 
 `.github/workflows/delivery-v2-audit.yml` is the normal GitHub-native audit workflow. It accepts any configured target repository/PR; it is not gated by the old `DV2-AUDIT-PILOT: critical` marker or issue #27.
 
-The reviewer receives only:
+The reviewer receives a deterministic sanitized bundle containing:
 
 - exact GitHub audit request and check evidence;
 - target issue contract;
 - PR metadata;
-- candidate diff;
-- Delivery V2 audit contract.
+- immutable candidate diff;
+- Delivery V2 audit contract;
+- bounded exact-SHA material context with prioritized full changed text files plus one-hop direct relative dependencies when resolvable.
+
+The material-context expansion has explicit file, per-file byte, total-byte and dependency-probe ceilings. Historical/generated roots remain excluded. When the bounded context omits material that is genuinely required to support a release-blocking conclusion, the reviewer must fail closed with an `audit-context-insufficient` finding rather than guess or browse the repository. This preserves evidence strength while avoiding unconditional repository-wide context.
 
 Product repositories use the compact `docs/delivery-v2/AUDIT_CONTRACT.md` projection to reduce repeated tokens. Changes to the Delivery V2 control plane itself use the full `MASTER_SPEC.md`. Hidden implementer reasoning, historical `.audit/**` / `skills/catalog/**`, generated worker locks and unrelated repository inventory are not reviewer context.
 
@@ -71,7 +76,7 @@ Metrics preserve unknown values as `null`; a provider that does not report token
 
 ## Deterministic work deduplication
 
-`Delivery V2 CI` remains the trusted automatic exact-head gate. It runs `verify:v2` for the regular completeness + target-policy checks and `verify:v2:complete` only for the additional strict terminal-completeness assertion, so the target-policy scan is not repeated. The same trusted CI performs the single automatic `gh-aw` compile. `Delivery V2 - Compile gh-aw` is manual preflight only and cannot create a second automatic compile for a PR.
+`Delivery V2 CI` remains the trusted automatic exact-head gate. Its aggregate `verify:v2` command runs the strict terminal-completeness verifier exactly once and the target-policy verifier exactly once. `verify:v2:complete` remains available as the focused strict-completeness command, but the CI does not invoke it a second time after `verify:v2`. The same trusted CI performs the single automatic `gh-aw` compile. `Delivery V2 - Compile gh-aw` is manual preflight only and cannot create a second automatic compile for a PR.
 
 ## V1 retirement
 
@@ -83,7 +88,6 @@ V1 remains retired. No active `delivery-request`, `max_cycles`, recursive contro
 npm test
 npm run validate
 npm run verify:v2
-npm run verify:v2:complete
 ```
 
-The terminal V2 contract remains protected by the strict completeness gate and `test/v2-retirement.test.mjs`.
+Use `npm run verify:v2:complete` only when the strict completeness verifier is needed in isolation. The terminal V2 contract remains protected by that strict completeness gate and `test/v2-retirement.test.mjs`.

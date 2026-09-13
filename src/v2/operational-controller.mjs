@@ -12,6 +12,7 @@ import {
   startImplementation
 } from './remediation-state-machine.mjs';
 import { createPersistentDeliveryState, normalizePersistentDeliveryState } from './persistent-state.mjs';
+import { resolveOperationalAuditPolicy } from './audit-policy.mjs';
 import { executionPolicyFor } from './execution-policy.mjs';
 import { evaluateReleaseGate } from './release-gate.mjs';
 
@@ -39,6 +40,13 @@ function requiredSha(value, label) {
   return sha;
 }
 
+function applyAuditPolicy(state, { repository, audit } = {}) {
+  const auditPolicy = audit
+    ? Object.freeze({ required: audit.required === true, mode: audit.required === true ? requiredString(audit.mode, 'plan.audit.mode') : 'none' })
+    : resolveOperationalAuditPolicy({ riskProfile: state.riskProfile, repository });
+  return Object.freeze({ ...state, auditRequired: auditPolicy.required, auditMode: auditPolicy.mode });
+}
+
 export function createOperationalDelivery({ plan, materialHeadSha } = {}) {
   const value = requiredObject(plan, 'plan');
   if (value.architecture !== 'github-native-v2') throw new Error('Expected github-native-v2 delivery plan');
@@ -48,6 +56,7 @@ export function createOperationalDelivery({ plan, materialHeadSha } = {}) {
     riskProfile: requiredString(value.risk?.profile, 'plan.risk.profile')
   });
   state = classifyDelivery(state, { riskProfile: value.risk.profile });
+  state = applyAuditPolicy(state, { repository: value.repository, audit: requiredObject(value.audit, 'plan.audit') });
   if (materialHeadSha == null) return state;
   state = startImplementation(state);
   return publishMaterial(state, { materialHeadSha: requiredSha(materialHeadSha, 'materialHeadSha') });
@@ -139,10 +148,10 @@ export function persistentStateFromOperational({ state, identity, classifier, wo
   });
 }
 
-
 export function operationalStateFromPersistent(rawPersistentState) {
   const persistent = normalizePersistentDeliveryState(rawPersistentState);
   const policy = executionPolicyFor(persistent.effectiveRisk);
+  const auditPolicy = resolveOperationalAuditPolicy({ riskProfile: persistent.effectiveRisk, repository: persistent.repository });
   const successfulCheck = persistent.workflowChecks.find((check) => check.subjectSha === persistent.materialHeadSha && check.status === 'completed' && check.conclusion === 'success');
   return Object.freeze({
     schemaVersion: 1,
@@ -158,8 +167,8 @@ export function operationalStateFromPersistent(rawPersistentState) {
       maxImplementationAttempts: policy.maxImplementationAttempts,
       maxAuditRemediationAttempts: policy.maxAuditAttempts
     }),
-    auditRequired: policy.auditRequired,
-    auditMode: policy.auditMode,
+    auditRequired: auditPolicy.required,
+    auditMode: auditPolicy.mode,
     ciEvidence: successfulCheck ? Object.freeze({ candidateSha: persistent.materialHeadSha, conclusion: 'success', evidenceRef: successfulCheck.evidenceRef }) : null,
     auditEvidence: persistent.auditEvidence,
     ciFailure: persistent.ciFailure,

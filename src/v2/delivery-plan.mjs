@@ -1,4 +1,5 @@
 import { DELIVERY_V2_AUDIT_SCHEMA_VERSION } from './audit-contract.mjs';
+import { resolveOperationalAuditPolicy } from './audit-policy.mjs';
 import { executionPolicyFor } from './execution-policy.mjs';
 import { DELIVERY_V2_RELEASE_GATE_SCHEMA_VERSION, DELIVERY_V2_RELEASE_STATUS_NAME } from './release-gate.mjs';
 import { resolveImplementationWorkflow } from './provider-dispatch.mjs';
@@ -11,6 +12,11 @@ export function createDeliveryPlan(config) {
     repositoryPolicy: config.repositoryPolicy
   });
   const policy = executionPolicyFor(risk.profile);
+  const auditPolicy = resolveOperationalAuditPolicy({
+    riskProfile: risk.profile,
+    repository: config.repository,
+    standardAuditRequired: config.standardAuditRequired
+  });
   const workflow = resolveImplementationWorkflow(config.providers.implementer.provider, risk.profile);
   return {
     schemaVersion: 2,
@@ -26,10 +32,10 @@ export function createDeliveryPlan(config) {
       maxAiCredits: policy.maxAiCredits
     },
     audit: {
-      required: policy.auditRequired,
-      mode: policy.auditMode,
       ...config.providers.auditor,
-      maxAttempts: policy.maxAuditAttempts,
+      required: auditPolicy.required,
+      mode: auditPolicy.mode,
+      maxAttempts: auditPolicy.maxAttempts,
       contractSchemaVersion: DELIVERY_V2_AUDIT_SCHEMA_VERSION,
       exactMaterialShaRequired: true,
       independentContextRequired: risk.profile === 'critical',

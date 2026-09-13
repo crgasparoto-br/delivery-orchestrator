@@ -60,11 +60,8 @@ jobs:
       - name: V2 unit tests
         run: node --test test/v2-*.test.mjs
 
-      - name: Verify Delivery V2 contract
+      - name: Verify Delivery V2 contract and terminal completeness
         run: npm run verify:v2
-
-      - name: Verify Delivery V2 terminal completeness
-        run: npm run verify:v2:complete
 
       - name: Syntax checks
         shell: bash
