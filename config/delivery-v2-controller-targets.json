@@ -24,7 +24,7 @@
       "requiredStatusName": "V2 platform checks",
       "ciWorkflowName": "Delivery V2 CI",
       "ciWorkflowPath": ".github/workflows/delivery-v2-ci.yml",
-      "mergePreviewJobName": "V2 merge preview compatibility",
+      "mergePreviewJobName": "V2 platform checks",
       "standardAuditRequired": true,
       "finalStatusName": "Delivery V2 release"
     }
