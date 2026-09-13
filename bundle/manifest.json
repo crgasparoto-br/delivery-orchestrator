@@ -1,0 +1,195 @@
+{
+  "parent": "fb7ccf2cc081a86061a37f5d872905606d2a5100",
+  "files": [
+    {
+      "path": ".github/workflows/delivery-v2-audit.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-ci.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-dispatch.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-claude-critical.lock.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-claude-critical.md",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-claude-fast.lock.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-claude-fast.md",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-claude-standard.lock.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-claude-standard.md",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-codex-critical.lock.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-codex-critical.md",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-codex-fast.lock.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-codex-fast.md",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-codex-standard.lock.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-codex-standard.md",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-copilot-critical.lock.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-copilot-critical.md",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-copilot-fast.lock.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-copilot-fast.md",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-copilot-standard.lock.yml",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": ".github/workflows/delivery-v2-worker-copilot-standard.md",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "config/delivery-v2-controller-targets.json",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/.v2-remediation-part-01",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-remediation-part-02",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-remediation-part-03",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-remediation-part-04",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-remediation-part-05",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-remediation-part-06",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/.v2-remediation-part-07",
+      "mode": "100644",
+      "deleted": true
+    },
+    {
+      "path": "scripts/guard-delivery-v2-reentry.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/reserve-delivery-v2-initial-attempt.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/resume-delivery-v2-controller.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "scripts/run-delivery-v2-controller.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "src/v2/controller-runtime.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-controller-runtime.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-operational-efficiency.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-reentry-guard.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    },
+    {
+      "path": "test/v2-worker-contract.test.mjs",
+      "mode": "100644",
+      "deleted": false
+    }
+  ]
+}
