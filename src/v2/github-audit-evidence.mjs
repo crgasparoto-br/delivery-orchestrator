@@ -5,6 +5,7 @@ import {
   AUDIT_SEMANTIC_CATEGORY_ORDER,
   auditSemanticCategory,
   isGeneratedLowValueAuditPath,
+  isSharedContractAuditPath,
   normalizeAuditSemanticPath
 } from './audit-context-policy.mjs';
 
@@ -102,6 +103,7 @@ function fairChangedPathOrder(paths) {
 function auditContextPathAllowed(filePath) {
   const normalized = normalizeAuditSemanticPath(filePath);
   if (!normalized || isGeneratedLowValueAuditPath(normalized)) return false;
+  if (isSharedContractAuditPath(normalized)) return true;
   if (AUDIT_CONTEXT_TEXT_BASENAMES.has(pathPosix.basename(normalized))) return true;
   return AUDIT_CONTEXT_TEXT_EXTENSIONS.has(pathPosix.extname(normalized).toLowerCase());
 }
