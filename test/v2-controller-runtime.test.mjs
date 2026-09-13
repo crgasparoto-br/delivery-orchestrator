@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ciFailureClassForConclusion, expectedDispatchTitle, selectCorrelatedWorkflowRun, validateAuditArtifactPayload } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForConclusion, expectedDispatchTitle, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload } from '../src/v2/controller-runtime.mjs';
 
 const SHA = 'a'.repeat(40);
 
@@ -26,4 +26,20 @@ test('authoritative audit artifact is exact-run exact-head and fingerprint bound
   };
   assert.equal(validateAuditArtifactPayload(payload, { orchestratorRepository: 'owner/orchestrator', targetRepository: 'owner/target', issueNumber: 63, pullRequestNumber: 64, candidateSha: SHA, auditRunId: 20, sourceWorkflowRunId: 10 }).decision, 'approved');
   assert.throws(() => validateAuditArtifactPayload({ ...payload, result: { ...payload.result, candidateSha: 'c'.repeat(40) } }, { orchestratorRepository: 'owner/orchestrator', targetRepository: 'owner/target', issueNumber: 63, pullRequestNumber: 64, candidateSha: SHA, auditRunId: 20, sourceWorkflowRunId: 10 }), /candidate mismatch/);
+});
+
+
+test('release identity fails closed on base drift and requires a mergeable preview', () => {
+  const baseSha = 'c'.repeat(40);
+  const previewSha = 'd'.repeat(40);
+  const pr = { number: 64, html_url: 'https://github.com/owner/target/pull/64', head: { sha: SHA }, base: { sha: baseSha }, merge_commit_sha: previewSha, mergeable: true };
+  const identity = releaseIdentityFromPullRequest(pr, { materialHeadSha: SHA, baseSha });
+  assert.equal(identity.currentBaseSha, baseSha);
+  assert.equal(identity.mergePreview.required, true);
+  assert.equal(identity.mergePreview.previewSha, previewSha);
+  assert.equal(identity.mergePreview.conclusion, 'success');
+  assert.throws(() => releaseIdentityFromPullRequest({ ...pr, base: { sha: 'e'.repeat(40) } }, { materialHeadSha: SHA, baseSha }), /base drift/);
+  const pending = releaseIdentityFromPullRequest({ ...pr, merge_commit_sha: null, mergeable: null }, { materialHeadSha: SHA, baseSha });
+  assert.equal(pending.mergePreview.status, 'pending');
+  assert.equal(pending.mergePreview.conclusion, null);
 });

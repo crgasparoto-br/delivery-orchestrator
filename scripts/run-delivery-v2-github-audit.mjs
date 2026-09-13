@@ -106,6 +106,9 @@ async function main() {
   const workflowName = requiredEnv('SOURCE_WORKFLOW_NAME');
   const workflowPath = requiredEnv('SOURCE_WORKFLOW_PATH');
   const riskProfile = requiredEnv('AUDIT_RISK_PROFILE').toLowerCase();
+  const implementerProvider = requiredEnv('IMPLEMENTER_PROVIDER').toLowerCase();
+  const implementerWorkerIdentity = requiredEnv('IMPLEMENTER_WORKER_IDENTITY');
+  const implementerRunId = positiveInteger('IMPLEMENTER_RUN_ID');
   const token = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const reviewerRunId = positiveInteger('GITHUB_RUN_ID');
   const auditorUser = process.env.DELIVERY_AUDITOR_USER || 'delivery-auditor';
@@ -140,7 +143,8 @@ async function main() {
     sourceWorkflowEvidence: { candidate: candidateWorkflow, trustedBase: baseWorkflow },
     workflowName,
     workflowPath,
-    implementationAttempt: positiveInteger('IMPLEMENTATION_ATTEMPT', '1')
+    implementationAttempt: positiveInteger('IMPLEMENTATION_ATTEMPT', '1'),
+    implementer: { provider: implementerProvider, workerIdentity: implementerWorkerIdentity, runId: implementerRunId }
   });
 
   const contractUrl = repository === process.env.GITHUB_REPOSITORY

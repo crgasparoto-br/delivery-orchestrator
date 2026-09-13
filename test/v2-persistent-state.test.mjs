@@ -48,6 +48,7 @@ function observed(remoteHeadSha = SHA_A, overrides = {}) {
     repository: 'acme/example',
     pullRequestNumber: 42,
     headRef: 'feat/example',
+    baseSha: BASE,
     remoteHeadSha,
     ...overrides
   };
@@ -239,4 +240,23 @@ test('a checkpoint observing head drift records the transition only after remote
   assert.equal(next.status, 'queued');
   assert.equal(next.lastReason, 'remote-head-drift');
   assert.deepEqual(next.appliedTransitionIds, ['remote-drift:b']);
+});
+
+
+test('base drift invalidates candidate-bound evidence even when the material head is unchanged', () => {
+  const state = createPersistentDeliveryState(stateInput({
+    status: 'ready-for-human-merge',
+    workflowChecks: [{ name: 'Validate repository', subjectSha: SHA_A, status: 'completed', conclusion: 'success', workflowRunId: 1001, evidenceRef: 'github:check/1001' }],
+    evidenceRefs: ['github:check/1001']
+  }));
+  const nextBase = 'd'.repeat(40);
+  const result = reconcilePersistentState(state, observed(SHA_A, { baseSha: nextBase }));
+  assert.equal(result.staleStateDetected, true);
+  assert.equal(result.nextAction, 'classify');
+  assert.equal(result.state.baseSha, nextBase);
+  assert.equal(result.state.materialHeadSha, SHA_A);
+  assert.equal(result.state.status, 'queued');
+  assert.deepEqual(result.state.workflowChecks, []);
+  assert.deepEqual(result.state.evidenceRefs, []);
+  assert.equal(result.state.lastReason, 'remote-base-drift');
 });

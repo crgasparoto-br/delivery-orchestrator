@@ -15,7 +15,7 @@ import {
   persistentStateFromOperational
 } from '../src/v2/operational-controller.mjs';
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
-import { ciFailureClassForConclusion, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForConclusion, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const AUDIT_MARKER = '<!-- delivery-v2-independent-audit -->';
@@ -297,6 +297,7 @@ export async function main() {
   if (!closing.test(String(pullRequest.body ?? ''))) throw new Error('managed PR is not bound to requested issue');
 
   let materialHeadSha = String(pullRequest.head.sha).toLowerCase();
+  const expectedBaseSha = String(pullRequest.base.sha).toLowerCase();
   let changedPaths = await fetchChangedPaths(targetRepository, resumePr, targetReadToken);
   let plan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk, changedPaths, repositoryPolicy });
   let classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
@@ -312,6 +313,7 @@ export async function main() {
       repository: targetRepository,
       pullRequestNumber: resumePr,
       headRef: String(pullRequest.head.ref),
+      baseSha: String(pullRequest.base.sha),
       remoteHeadSha: materialHeadSha
     });
     state = operationalStateFromPersistent(reconciled.state);
@@ -501,7 +503,10 @@ export async function main() {
           inputs: {
             target_repository: targetRepository, target_issue: String(issueNumber), target_pr: String(resumePr),
             risk_profile: state.riskProfile, source_workflow_run_id: String(sourceRun.id), source_workflow_name: targetPolicy.ciWorkflowName,
-            source_workflow_path: targetPolicy.ciWorkflowPath, implementation_attempt: String(state.implementationAttempts)
+            source_workflow_path: targetPolicy.ciWorkflowPath, implementation_attempt: String(state.implementationAttempts),
+            implementer_provider: controller.materialWorkerProvider ?? provider,
+            implementer_worker_identity: controller.materialWorkerIdentity ?? plan.implementation.workflow,
+            implementer_run_id: String(controller.materialWorkerRunId ?? controller.workerRunId)
           }
         });
         providerCalls += 1;
@@ -533,11 +538,13 @@ export async function main() {
       if (auditResult.decision !== 'approved') throw new Error('release gate requires approved authoritative audit');
       audit = { candidateSha: materialHeadSha, decision: 'approved', mode: state.auditMode, requestFingerprint: auditResult.requestFingerprint, evidenceRef: auditRun.html_url };
     }
+    const finalPullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
+    const releaseIdentity = releaseIdentityFromPullRequest(finalPullRequest, { materialHeadSha, baseSha: expectedBaseSha });
     const releaseInput = {
-      schemaVersion: 1, repository: targetRepository, pullRequestNumber: resumePr, materialHeadSha, currentRemoteHeadSha: materialHeadSha,
+      schemaVersion: 1, repository: targetRepository, pullRequestNumber: resumePr, materialHeadSha, currentRemoteHeadSha: releaseIdentity.currentRemoteHeadSha,
       evidenceCollection: { materialHeadSha, remoteHeadSha: materialHeadSha, evidenceRef: `github:${targetRepository}#${resumePr}@${materialHeadSha}` },
       classifier: { subjectSha: materialHeadSha, profile: state.riskProfile, version: classifier.version, fingerprint: classifier.fingerprint, expectedFingerprint: classifier.fingerprint, evidenceRef: classifier.evidenceRef },
-      mergePreview: null,
+      mergePreview: releaseIdentity.mergePreview,
       checks: [{ name: latestCheck.name, required: true, subjectSha: materialHeadSha, status: latestCheck.status, conclusion: latestCheck.conclusion, workflowRunId: latestSourceRun.id, evidenceRef: latestCheck.details_url ?? latestSourceRun.html_url }],
       standardAuditRequired: targetPolicy.standardAuditRequired !== false, audit, unresolvedFindings: [], blockers: []
     };

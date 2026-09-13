@@ -167,6 +167,7 @@ function normalizeObservedIdentity(observed) {
     repository: normalizeRepository(value.repository),
     pullRequestNumber: requirePositiveInteger(value.pullRequestNumber, 'observed.pullRequestNumber'),
     headRef: requireString(value.headRef, 'observed.headRef'),
+    baseSha: requireSha(value.baseSha, 'observed.baseSha'),
     remoteHeadSha: requireSha(value.remoteHeadSha, 'observed.remoteHeadSha')
   });
 }
@@ -198,7 +199,9 @@ export function reconcilePersistentState(rawState, rawObserved) {
   const observed = normalizeObservedIdentity(rawObserved);
   assertSameTarget(state, observed);
 
-  if (observed.remoteHeadSha === state.materialHeadSha) {
+  const headDrift = observed.remoteHeadSha !== state.materialHeadSha;
+  const baseDrift = observed.baseSha !== state.baseSha;
+  if (!headDrift && !baseDrift) {
     return Object.freeze({
       state,
       staleStateDetected: false,
@@ -209,13 +212,14 @@ export function reconcilePersistentState(rawState, rawObserved) {
   const reconciled = normalizePersistentDeliveryState({
     ...state,
     revision: state.revision + 1,
+    baseSha: observed.baseSha,
     materialHeadSha: observed.remoteHeadSha,
     status: 'queued',
-    classifier: { ...state.classifier, current: false },
+    classifier: { ...state.classifier, subjectSha: observed.remoteHeadSha, current: false },
     workflowChecks: [],
     blockingFindings: [],
     evidenceRefs: [],
-    lastReason: 'remote-head-drift'
+    lastReason: headDrift ? 'remote-head-drift' : 'remote-base-drift'
   });
 
   return Object.freeze({

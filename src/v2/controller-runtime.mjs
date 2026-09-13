@@ -153,6 +153,33 @@ export async function loadAuthoritativeAuditResult({
   }
 }
 
+export function releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, baseSha } = {}) {
+  if (!pullRequest || Array.isArray(pullRequest) || typeof pullRequest !== 'object') throw new Error('pullRequest is required');
+  const expectedHead = requiredSha(materialHeadSha, 'materialHeadSha');
+  const expectedBase = requiredSha(baseSha, 'baseSha');
+  const currentHead = requiredSha(pullRequest.head?.sha, 'pullRequest.head.sha');
+  const currentBase = requiredSha(pullRequest.base?.sha, 'pullRequest.base.sha');
+  if (currentHead !== expectedHead) throw new Error('release head drift detected');
+  if (currentBase !== expectedBase) throw new Error('release base drift detected');
+  const rawPreview = String(pullRequest.merge_commit_sha ?? '').trim().toLowerCase();
+  const previewSha = SHA_RE.test(rawPreview) ? rawPreview : null;
+  const mergeable = pullRequest.mergeable;
+  const terminal = previewSha != null && mergeable != null;
+  const evidenceRef = requiredString(pullRequest.html_url ?? pullRequest.url ?? ('github:pull:' + (pullRequest.number ?? 'unknown')), 'pullRequest evidence URL');
+  return Object.freeze({
+    currentRemoteHeadSha: currentHead,
+    currentBaseSha: currentBase,
+    mergePreview: Object.freeze({
+      required: true,
+      materialHeadSha: expectedHead,
+      previewSha,
+      status: terminal ? 'completed' : 'pending',
+      conclusion: terminal ? (mergeable === true ? 'success' : 'failure') : null,
+      evidenceRef
+    })
+  });
+}
+
 export async function publishReleaseStatus({ repository, sha, context, state, description, token, targetUrl = null } = {}) {
   const status = requiredString(state, 'status state').toLowerCase();
   if (!STATUS_STATES.has(status)) throw new Error('status state must be error, failure, pending, or success');

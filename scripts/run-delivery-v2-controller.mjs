@@ -17,7 +17,7 @@ import {
 } from '../src/v2/operational-controller.mjs';
 import { createDeliveryMetrics } from '../src/v2/metrics.mjs';
 import { mergeGhAwUsage, normalizeGhAwUsage, parseGhAwUsageJsonl } from '../src/v2/usage-telemetry.mjs';
-import { ciFailureClassForConclusion, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForConclusion, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const AUDIT_MARKER = '<!-- delivery-v2-independent-audit -->';
@@ -381,6 +381,7 @@ export async function main() {
 
   let pullRequest = await findManagedPullRequest({ repository: targetRepository, issueNumber, baseBranch, since: initialDispatchAt, token: targetReadToken });
   let materialHeadSha = String(pullRequest.head.sha).toLowerCase();
+  const expectedBaseSha = String(pullRequest.base.sha).toLowerCase();
   changedPaths = await fetchChangedPaths(targetRepository, pullRequest.number, targetReadToken);
   plan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk, changedPaths, repositoryPolicy });
   let state = createOperationalDelivery({ plan, materialHeadSha });
@@ -405,7 +406,7 @@ export async function main() {
   };
 
   await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
-  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce });
+  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider });
 
   for (let cycle = 0; cycle < 8; cycle += 1) {
     const observed = await waitRequiredCheck({
@@ -487,7 +488,7 @@ export async function main() {
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
       latestCheck = null;
       latestSourceRun = null;
-      await persist({ nextAction: 'observe-ci', workerRunId: worker.id });
+      await persist({ nextAction: 'observe-ci', workerRunId: worker.id, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider });
       continue;
     }
 
@@ -517,7 +518,10 @@ export async function main() {
           source_workflow_run_id: String(latestSourceRun.id),
           source_workflow_name: targetPolicy.ciWorkflowName,
           source_workflow_path: targetPolicy.ciWorkflowPath,
-          implementation_attempt: String(state.implementationAttempts)
+          implementation_attempt: String(state.implementationAttempts),
+          implementer_provider: plan.implementation.provider,
+          implementer_worker_identity: plan.implementation.workflow,
+          implementer_run_id: String(worker.id)
         }
       });
       await persist({ nextAction: 'observe-audit', auditRunId: auditRun.id, auditDispatchNonce });
@@ -579,7 +583,7 @@ export async function main() {
         latestCheck = null;
         latestSourceRun = null;
         lastAudit = null;
-        await persist({ nextAction: 'observe-ci', workerRunId: worker.id });
+        await persist({ nextAction: 'observe-ci', workerRunId: worker.id, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider });
         continue;
       }
     }
@@ -592,12 +596,14 @@ export async function main() {
         requestFingerprint: lastAudit?.requestFingerprint ?? 'not-observed',
         evidenceRef: auditRuns.at(-1)?.html_url ?? 'github:audit'
       } : null;
+      const finalPullRequest = await fetchPullRequest(targetRepository, pullRequest.number, targetReadToken);
+      const releaseIdentity = releaseIdentityFromPullRequest(finalPullRequest, { materialHeadSha, baseSha: expectedBaseSha });
       const releaseInput = {
         schemaVersion: 1,
         repository: targetRepository,
         pullRequestNumber: pullRequest.number,
         materialHeadSha,
-        currentRemoteHeadSha: String((await fetchPullRequest(targetRepository, pullRequest.number, targetReadToken)).head.sha).toLowerCase(),
+        currentRemoteHeadSha: releaseIdentity.currentRemoteHeadSha,
         evidenceCollection: { materialHeadSha, remoteHeadSha: materialHeadSha, evidenceRef: `github:${targetRepository}#${pullRequest.number}@${materialHeadSha}` },
         classifier: {
           subjectSha: materialHeadSha,
@@ -607,7 +613,7 @@ export async function main() {
           expectedFingerprint: classifier.fingerprint,
           evidenceRef: classifier.evidenceRef
         },
-        mergePreview: null,
+        mergePreview: releaseIdentity.mergePreview,
         checks: [{ name: latestCheck.name, required: true, subjectSha: materialHeadSha, status: latestCheck.status, conclusion: latestCheck.conclusion, workflowRunId: latestSourceRun.id, evidenceRef: latestCheck.details_url ?? latestSourceRun.html_url }],
         standardAuditRequired: targetPolicy.standardAuditRequired !== false,
         audit,

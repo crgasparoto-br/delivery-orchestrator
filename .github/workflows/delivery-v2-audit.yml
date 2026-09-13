@@ -37,6 +37,18 @@ on:
         required: true
         default: '1'
         type: string
+      implementer_provider:
+        description: AI provider that produced the audited material head
+        required: true
+        type: string
+      implementer_worker_identity:
+        description: Exact implementation worker workflow identity
+        required: true
+        type: string
+      implementer_run_id:
+        description: Exact implementation worker run that produced the audited material head
+        required: true
+        type: string
       dispatch_nonce:
         description: Deterministic controller dispatch correlation nonce
         required: true
@@ -44,7 +56,8 @@ on:
 
 run-name: Delivery V2 audit ${{ inputs.dispatch_nonce }}
 
-permissions: {}
+permissions:
+  contents: read
 
 concurrency:
   group: delivery-v2-audit-${{ inputs.target_repository }}-${{ inputs.target_pr }}
@@ -64,6 +77,9 @@ jobs:
       SOURCE_WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
       SOURCE_WORKFLOW_PATH: ${{ inputs.source_workflow_path }}
       IMPLEMENTATION_ATTEMPT: ${{ inputs.implementation_attempt }}
+      IMPLEMENTER_PROVIDER: ${{ inputs.implementer_provider }}
+      IMPLEMENTER_WORKER_IDENTITY: ${{ inputs.implementer_worker_identity }}
+      IMPLEMENTER_RUN_ID: ${{ inputs.implementer_run_id }}
       AUDIT_RESULT_PATH: /tmp/delivery-v2-github-audit-${{ github.run_id }}.json
       DELIVERY_ROLE_RUNTIME_ROOT: /tmp/delivery-v2-auditor-${{ github.run_id }}
       DELIVERY_ROLE_RUNTIME_WORKER: /tmp/delivery-v2-auditor-${{ github.run_id }}/role-runtime-worker.mjs

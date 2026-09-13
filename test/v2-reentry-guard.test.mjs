@@ -227,3 +227,17 @@ test('cancelled, timed out, stale or startup failures never become automatic cod
     assert.equal(ciFailureClassForConclusion(conclusion), 'external');
   }
 });
+
+
+test('base drift routes resume back through deterministic classification', () => {
+  const nextBase = 'd'.repeat(40);
+  const decision = evaluateReentry({
+    pullRequest: pr({ base: { ref: 'main', sha: nextBase } }),
+    stateEnvelope: envelope(),
+    bootstrapLease: null,
+    targetRepository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex'
+  });
+  assert.equal(decision.runController, true);
+  assert.equal(decision.staleStateDetected, true);
+  assert.equal(decision.nextAction, 'classify');
+});

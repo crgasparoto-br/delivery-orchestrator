@@ -45,7 +45,8 @@ function request(riskProfile = 'critical') {
     sourceWorkflowDefinition: definition,
     sourceWorkflowEvidence: evidence,
     workflowName: 'Validate PR',
-    workflowPath: PATH
+    workflowPath: PATH,
+    implementer: { provider: 'codex', workerIdentity: 'delivery-v2-worker-codex-critical.md', runId: 1234 }
   });
 }
 
@@ -59,6 +60,9 @@ test('generic audit request binds target workflow, exact SHA and requested effec
   assert.equal(value.candidate.risk.profile, 'critical');
   assert.equal(value.candidate.checks[0].name, 'Validate PR');
   assert.equal(value.candidate.checks[0].workflowEvidence.path, PATH);
+  assert.equal(value.candidate.implementer.provider, 'codex');
+  assert.equal(value.candidate.implementer.workerIdentity, 'delivery-v2-worker-codex-critical.md');
+  assert.equal(value.candidate.implementer.runId, 1234);
   assert.equal(value.applicability.mode, 'independent');
 });
 

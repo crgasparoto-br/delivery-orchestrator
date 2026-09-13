@@ -127,6 +127,7 @@ export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, ta
       repository: targetRepository,
       pullRequestNumber: prNumber,
       headRef: String(pullRequest?.head?.ref ?? ''),
+      baseSha: String(pullRequest?.base?.sha ?? ''),
       remoteHeadSha
     });
     return Object.freeze({
