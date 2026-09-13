@@ -24,19 +24,10 @@ import {
   fetchImmutableCompareEvidence
 } from '../src/v2/github-audit-evidence.mjs';
 
-const GENERATED_CONTEXT_PATTERNS = Object.freeze([
-  /(?:^|\/)\.audit(?:\/|$)/,
-  /(?:^|\/)skills\/catalog(?:\/|$)/,
-  /(?:^|\/)\.generated(?:\/|$)/,
-  /\.lock\.ya?ml$/,
-  /(?:^|\/)package-lock\.json$/,
-  /(?:^|\/)\.github\/aw\/actions-lock\.json$/
-]);
-const WORKER_PROMPT_PATTERN = /^\.github\/workflows\/delivery-v2-worker-(?:claude|codex|copilot)-(?:fast|standard|critical)\.md$/;
-
 function requiredEnv(name) {
   const value = String(process.env[name] ?? '').trim();
   if (!value) throw new Error(`${name} is required`);
+  return value;
 }
 function positiveInteger(name, fallback = null) {
   const raw = process.env[name] ?? fallback;
@@ -57,15 +48,6 @@ function linuxHome(user) {
   const home = line.split(':')[5];
   if (!home) throw new Error(`could not resolve Linux home for ${user}`);
   return home;
-}
-
-export function materialAuditContextPaths(changedPaths) {
-  const normalized = [...new Set((changedPaths ?? []).map((value) => String(value).trim()).filter(Boolean))];
-  const primary = normalized.filter((filePath) =>
-    !GENERATED_CONTEXT_PATTERNS.some((pattern) => pattern.test(filePath)) && !WORKER_PROMPT_PATTERN.test(filePath));
-  if (primary.length > 0) return primary;
-  const prompts = normalized.filter((filePath) => WORKER_PROMPT_PATTERN.test(filePath));
-  return prompts.length > 0 ? prompts : normalized;
 }
 
 function materialBundleFiles({ request, contractText, diffEvidence, materialContext }) {
@@ -99,7 +81,7 @@ function auditPrompt(request) {
     '',
     'Your entire allowed context is the sanitized bundle in the current working directory: AUDIT_REQUEST.json, DELIVERY_CONTRACT.md, ISSUE.json, PULL_REQUEST.json, CANDIDATE.diff, DIFF_MANIFEST.json and MATERIAL_CONTEXT.json. ISSUE.json and PULL_REQUEST.json are deterministic bounded projections, not raw GitHub API objects. Do not seek implementation conversation history, hidden implementer reasoning, retired delivery snapshots, generated workflow locks or unrelated repository inventory. Do not modify files or Git state.',
     '',
-    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, lists every changed path, and records included or omitted diff blocks with explicit reasons. MATERIAL_CONTEXT.json contains bounded full contents for prioritized changed source files plus one-hop direct relative dependencies when resolvable. Generated locks never displace source/tests from this semantic budget; repetitive worker prompts are full material context only when they are themselves the material change. Respect both manifests and their limits. If a release-blocking conclusion genuinely depends on omitted diff or file context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
+    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, lists every changed path, and records included or omitted diff blocks with explicit reasons. MATERIAL_CONTEXT.json contains bounded full contents for prioritized changed source files plus one-hop direct relative dependencies when resolvable. Generated locks never displace source/tests from this semantic budget; every omitted changed path remains explicitly manifested. Respect both manifests and their limits. If a release-blocking conclusion genuinely depends on omitted diff or file context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
     '',
     `Audit exactly candidate ${request.candidate.materialHeadSha}. Treat AUDIT_REQUEST.json identity/check evidence as authoritative. First verify the issue acceptance contract against the bounded candidate diff and full material context available in the bundle, then apply Delivery V2 invariants. Return all cheap blocking findings in one pass. Findings must identify concrete candidate behavior/configuration and discriminating evidence. Do not reject hypothetical future code that is absent from this candidate.`,
     '',
@@ -193,8 +175,7 @@ export async function main() {
     fetchImmutableCompareEvidence(repository, baseSha, candidateSha, token)
   ]);
   const diffEvidence = boundAuditDiff(compareEvidence.diffText, compareEvidence.changedPaths);
-  const contextPaths = materialAuditContextPaths(compareEvidence.changedPaths);
-  const materialContext = await fetchBoundedAuditContext(repository, candidateSha, contextPaths, token);
+  const materialContext = await fetchBoundedAuditContext(repository, candidateSha, compareEvidence.changedPaths, token);
   const stablePullRequest = await fetchJson(`https://api.github.com/repos/${repository}/pulls/${pullRequestNumber}`, token);
   assertPullRequestSnapshotStable(pullRequest, stablePullRequest);
 
