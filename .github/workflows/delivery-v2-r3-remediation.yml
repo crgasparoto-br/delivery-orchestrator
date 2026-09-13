@@ -35,7 +35,8 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           path = Path('/tmp/dv2-r3-remediate.cjs')
-          lines = path.read_text().splitlines()
+          text = path.read_text()
+          lines = text.splitlines()
           replacement = r"const body = marker + '\\n\\n' + String.fromCharCode(96).repeat(3) + 'json\\n{\"ok\":true}\\n' + String.fromCharCode(96).repeat(3);"
           found = False
           for index, line in enumerate(lines):
@@ -44,7 +45,19 @@ jobs:
                   found = True
           if not found:
               raise SystemExit('controller provenance test body anchor not found')
-          path.write_text('\n'.join(lines) + '\n')
+          text = '\n'.join(lines) + '\n'
+          marker = '// Resume controller validates persisted comment + workflow provenance and preserves current controller lineage.'
+          before, sep, after = text.partition(marker)
+          if not sep:
+              raise SystemExit('resume patch section not found')
+          old = "`      const releaseIdentity = releaseIdentityFromPullRequest(finalPullRequest, { materialHeadSha, baseSha: expectedBaseSha });\\n      const releaseInput = {\\n`"
+          new = "`    const releaseIdentity = releaseIdentityFromPullRequest(finalPullRequest, { materialHeadSha, baseSha: expectedBaseSha });\\n    const releaseInput = {\\n`"
+          old_replacement = "`      const releaseIdentity = releaseIdentityFromPullRequest(finalPullRequest, { materialHeadSha, baseSha: expectedBaseSha });\\n      const mergePreview = await collectMergePreviewEvidence({ repository: targetRepository, pullRequest: finalPullRequest, materialHeadSha, baseSha: expectedBaseSha, workflowRun: latestSourceRun, requiredJobName: targetPolicy.mergePreviewJobName, token: targetReadToken });\\n      const releaseInput = {\\n`"
+          new_replacement = "`    const releaseIdentity = releaseIdentityFromPullRequest(finalPullRequest, { materialHeadSha, baseSha: expectedBaseSha });\\n    const mergePreview = await collectMergePreviewEvidence({ repository: targetRepository, pullRequest: finalPullRequest, materialHeadSha, baseSha: expectedBaseSha, workflowRun: latestSourceRun, requiredJobName: targetPolicy.mergePreviewJobName, token: targetReadToken });\\n    const releaseInput = {\\n`"
+          if old not in after or old_replacement not in after:
+              raise SystemExit('resume release anchor rewrite inputs not found')
+          after = after.replace(old, new, 1).replace(old_replacement, new_replacement, 1)
+          path.write_text(before + sep + after)
           PY
           test -s /tmp/dv2-r3-remediate.cjs
           node --check /tmp/dv2-r3-remediate.cjs
