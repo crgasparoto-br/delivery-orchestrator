@@ -10,6 +10,11 @@ test('independent auditor remains anchored to the trusted default branch', () =>
   assert.doesNotMatch(auditWorkflow, /ref:\s*\$\{\{\s*inputs\.(?:target_ref|candidate|head)/);
 });
 
+test('audit runtime requiredEnv returns the validated value', () => {
+  assert.match(auditScript, /function requiredEnv\(name\)[\s\S]*?if \(!value\) throw new Error\([\s\S]*?return value;/);
+  assert.match(auditScript, /requiredEnv\('AUDIT_RISK_PROFILE'\)\.toLowerCase\(\)/);
+});
+
 test('total bundle budget is evaluated before any model invocation', () => {
   const budgetIndex = auditScript.indexOf('evaluateAuditBundleBudget');
   const runFreshIndex = auditScript.indexOf('executor.runFresh');
