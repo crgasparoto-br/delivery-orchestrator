@@ -112,7 +112,7 @@ test('path-set mismatch cannot be mistaken for exact alignment', () => {
 
   assert.equal(bounded.manifest.alignmentExact, false);
   assert.equal(bounded.manifest.strategy, 'bounded-unified-diff-unverified-path-alignment');
-  assert.equal(bounded.manifest.included.find((item) => /src\/b\.mjs/.test(bounded.text) && item.index === 1)?.path, null);
+  assert.equal(bounded.manifest.included.find((item) => item.index === 1)?.path, null);
 });
 
 test('oversized diff blocks are omitted explicitly instead of being silently truncated', () => {
@@ -128,11 +128,12 @@ test('oversized diff blocks are omitted explicitly instead of being silently tru
   assert.ok(bounded.manifest.omitted[0].bytes > 64);
 });
 
-test('GitHub-native auditor sends balanced bounded evidence while preserving the full changed path set', async () => {
+test('GitHub-native auditor suppresses supplemental context only for verified diff-path alignment', async () => {
   const script = await import('node:fs/promises').then(({ readFile }) => readFile(new URL('../scripts/run-delivery-v2-github-audit.mjs', import.meta.url), 'utf8'));
   assert.match(script, /const diffEvidence = boundAuditDiff\(compareEvidence\.diffText, compareEvidence\.changedPaths\)/);
-  assert.match(script, /const representedPaths = diffEvidence\.manifest\.included\.map\(\(entry\) => entry\.path\)\.filter\(Boolean\)/);
+  assert.match(script, /const representedPaths = diffEvidence\.manifest\.alignmentExact[\s\S]*?\? diffEvidence\.manifest\.included\.map\(\(entry\) => entry\.path\)\.filter\(Boolean\)[\s\S]*?: \[\];/);
   assert.match(script, /fetchBoundedAuditContext\(repository, candidateSha, compareEvidence\.changedPaths, token, \{ representedPaths \}\)/);
+  assert.match(script, /reserves one eligible representative from each semantic class before any spillover/);
   assert.match(script, /evaluateAuditBundleBudget/);
   assert.match(script, /providerCalls: 0/);
   assert.match(script, /'CANDIDATE\.diff': diffEvidence\.text/);
