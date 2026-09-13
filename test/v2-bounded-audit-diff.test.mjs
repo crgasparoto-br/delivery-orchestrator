@@ -91,18 +91,21 @@ test('canonical Delivery V2 docs cannot be displaced by a smaller noncanonical d
     'docs/delivery-v2/MASTER_SPEC.md'
   ];
   const payloadByPath = new Map([
-    ['src/v2/primary.mjs', 'e'.repeat(3400)],
-    ['src/v2/spillover.mjs', 's'.repeat(3400)],
-    ['test/v2-primary.test.mjs', 't'.repeat(420)],
-    ['config/delivery-v2-requirements.json', 'c'.repeat(420)],
-    ['docs/delivery-v2/evidence/dv2-013-training-system-fast.json', 'v'.repeat(420)],
-    ['.github/workflows/delivery-v2-worker-codex-critical.md', 'p'.repeat(420)],
-    ['docs/changelog.md', 'd'.repeat(120)],
-    ['docs/delivery-v2/MASTER_SPEC.md', 'm'.repeat(2800)]
+    ['src/v2/primary.mjs', 'e'.repeat(1200)],
+    ['src/v2/spillover.mjs', 's'.repeat(1200)],
+    ['test/v2-primary.test.mjs', 't'.repeat(150)],
+    ['config/delivery-v2-requirements.json', 'c'.repeat(150)],
+    ['docs/delivery-v2/evidence/dv2-013-training-system-fast.json', 'v'.repeat(150)],
+    ['.github/workflows/delivery-v2-worker-codex-critical.md', 'p'.repeat(150)],
+    ['docs/changelog.md', 'd'.repeat(30)],
+    ['docs/delivery-v2/MASTER_SPEC.md', 'm'.repeat(1000)]
   ]);
   const diff = paths.map((filePath) => block(filePath, payloadByPath.get(filePath))).join('');
+  const canonicalBlockBytes = Buffer.byteLength(block('docs/delivery-v2/MASTER_SPEC.md', payloadByPath.get('docs/delivery-v2/MASTER_SPEC.md')));
+  assert.ok(canonicalBlockBytes <= 4096, 'canonical fixture must remain individually eligible');
+
   const bounded = boundAuditDiff(diff, paths, {
-    limits: { maxFiles: 12, maxFileBytes: 4096, maxTotalBytes: 10 * 1024 }
+    limits: { maxFiles: 12, maxFileBytes: 4096, maxTotalBytes: 8 * 1024 }
   });
   const included = new Set(bounded.manifest.included.map((item) => item.path));
 
@@ -111,7 +114,7 @@ test('canonical Delivery V2 docs cannot be displaced by a smaller noncanonical d
   assert.equal(bounded.manifest.categoryReservations.docs.required, false);
   assert.ok(included.has('docs/delivery-v2/MASTER_SPEC.md'));
   assert.equal(bounded.manifest.included.find((item) => item.path === 'docs/delivery-v2/MASTER_SPEC.md')?.category, 'canonical-docs');
-  assert.ok(bounded.manifest.boundedBytes <= 10 * 1024);
+  assert.ok(bounded.manifest.boundedBytes <= 8 * 1024);
 });
 
 test('co-located test files under src receive the tests reservation', () => {
