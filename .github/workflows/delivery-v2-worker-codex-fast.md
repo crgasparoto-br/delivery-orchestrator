@@ -34,7 +34,9 @@ pre-steps:
       GITHUB_TOKEN: ${{ github.token }}
       DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
     run: node .github/scripts/validate-delivery-v2-worker-authorization.mjs
-engine: codex
+engine:
+  id: codex
+  model: ${{ vars.DELIVERY_FAST_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.4' }}
 max-turns: 20
 max-ai-credits: 100
 timeout-minutes: 20
