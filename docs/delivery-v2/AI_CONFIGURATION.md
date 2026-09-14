@@ -54,7 +54,7 @@ Defaults are concrete model identifiers rather than `auto`/`agent` aliases so th
 | Implementation/remediation | `copilot` | `gpt-5.4` | `claude-sonnet-5` | `gpt-5.3-codex` |
 | Independent audit | `codex` | `gpt-5.6-sol` | `claude-opus-5` | `gpt-5.3-codex` |
 
-Changing a GitHub Variable affects subsequent runs only. Historical workflow runs and audit artifacts retain the provider/model identity that was used for that candidate.
+Changing a GitHub Variable affects a subsequent controller run. Within one controller cycle, the resolved auditor provider/model is persisted in the Delivery V2 state before audit dispatch. The independent-audit workflow re-resolves the applicable Variables only as a drift check: if provider or model differs from the frozen controller identity, the audit fails before any provider invocation instead of silently switching identity.
 
 ## Secrets and authentication
 
@@ -90,4 +90,4 @@ The example is not a forced policy. Repository variables are the operator-contro
 
 ## Evidence
 
-The deterministic plan records the resolved implementation and audit provider/model. Compiled implementation workers expose the actual selected model in GitHub Actions workflow outputs. Independent audit artifacts also persist `auditRuntime.provider`, `auditRuntime.model`, risk, and whether a provider call occurred. This keeps past evidence stable even after the repository variables are changed.
+The deterministic plan records the resolved implementation and audit provider/model. Compiled implementation workers expose the actual selected model in GitHub Actions workflow outputs. Before an independent audit provider is called, the workflow proves that its currently resolved audit provider/model still matches the exact controller state for the target repository, issue, PR head, risk, and audit dispatch nonce. The audit artifact persists the same identity in both top-level `auditRuntime` and `result.auditRuntime`, so the authoritative result consumed by the controller retains the provider/model that actually ran.
