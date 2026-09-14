@@ -14,9 +14,28 @@ import {
 import { createPersistentDeliveryState, normalizePersistentDeliveryState } from './persistent-state.mjs';
 import { resolveOperationalAuditPolicy } from './audit-policy.mjs';
 import { executionPolicyFor } from './execution-policy.mjs';
+import { resolveProviderSelectionForRisk } from './provider-policy.mjs';
 import { evaluateReleaseGate } from './release-gate.mjs';
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
+const AI_POLICY_ENV_KEYS = Object.freeze([
+  'DELIVERY_AI_PROVIDER',
+  'DELIVERY_AI_MODEL',
+  'DELIVERY_IMPLEMENTER_PROVIDER',
+  'DELIVERY_IMPLEMENTER_MODEL',
+  'DELIVERY_AUDITOR_PROVIDER',
+  'DELIVERY_AUDITOR_MODEL',
+  'DELIVERY_FAST_IMPLEMENTER_PROVIDER',
+  'DELIVERY_FAST_IMPLEMENTER_MODEL',
+  'DELIVERY_STANDARD_IMPLEMENTER_PROVIDER',
+  'DELIVERY_STANDARD_IMPLEMENTER_MODEL',
+  'DELIVERY_CRITICAL_IMPLEMENTER_PROVIDER',
+  'DELIVERY_CRITICAL_IMPLEMENTER_MODEL',
+  'DELIVERY_STANDARD_AUDITOR_PROVIDER',
+  'DELIVERY_STANDARD_AUDITOR_MODEL',
+  'DELIVERY_CRITICAL_AUDITOR_PROVIDER',
+  'DELIVERY_CRITICAL_AUDITOR_MODEL'
+]);
 
 function requiredObject(value, label) {
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be an object`);
@@ -27,6 +46,11 @@ function requiredString(value, label) {
   const resolved = String(value ?? '').trim();
   if (!resolved) throw new Error(`${label} is required`);
   return resolved;
+}
+
+function optionalString(value) {
+  const resolved = String(value ?? '').trim();
+  return resolved || null;
 }
 
 function requiredPositiveInteger(value, label) {
@@ -47,6 +71,55 @@ function applyAuditPolicy(state, { repository, audit } = {}) {
   return Object.freeze({ ...state, auditRequired: auditPolicy.required, auditMode: auditPolicy.mode });
 }
 
+function aiPolicyFromEnv(env = process.env) {
+  return {
+    provider: env.DELIVERY_AI_PROVIDER,
+    model: env.DELIVERY_AI_MODEL,
+    implementerProvider: env.DELIVERY_IMPLEMENTER_PROVIDER,
+    implementerModel: env.DELIVERY_IMPLEMENTER_MODEL,
+    auditorProvider: env.DELIVERY_AUDITOR_PROVIDER,
+    auditorModel: env.DELIVERY_AUDITOR_MODEL,
+    fastImplementerProvider: env.DELIVERY_FAST_IMPLEMENTER_PROVIDER,
+    fastImplementerModel: env.DELIVERY_FAST_IMPLEMENTER_MODEL,
+    standardImplementerProvider: env.DELIVERY_STANDARD_IMPLEMENTER_PROVIDER,
+    standardImplementerModel: env.DELIVERY_STANDARD_IMPLEMENTER_MODEL,
+    criticalImplementerProvider: env.DELIVERY_CRITICAL_IMPLEMENTER_PROVIDER,
+    criticalImplementerModel: env.DELIVERY_CRITICAL_IMPLEMENTER_MODEL,
+    standardAuditorProvider: env.DELIVERY_STANDARD_AUDITOR_PROVIDER,
+    standardAuditorModel: env.DELIVERY_STANDARD_AUDITOR_MODEL,
+    criticalAuditorProvider: env.DELIVERY_CRITICAL_AUDITOR_PROVIDER,
+    criticalAuditorModel: env.DELIVERY_CRITICAL_AUDITOR_MODEL
+  };
+}
+
+function hasRuntimeAiPolicy(env = process.env) {
+  return AI_POLICY_ENV_KEYS.some((key) => optionalString(env[key]) != null);
+}
+
+function resolveStateAiIdentity(current, target, env = process.env) {
+  const runtime = hasRuntimeAiPolicy(env)
+    ? resolveProviderSelectionForRisk(aiPolicyFromEnv(env), current.riskProfile)
+    : null;
+  return Object.freeze({
+    provider: runtime?.implementer.provider ?? optionalString(current.implementerProvider) ?? requiredString(target.provider, 'identity.provider'),
+    model: runtime?.implementer.model ?? optionalString(current.implementerModel) ?? optionalString(target.model),
+    auditorProvider: runtime?.auditor.provider ?? optionalString(current.auditorProvider) ?? optionalString(target.auditorProvider),
+    auditorModel: runtime?.auditor.model ?? optionalString(current.auditorModel) ?? optionalString(target.auditorModel)
+  });
+}
+
+function bindPlanAiIdentity(state, plan) {
+  const implementation = requiredObject(plan.implementation, 'plan.implementation');
+  const audit = requiredObject(plan.audit, 'plan.audit');
+  return Object.freeze({
+    ...state,
+    implementerProvider: requiredString(implementation.provider, 'plan.implementation.provider'),
+    implementerModel: requiredString(implementation.model, 'plan.implementation.model'),
+    auditorProvider: requiredString(audit.provider, 'plan.audit.provider'),
+    auditorModel: requiredString(audit.model, 'plan.audit.model')
+  });
+}
+
 export function createOperationalDelivery({ plan, materialHeadSha } = {}) {
   const value = requiredObject(plan, 'plan');
   if (value.architecture !== 'github-native-v2') throw new Error('Expected github-native-v2 delivery plan');
@@ -57,6 +130,7 @@ export function createOperationalDelivery({ plan, materialHeadSha } = {}) {
   });
   state = classifyDelivery(state, { riskProfile: value.risk.profile });
   state = applyAuditPolicy(state, { repository: value.repository, audit: requiredObject(value.audit, 'plan.audit') });
+  state = bindPlanAiIdentity(state, value);
   if (materialHeadSha == null) return state;
   state = startImplementation(state);
   return publishMaterial(state, { materialHeadSha: requiredSha(materialHeadSha, 'materialHeadSha') });
@@ -106,6 +180,7 @@ export function persistentStateFromOperational({ state, identity, classifier, wo
   const target = requiredObject(identity, 'identity');
   const classification = requiredObject(classifier, 'classifier');
   const materialHeadSha = requiredSha(current.materialHeadSha, 'state.materialHeadSha');
+  const aiIdentity = resolveStateAiIdentity(current, target);
   return createPersistentDeliveryState({
     repository: current.repository,
     issueNumber: requiredPositiveInteger(target.issueNumber, 'identity.issueNumber'),
@@ -121,7 +196,10 @@ export function persistentStateFromOperational({ state, identity, classifier, wo
       fingerprint: requiredString(classification.fingerprint, 'classifier.fingerprint'),
       current: true
     },
-    provider: requiredString(target.provider, 'identity.provider'),
+    provider: aiIdentity.provider,
+    model: aiIdentity.model,
+    auditorProvider: aiIdentity.auditorProvider,
+    auditorModel: aiIdentity.auditorModel,
     status: current.status,
     attempts: {
       implementation: current.implementationAttempts,
@@ -160,6 +238,10 @@ export function operationalStateFromPersistent(rawPersistentState) {
     status: persistent.status,
     riskProfile: persistent.effectiveRisk,
     materialHeadSha: persistent.materialHeadSha,
+    implementerProvider: persistent.provider,
+    implementerModel: persistent.model,
+    auditorProvider: persistent.auditorProvider,
+    auditorModel: persistent.auditorModel,
     implementationAttempts: persistent.attempts.implementation,
     auditAttempts: persistent.attempts.audit,
     auditRemediationAttempts: persistent.attempts.auditRemediation,
