@@ -25,11 +25,11 @@ const METADATA = Object.freeze({
 export const DEFAULT_AI_ROLE_POLICY = Object.freeze({
   implementer: Object.freeze({
     provider: 'copilot',
-    models: Object.freeze({ codex: 'gpt-5.4', claude: 'agent', copilot: 'auto' })
+    models: Object.freeze({ codex: 'gpt-5.4', claude: 'claude-sonnet-5', copilot: 'gpt-5.3-codex' })
   }),
   auditor: Object.freeze({
     provider: 'codex',
-    models: Object.freeze({ codex: 'gpt-5.6-sol', claude: 'agent', copilot: 'auto' })
+    models: Object.freeze({ codex: 'gpt-5.6-sol', claude: 'claude-opus-5', copilot: 'gpt-5.3-codex' })
   })
 });
 
