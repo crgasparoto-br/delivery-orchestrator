@@ -6,13 +6,23 @@ import { DELIVERY_V2_RELEASE_GATE_SCHEMA_VERSION, DELIVERY_V2_RELEASE_STATUS_NAM
 import { resolveImplementationWorkflow } from './provider-dispatch.mjs';
 import { resolveRiskProfile } from './risk-profile.mjs';
 
+function aiPolicyFromConfig(config) {
+  if (config.aiPolicy) return config.aiPolicy;
+  return Object.freeze({
+    implementerProvider: config.providers?.implementer?.provider,
+    implementerModel: config.providers?.implementer?.model,
+    auditorProvider: config.providers?.auditor?.provider,
+    auditorModel: config.providers?.auditor?.model
+  });
+}
+
 export function createDeliveryPlan(config) {
   const risk = resolveRiskProfile({
     requested: config.requestedRisk,
     changedPaths: config.changedPaths,
     repositoryPolicy: config.repositoryPolicy
   });
-  const providers = resolveProviderSelectionForRisk(config.aiPolicy, risk.profile);
+  const providers = resolveProviderSelectionForRisk(aiPolicyFromConfig(config), risk.profile);
   const policy = executionPolicyFor(risk.profile);
   const auditPolicy = resolveOperationalAuditPolicy({
     riskProfile: risk.profile,
