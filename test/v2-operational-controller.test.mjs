@@ -22,9 +22,11 @@ function planFor(risk = 'critical') {
     repositoryPolicy: {},
     repository: 'owner/repo',
     issueNumber: 63,
-    providers: {
-      implementer: { provider: 'codex', model: 'auto' },
-      auditor: { provider: 'codex', model: 'auto' }
+    aiPolicy: {
+      implementerProvider: 'codex',
+      implementerModel: 'gpt-5.4',
+      auditorProvider: 'claude',
+      auditorModel: 'claude-opus-5'
     }
   });
 }
@@ -63,7 +65,7 @@ test('actionable CI failure becomes the only bounded remediation input and prese
   assert.equal(state.status, 'implementing');
 });
 
-test('persistent projection binds state and evidence to the exact material head', () => {
+test('persistent projection binds state, evidence and effective AI identity to the exact material head', () => {
   let state = createOperationalDelivery({ plan: planFor('critical'), materialHeadSha: A });
   state = applyOperationalEvent(state, { type: 'ci-result', result: { candidateSha: A, conclusion: 'success', evidenceRef: 'run:1' } });
   const persistent = persistentStateFromOperational({
@@ -77,6 +79,16 @@ test('persistent projection binds state and evidence to the exact material head'
   assert.equal(persistent.status, 'audit-pending');
   assert.equal(persistent.attempts.implementation, 1);
   assert.equal(persistent.classifier.subjectSha, A);
+  assert.equal(persistent.provider, 'codex');
+  assert.equal(persistent.model, 'gpt-5.4');
+  assert.equal(persistent.auditorProvider, 'claude');
+  assert.equal(persistent.auditorModel, 'claude-opus-5');
+
+  const restored = operationalStateFromPersistent(persistent);
+  assert.equal(restored.implementerProvider, 'codex');
+  assert.equal(restored.implementerModel, 'gpt-5.4');
+  assert.equal(restored.auditorProvider, 'claude');
+  assert.equal(restored.auditorModel, 'claude-opus-5');
 });
 
 test('release evaluation is impossible before operational state is ready', () => {
@@ -93,6 +105,8 @@ test('persistent resume preserves actionable CI and semantic audit remediation p
   const ciPersistent = persistentStateFromOperational({ state: ciState, identity: identity(), classifier: { version: 'v1', fingerprint: 'fingerprint' } });
   const ciRestored = operationalStateFromPersistent(ciPersistent);
   assert.deepEqual(operationalRemediationInput(ciRestored).ciFailure, ciState.ciFailure);
+  assert.equal(ciRestored.implementerModel, 'gpt-5.4');
+  assert.equal(ciRestored.auditorModel, 'claude-opus-5');
 
   let auditState = createOperationalDelivery({ plan: planFor('critical'), materialHeadSha: A });
   auditState = applyOperationalEvent(auditState, { type: 'ci-result', result: { candidateSha: A, conclusion: 'success', evidenceRef: 'run:ok' } });
@@ -101,4 +115,6 @@ test('persistent resume preserves actionable CI and semantic audit remediation p
   const auditRestored = operationalStateFromPersistent(auditPersistent);
   assert.deepEqual(operationalRemediationInput(auditRestored).findings, auditState.blockingFindings);
   assert.deepEqual(auditRestored.auditEvidence, auditState.auditEvidence);
+  assert.equal(auditRestored.implementerProvider, 'codex');
+  assert.equal(auditRestored.auditorProvider, 'claude');
 });
