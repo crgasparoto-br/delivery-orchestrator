@@ -30,6 +30,7 @@ pre-steps:
       DISPATCH_NONCE: ${{ github.event.inputs.dispatch_nonce }}
       EXPECTED_PROVIDER: codex
       EXPECTED_RISK: standard
+      EXPECTED_MODEL: ${{ vars.DELIVERY_STANDARD_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.4' }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       GITHUB_TOKEN: ${{ github.token }}
       DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}

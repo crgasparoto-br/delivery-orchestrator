@@ -13,6 +13,11 @@ function requiredString(value, label) {
   return result;
 }
 
+function optionalString(value) {
+  const result = String(value ?? '').trim();
+  return result || null;
+}
+
 function requiredPositiveInteger(value, label) {
   const result = Number(value);
   if (!Number.isInteger(result) || result < 1) throw new Error(`${label} must be a positive integer`);
@@ -99,11 +104,12 @@ export function validateCurrentWorkerRun(run, { currentRunId, expectedWorkflow, 
   return true;
 }
 
-function validateSharedIdentity({ repository, issueNumber, baseBranch, provider, riskProfile, dispatchNonce, expectedWorkflow }, actual) {
+function validateSharedIdentity({ repository, issueNumber, baseBranch, provider, model = null, riskProfile, dispatchNonce, expectedWorkflow }, actual) {
   if (String(actual.repository ?? '') !== repository) throw new Error('authorization repository mismatch');
   if (Number(actual.issueNumber) !== issueNumber) throw new Error('authorization issue mismatch');
   if (String(actual.baseBranch ?? actual.baseRef ?? '') !== baseBranch) throw new Error('authorization base mismatch');
   if (String(actual.provider ?? '').toLowerCase() !== provider) throw new Error('authorization provider mismatch');
+  if (model != null && String(actual.model ?? '') !== model) throw new Error('authorization model mismatch');
   if (String(actual.effectiveRisk ?? '').toLowerCase() !== riskProfile) throw new Error('authorization risk mismatch');
   if (String(actual.dispatchNonce ?? actual.workerDispatchNonce ?? '') !== dispatchNonce) throw new Error('authorization nonce mismatch');
   const workflow = String(actual.workerWorkflow ?? actual.workerIdentity ?? '');
@@ -118,6 +124,7 @@ export function validateAuthorizationEnvelope({
   targetRef,
   baseBranch,
   provider,
+  model = null,
   riskProfile,
   dispatchNonce,
   controllerRunId,
@@ -128,6 +135,7 @@ export function validateAuthorizationEnvelope({
   const issueNumber = requiredPositiveInteger(targetIssue, 'targetIssue');
   const base = requiredString(baseBranch, 'baseBranch');
   const providerName = requiredString(provider, 'provider').toLowerCase();
+  const modelName = optionalString(model);
   const risk = requiredString(riskProfile, 'riskProfile').toLowerCase();
   const nonce = requiredString(dispatchNonce, 'dispatchNonce');
   const controllerId = requiredPositiveInteger(controllerRunId, 'controllerRunId');
@@ -140,7 +148,7 @@ export function validateAuthorizationEnvelope({
   if (!pr) {
     if (Number(envelope.controllerRunId) !== controllerId) throw new Error('bootstrap controller run mismatch');
     if (String(envelope.status ?? '') !== 'reserved-initial-attempt') throw new Error('bootstrap lease is not active');
-    validateSharedIdentity({ repository, issueNumber, baseBranch: base, provider: providerName, riskProfile: risk, dispatchNonce: nonce, expectedWorkflow: workflow }, envelope);
+    validateSharedIdentity({ repository, issueNumber, baseBranch: base, provider: providerName, model: modelName, riskProfile: risk, dispatchNonce: nonce, expectedWorkflow: workflow }, envelope);
     if (String(targetRef ?? '') !== base) throw new Error('initial worker target_ref must equal authorized base branch');
     if (String(envelope.workerWorkflow ?? '') !== workflow) throw new Error('bootstrap worker workflow mismatch');
     return Object.freeze({ mode: 'initial', workerRunId: runId, controllerRunId: controllerId });
@@ -158,6 +166,7 @@ export function validateAuthorizationEnvelope({
   if (String(persistent.repository ?? '') !== repository) throw new Error('persistent repository mismatch');
   if (String(persistent.baseRef ?? '') !== base) throw new Error('persistent base mismatch');
   if (String(persistent.provider ?? '').toLowerCase() !== providerName) throw new Error('persistent provider mismatch');
+  if (modelName != null && String(persistent.model ?? '') !== modelName) throw new Error('persistent model mismatch');
   if (String(persistent.effectiveRisk ?? '').toLowerCase() !== risk) throw new Error('persistent risk mismatch');
   if (String(persistent.materialHeadSha ?? '').toLowerCase() !== String(targetRef ?? '').toLowerCase()) throw new Error('remediation target_ref mismatch');
   if (String(controller.workerDispatchNonce ?? '') !== nonce) throw new Error('remediation nonce mismatch');
@@ -201,6 +210,7 @@ export async function main() {
   const baseBranch = requiredString(process.env.BASE_BRANCH, 'BASE_BRANCH');
   const dispatchNonce = requiredString(process.env.DISPATCH_NONCE, 'DISPATCH_NONCE');
   const provider = requiredString(process.env.EXPECTED_PROVIDER, 'EXPECTED_PROVIDER').toLowerCase();
+  const model = requiredString(process.env.EXPECTED_MODEL, 'EXPECTED_MODEL');
   const riskProfile = requiredString(process.env.EXPECTED_RISK, 'EXPECTED_RISK').toLowerCase();
   const defaultBranch = requiredString(process.env.DEFAULT_BRANCH, 'DEFAULT_BRANCH');
   const actionsToken = requiredString(process.env.GITHUB_TOKEN, 'GITHUB_TOKEN');
@@ -234,6 +244,7 @@ export async function main() {
         targetRef,
         baseBranch,
         provider,
+        model,
         riskProfile,
         dispatchNonce,
         controllerRunId,
@@ -251,7 +262,7 @@ export async function main() {
 
   const runs = await listWorkerRuns(orchestratorRepository, expectedWorkflow, actionsToken);
   validateUniqueCorrelatedWorkerRun(runs, { currentRunId, dispatchNonce, defaultBranch });
-  process.stdout.write(`${JSON.stringify({ authorized: true, ...authorization, provider, riskProfile, expectedWorkflow })}\n`);
+  process.stdout.write(`${JSON.stringify({ authorized: true, ...authorization, provider, model, riskProfile, expectedWorkflow })}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
