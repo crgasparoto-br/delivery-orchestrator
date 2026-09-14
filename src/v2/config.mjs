@@ -1,4 +1,3 @@
-import { resolveProviderSelection } from './provider-policy.mjs';
 import { resolveRequestedRiskProfile } from './risk-profile.mjs';
 import { normalizeRepositoryRiskPolicy } from './repository-risk-policy.mjs';
 
@@ -20,18 +19,30 @@ function parseRepositoryRiskPolicy(value) {
 }
 
 export function loadV2Config(args = {}, env = process.env) {
-  const provider = args.provider ?? env.DELIVERY_AI_PROVIDER ?? 'codex';
-  const implementerProvider = args.implementerProvider ?? env.DELIVERY_IMPLEMENTER_PROVIDER;
-  const auditorProvider = args.auditorProvider ?? env.DELIVERY_AUDITOR_PROVIDER;
-  const model = args.model ?? env.DELIVERY_AI_MODEL;
-  const implementerModel = args.implementerModel ?? env.DELIVERY_IMPLEMENTER_MODEL;
-  const auditorModel = args.auditorModel ?? env.DELIVERY_AUDITOR_MODEL;
   const requestedRisk = resolveRequestedRiskProfile(args.risk ?? env.DELIVERY_RISK_PROFILE ?? 'auto');
   const changedPaths = args.changedPaths?.length ? args.changedPaths : splitPaths(env.DELIVERY_CHANGED_PATHS);
   const repositoryPolicy = parseRepositoryRiskPolicy(args.riskPolicyJson ?? env.DELIVERY_RISK_POLICY_JSON);
+  const aiPolicy = Object.freeze({
+    provider: args.provider,
+    model: args.model,
+    implementerProvider: args.implementerProvider ?? env.DELIVERY_IMPLEMENTER_PROVIDER,
+    implementerModel: args.implementerModel ?? env.DELIVERY_IMPLEMENTER_MODEL,
+    auditorProvider: args.auditorProvider ?? env.DELIVERY_AUDITOR_PROVIDER,
+    auditorModel: args.auditorModel ?? env.DELIVERY_AUDITOR_MODEL,
+    fastImplementerProvider: args.fastImplementerProvider ?? env.DELIVERY_FAST_IMPLEMENTER_PROVIDER,
+    fastImplementerModel: args.fastImplementerModel ?? env.DELIVERY_FAST_IMPLEMENTER_MODEL,
+    standardImplementerProvider: args.standardImplementerProvider ?? env.DELIVERY_STANDARD_IMPLEMENTER_PROVIDER,
+    standardImplementerModel: args.standardImplementerModel ?? env.DELIVERY_STANDARD_IMPLEMENTER_MODEL,
+    criticalImplementerProvider: args.criticalImplementerProvider ?? env.DELIVERY_CRITICAL_IMPLEMENTER_PROVIDER,
+    criticalImplementerModel: args.criticalImplementerModel ?? env.DELIVERY_CRITICAL_IMPLEMENTER_MODEL,
+    standardAuditorProvider: args.standardAuditorProvider ?? env.DELIVERY_STANDARD_AUDITOR_PROVIDER,
+    standardAuditorModel: args.standardAuditorModel ?? env.DELIVERY_STANDARD_AUDITOR_MODEL,
+    criticalAuditorProvider: args.criticalAuditorProvider ?? env.DELIVERY_CRITICAL_AUDITOR_PROVIDER,
+    criticalAuditorModel: args.criticalAuditorModel ?? env.DELIVERY_CRITICAL_AUDITOR_MODEL
+  });
   return {
     architecture: 'github-native-v2',
-    providers: resolveProviderSelection({ provider, implementerProvider, auditorProvider, model, implementerModel, auditorModel }),
+    aiPolicy,
     requestedRisk,
     changedPaths,
     repositoryPolicy,
