@@ -1,0 +1,43 @@
+## Objetivo
+Tornar a seleção de IA/provider/modelo da Delivery V2 totalmente controlável por GitHub Actions Variables, sem hardcode operacional e sem fallback silencioso de provider/modelo.
+
+## Requisitos
+- Separar implementação/correção de auditoria independente.
+- Permitir configuração por risco:
+  - FAST implementer
+  - STANDARD implementer
+  - CRITICAL implementer
+  - STANDARD auditor
+  - CRITICAL auditor
+- Usar GitHub Actions Variables para provider/modelo; Secrets ficam apenas para autenticação/credenciais.
+- Precedência: variável específica de risco/função -> variável geral da função -> default seguro versionado.
+- Persistir na evidência da execução provider, modelo, papel e risco efetivamente usados.
+- Falhar fechado quando provider/modelo configurado for inválido ou indisponível; nunca substituir silenciosamente por outro provider/modelo.
+- A auditoria independente deve usar sua seleção própria de provider/modelo e contexto isolado.
+
+## Variáveis esperadas
+Gerais:
+- DELIVERY_IMPLEMENTER_PROVIDER
+- DELIVERY_IMPLEMENTER_MODEL
+- DELIVERY_AUDITOR_PROVIDER
+- DELIVERY_AUDITOR_MODEL
+
+Por risco:
+- DELIVERY_FAST_IMPLEMENTER_PROVIDER
+- DELIVERY_FAST_IMPLEMENTER_MODEL
+- DELIVERY_STANDARD_IMPLEMENTER_PROVIDER
+- DELIVERY_STANDARD_IMPLEMENTER_MODEL
+- DELIVERY_CRITICAL_IMPLEMENTER_PROVIDER
+- DELIVERY_CRITICAL_IMPLEMENTER_MODEL
+- DELIVERY_STANDARD_AUDITOR_PROVIDER
+- DELIVERY_STANDARD_AUDITOR_MODEL
+- DELIVERY_CRITICAL_AUDITOR_PROVIDER
+- DELIVERY_CRITICAL_AUDITOR_MODEL
+
+## Aceite
+1. O controlador resolve provider/modelo deterministicamente para cada papel e risco.
+2. Os workflows recebem as GitHub Variables e propagam o modelo selecionado até o runtime.
+3. A auditoria não depende de OPENAI_MODEL global quando houver variável de auditoria aplicável.
+4. Evidência/state registra provider/modelo efetivos.
+5. Testes cobrem precedência, defaults, invalidez e ausência de fallback silencioso.
+6. Documentação operacional lista as GitHub Variables e exemplos de configuração.

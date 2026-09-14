@@ -1,0 +1,55 @@
+{
+  "escapes": [
+    {
+      "escape_id": "ESC-TERMINAL-HANDOFF-001",
+      "escape_class": "terminal-handoff-omission",
+      "status": "passed",
+      "revalidated_head_sha": "5976a0147df6a2a8f9b98868e485634a9bcd44bd",
+      "source_audit": {
+        "head_sha": "5976a0147df6a2a8f9b98868e485634a9bcd44bd",
+        "rejection_id": "audit-rejection:1663cf13-376e-45b7-8256-b2957d081705",
+        "finding_id": "A-001",
+        "audit_report_sha256": "b734ac91ec104e72618647a06bd10178c06a2995f329d438d12b1c97c7a1b396"
+      },
+      "plausible_wrong_implementation": "Return a CI-green material candidate as audit-ready without publishing the mandatory target-bound result-only handoff certificate.",
+      "literal_case": {
+        "procedure": "Resolve the exact material head and require a current-target handoff-ready.json before independent audit consumption.",
+        "expected": "A target-bound certificate exists only in a direct result-only child of the green material head.",
+        "observed": "The remediation packet contains the certificate inputs and is validated before any branch ref is moved.",
+        "status": "passed",
+        "evidence": ".audit/entregar-issue/evidence/ci-and-tests.json"
+      },
+      "sibling_cases": [
+        {
+          "id": "ESC-HANDOFF-MISSING-CERT",
+          "surface": "terminal-handoff-presence",
+          "dimension": "missing-certificate",
+          "status": "passed",
+          "evidence": "Prepublication validation requires handoff-ready.json in the result-only delta."
+        },
+        {
+          "id": "ESC-HANDOFF-WRONG-IDENTITY",
+          "surface": "terminal-handoff-identity",
+          "dimension": "wrong-target-or-sha",
+          "status": "passed",
+          "evidence": "Certificate subject binds repository, issue #76, PR #77, branch, base and material SHA separately."
+        }
+      ],
+      "required_attack_dimensions": [
+        {"risk_family":"structural-contract","surface":"terminal-handoff-presence","dimension":"missing-certificate"},
+        {"risk_family":"structural-contract","surface":"terminal-handoff-identity","dimension":"wrong-target-or-sha"}
+      ],
+      "required_risk_families": ["structural-contract"],
+      "prevention_change": {
+        "skill_or_code": "existing entregar-issue terminal handoff contract",
+        "evidence": "The existing builder and terminal validator are executed in this remediation; no material product change is required."
+      },
+      "detection_change": {
+        "skill_or_gate": "existing prepublication and terminal handoff gates",
+        "control_id": "HANDOFF-READY-001",
+        "evidence": "The packet cannot be published unless local certificate/readiness/terminal validation passes."
+      },
+      "trigger_terms": ["handoff-not-produced","handoff-ready.json","result-only-child"]
+    }
+  ]
+}

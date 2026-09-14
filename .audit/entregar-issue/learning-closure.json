@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "classification": "implementation-only",
+  "source_event": {
+    "kind": "independent-rejection",
+    "rejection_id": "audit-rejection:1663cf13-376e-45b7-8256-b2957d081705",
+    "finding_ids": ["A-001"],
+    "audit_report_sha256": "b734ac91ec104e72618647a06bd10178c06a2995f329d438d12b1c97c7a1b396"
+  },
+  "generalized_learning": {
+    "promotion_status": "not-required",
+    "reason": "The governing delivery skill already requires a terminal result-only handoff and fresh remote validation. This rejection is the local omission of that mandatory publication, so closing and validating the existing control is sufficient without adding a repository-specific global rule."
+  }
+}

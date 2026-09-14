@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "repository": "crgasparoto-br/delivery-orchestrator",
+  "issue": 76,
+  "created_at": "2026-09-14T19:24:18.329694+00:00",
+  "primary_source_id": "SRC-ISSUE-76",
+  "sources": [
+    {
+      "id": "SRC-ISSUE-76",
+      "kind": "issue-body",
+      "path": "specification-sources/SRC-ISSUE-76.txt",
+      "locator": "/mnt/data/pr77-handoff/issue-76.md",
+      "sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "textual": true,
+      "extract_source_id": null,
+      "required": true,
+      "line_count": 43
+    }
+  ]
+}

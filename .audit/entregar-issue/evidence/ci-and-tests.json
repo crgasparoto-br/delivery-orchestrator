@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "repository": "crgasparoto-br/delivery-orchestrator",
+  "issue_number": 76,
+  "pull_request_number": 77,
+  "material_head_sha": "5976a0147df6a2a8f9b98868e485634a9bcd44bd",
+  "base_sha": "00eb10545f2f7209ef649d2834300515e0b85106",
+  "ci": {
+    "workflow": "Delivery V2 CI",
+    "run_id": 34858732516,
+    "run_number": 214,
+    "job_id": 104025024512,
+    "job_name": "V2 platform checks",
+    "status": "completed",
+    "conclusion": "success",
+    "subject_sha": "5976a0147df6a2a8f9b98868e485634a9bcd44bd",
+    "passed_steps": [
+      "V2 unit tests",
+      "Verify Delivery V2 contract and terminal completeness",
+      "Syntax checks",
+      "Detect gh-aw worker identity drift",
+      "Install pinned gh-aw",
+      "Compile gh-aw workers",
+      "Verify compiled gh-aw workers",
+      "Smoke deterministic plan"
+    ]
+  },
+  "observation": "Official GitHub Actions CI executed on the exact material head and completed successfully; handoff remediation adds only result/evidence artifacts and does not claim a new material execution."
+}

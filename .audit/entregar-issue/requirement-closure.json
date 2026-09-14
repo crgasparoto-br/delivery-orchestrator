@@ -1,0 +1,423 @@
+{
+  "schema_version": 3,
+  "specification_snapshot": {
+    "path": "/mnt/data/pr77-handoff-new/specification-snapshot.json",
+    "sha256": "ab80d82c5691734cc8b8b1e3bccff790a0a585fe7341b2b056c833a68175cecd"
+  },
+  "primary_issue_source_id": "SRC-ISSUE-76",
+  "obligations": [
+    {
+      "id": "OBL-001",
+      "candidate_key": "77b2aebbbf5876b0e44b35c6a7eca149f8490a70ae15a5e940d4be8676b6ee02",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 5,
+      "source_text": "Separar implementação/correção de auditoria independente.",
+      "flags": [],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-001"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-001"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-002",
+      "candidate_key": "b8fb892fd24c2456ba18bab02be3716faebaf14548241b404942471e5a6c64cf",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 6,
+      "source_text": "Permitir configuração por risco:",
+      "flags": [],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-002"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-002"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-003",
+      "candidate_key": "a951d72305cee5eb55ab56d57b4c56cf8880f9102eadfad194d8805eb1966f1d",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 7,
+      "source_text": "FAST implementer",
+      "flags": [],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-003"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-003"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-004",
+      "candidate_key": "cb0a1fb8db6d4b8d50961119c8d448a58c38737d8f45509f5653e014d8840096",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 8,
+      "source_text": "STANDARD implementer",
+      "flags": [],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-004"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-004"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-005",
+      "candidate_key": "62f663735c32cafe514dab33441f63b2534ae32567d211d83654e6bf1ab27081",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 9,
+      "source_text": "CRITICAL implementer",
+      "flags": [],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-005"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-005"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-006",
+      "candidate_key": "5e18b2c1333c17ecdc3739621b882f8e8455496fb62af3d4b145a652bbb809e6",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 10,
+      "source_text": "STANDARD auditor",
+      "flags": [],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-006"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-006"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-007",
+      "candidate_key": "9cd3cea44026b9058d20a39a721de004c82038ff244a26363e186b50e1f0b33f",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 11,
+      "source_text": "CRITICAL auditor",
+      "flags": [],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-007"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-007"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-008",
+      "candidate_key": "0efe7fe29c6bd1ba8f4a36fa61cac3f6ad7ba09cadb462cd993f83243161ecd1",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 12,
+      "source_text": "Usar GitHub Actions Variables para provider/modelo; Secrets ficam apenas para autenticação/credenciais.",
+      "flags": [
+        "negative"
+      ],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-008"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-008"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-009",
+      "candidate_key": "8a6def612ba858164e951c4dbb7cef47065a795b7161156529ec1496beab9a85",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 13,
+      "source_text": "Precedência: variável específica de risco/função -> variável geral da função -> default seguro versionado.",
+      "flags": [
+        "precedence",
+        "semantic-effect"
+      ],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-009"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-009"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-010",
+      "candidate_key": "e16bf19782b648891e3e57e70a831f5ca194ee40a62b3e350fcd23fe0e01becb",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 14,
+      "source_text": "Persistir na evidência da execução provider, modelo, papel e risco efetivamente usados.",
+      "flags": [],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-010"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-010"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-011",
+      "candidate_key": "1a2123855e09e32b86bfa73056d100565abcb9c3ab4442f0849429e1b123c7b9",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 15,
+      "source_text": "Falhar fechado quando provider/modelo configurado for inválido ou indisponível; nunca substituir silenciosamente por outro provider/modelo.",
+      "flags": [
+        "exhaustive",
+        "negative"
+      ],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-011"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-011"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-012",
+      "candidate_key": "16c204b2077f221b86c24efeef9ab0d0aa11ce9e760a9652dedde4f91d659208",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 16,
+      "source_text": "A auditoria independente deve usar sua seleção própria de provider/modelo e contexto isolado.",
+      "flags": [
+        "isolation",
+        "dependency-independence"
+      ],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-012"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-012"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-013",
+      "candidate_key": "ad8dbf7c4b3a8810133ba17ca43974c29dec81f5c1809a1194778599c17af130",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 19,
+      "source_text": "Gerais:",
+      "flags": [
+        "semantic-effect"
+      ],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-013"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-013"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    },
+    {
+      "id": "OBL-014",
+      "candidate_key": "aacf4e07fadae63997367d34b14a5e06f0672631be7ef6296c30f9ce46e953d3",
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "source_line": 40,
+      "source_text": "A auditoria não depende de OPENAI_MODEL global quando houver variável de auditoria aplicável.",
+      "flags": [
+        "negative"
+      ],
+      "disposition": "covered",
+      "requirement_ids": [
+        "REQ-014"
+      ],
+      "inventory_ids": [],
+      "assertion_ids": [
+        "ASSERT-014"
+      ],
+      "scope_decision": null,
+      "rationale": "Implemented and evidenced on the exact material head by CI and focused contract tests."
+    }
+  ],
+  "source_coverage": [
+    {
+      "source_id": "SRC-ISSUE-76",
+      "source_sha256": "5218428170552aa9ae9f48a61222efe1e61a4822bc923c5c372c20e5b32dc075",
+      "candidate_count": 14,
+      "obligation_ids": [
+        "OBL-001",
+        "OBL-002",
+        "OBL-003",
+        "OBL-004",
+        "OBL-005",
+        "OBL-006",
+        "OBL-007",
+        "OBL-008",
+        "OBL-009",
+        "OBL-010",
+        "OBL-011",
+        "OBL-012",
+        "OBL-013",
+        "OBL-014"
+      ],
+      "unmapped_candidate_keys": []
+    }
+  ],
+  "domain_inventories": [],
+  "observable_assertions": [],
+  "structural_invariant_closures": {
+    "status": "passed",
+    "applicability_reason": "Precedence and independent-audit dependency/isolation obligations constrain implementation form.",
+    "entries": [
+      {
+        "id": "STRUCT-AI-POLICY-001",
+        "obligation_ids": [
+          "OBL-009",
+          "OBL-012"
+        ],
+        "plausible_wrong_implementation": "Resolve provider/model from a global fallback or reuse implementer identity for the independent auditor.",
+        "negative_control_evidence": [
+          "test/v2-provider-policy.test.mjs rejects invalid provider/model fallback",
+          "test/v2-audit-provider-routing.test.mjs routes auditor provider/model independently",
+          "test/v2-worker-model-binding.test.mjs rejects model drift before AI execution"
+        ]
+      }
+    ],
+    "unresolved_invariants": []
+  },
+  "read_model_closures": {
+    "status": "not-applicable",
+    "applicability_reason": "The canonical contract does not require historical read models, pagination, timelines, or version-history projections.",
+    "entries": [],
+    "unconsumed_outputs": [],
+    "unmapped_required_fields": []
+  },
+  "canonical_source_consistency": {
+    "status": "not-applicable",
+    "applicability_reason": "The issue defines precedence and configuration behavior but does not introduce a separate canonical data catalog or duplicated source-of-truth registry.",
+    "entries": [],
+    "unverified_surfaces": [],
+    "missing_divergent_tests": []
+  },
+  "documentation_consistency": {
+    "status": "passed",
+    "applicability_reason": "AI role/provider/model defaults and authorization behavior are normative operational claims and were reconciled in the delivery documentation.",
+    "old_contract_terms": [
+      "global OPENAI_MODEL dependency",
+      "manual implementation provider selection"
+    ],
+    "new_contract_terms": [
+      "role/risk GitHub Variables",
+      "separate implementer and auditor provider/model policy",
+      "versioned concrete defaults"
+    ],
+    "occurrences": [
+      "docs/delivery-v2/AI_CONFIGURATION.md",
+      "docs/delivery-v2/MASTER_SPEC.md",
+      "docs/delivery-v2.md",
+      "docs/SECURITY.md",
+      "docs/delivery-v2/adr/0002-bounded-provider-execution.md"
+    ],
+    "unresolved_contradictions": [],
+    "searched_outside_diff": true,
+    "search_evidence": [
+      "Official CI verify:v2 and repository documentation consistency checks passed on material head 5976a0147df6a2a8f9b98868e485634a9bcd44bd."
+    ]
+  },
+  "scope_reduction_review": {
+    "status": "passed",
+    "matches": []
+  },
+  "pass_c": {
+    "status": "passed",
+    "requirement_ids": [
+      "REQ-001",
+      "REQ-002",
+      "REQ-003",
+      "REQ-004",
+      "REQ-005",
+      "REQ-006",
+      "REQ-007",
+      "REQ-008",
+      "REQ-009",
+      "REQ-010",
+      "REQ-011",
+      "REQ-012",
+      "REQ-013",
+      "REQ-014"
+    ],
+    "obligation_ids": [
+      "OBL-001",
+      "OBL-002",
+      "OBL-003",
+      "OBL-004",
+      "OBL-005",
+      "OBL-006",
+      "OBL-007",
+      "OBL-008",
+      "OBL-009",
+      "OBL-010",
+      "OBL-011",
+      "OBL-012",
+      "OBL-013",
+      "OBL-014"
+    ],
+    "evidence": [
+      "Exact-head GitHub Actions run 34858732516 succeeded",
+      "PR #77 diff and issue #76 were re-derived independently of the PR summary."
+    ],
+    "rederived_without_pr_description": true,
+    "reviewed_user_visible_semantics": true,
+    "reviewed_producer_consumer_parity": true,
+    "reviewed_all_specification_sources": true
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "contract_version": "2026-08-20.3",
+  "resolution_policy": "all-actionable-items",
+  "status": "closed",
+  "candidate_head_sha": "5976a0147df6a2a8f9b98868e485634a9bcd44bd",
+  "remediation_mode": "targeted-remediation",
+  "source": {
+    "rejection_id": "audit-rejection:1663cf13-376e-45b7-8256-b2957d081705",
+    "audited_head_sha": "5976a0147df6a2a8f9b98868e485634a9bcd44bd",
+    "audit_report_sha256": "b734ac91ec104e72618647a06bd10178c06a2995f329d438d12b1c97c7a1b396"
+  },
+  "items": [
+    {
+      "source_kind": "finding",
+      "source_id": "A-001",
+      "remediation_mode": "targeted-remediation",
+      "status": "fixed",
+      "evidence": [
+        "A current-target critical handoff packet is reconstructed for issue #76 / PR #77 without changing material code.",
+        "The packet is prepared for publication as a direct result-only child of the exact green material head."
+      ],
+      "validations": [
+        "validate_specification_coverage",
+        "validate_requirement_attack_matrix",
+        "validate_risk_saturation",
+        "validate_handoff_readiness",
+        "prepublication validate_terminal_handoff"
+      ]
+    }
+  ]
+}
