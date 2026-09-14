@@ -93,7 +93,7 @@ function makePlan({ repository, issueNumber, provider, requestedRisk, changedPat
   }, {}));
 }
 
-export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce() } = {}) {
+export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, model = null, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce() } = {}) {
   if (!decision?.dispatchAllowed) return null;
   const policy = executionPolicyFor(decision.securityProfile);
   const nextAttempt = Number(priorImplementationAttempts) + 1;
@@ -104,6 +104,7 @@ export function bootstrapLeaseForDecision({ decision, repository, issueNumber, b
     issueNumber,
     baseBranch,
     provider: String(provider).toLowerCase(),
+    model: model == null ? null : String(model),
     requestedRisk: String(requestedRisk).toLowerCase(),
     effectiveRisk: decision.securityProfile,
     implementationAttempts: nextAttempt,
@@ -119,7 +120,7 @@ async function main() {
   const repository = requiredEnv('TARGET_REPOSITORY');
   const issueNumber = positiveInteger(requiredEnv('TARGET_ISSUE'), 'TARGET_ISSUE');
   const baseBranch = requiredEnv('BASE_BRANCH');
-  const provider = requiredEnv('DELIVERY_AI_PROVIDER').toLowerCase();
+  const compatibilityProvider = requiredEnv('DELIVERY_AI_PROVIDER').toLowerCase();
   const requestedRisk = requiredEnv('DELIVERY_RISK_PROFILE').toLowerCase();
   const readToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const writeToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
@@ -130,9 +131,20 @@ async function main() {
   let changedPaths = splitPaths(process.env.DELIVERY_CHANGED_PATHS);
   if (changedPaths.length === 0) changedPaths = await deterministicIssuePaths(repository, baseBranch, issue.body, readToken);
   const repositoryPolicy = await loadRepositoryRiskPolicy(repository);
-  const plan = makePlan({ repository, issueNumber, provider, requestedRisk, changedPaths, repositoryPolicy });
+  const plan = makePlan({ repository, issueNumber, provider: compatibilityProvider, requestedRisk, changedPaths, repositoryPolicy });
   const decision = createDispatchDecision(plan);
-  const lease = bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, requestedRisk, runId, priorImplementationAttempts, workerWorkflow: plan.implementation.workflow });
+  const lease = bootstrapLeaseForDecision({
+    decision,
+    repository,
+    issueNumber,
+    baseBranch,
+    provider: plan.implementation.provider,
+    model: plan.implementation.model,
+    requestedRisk,
+    runId,
+    priorImplementationAttempts,
+    workerWorkflow: plan.implementation.workflow
+  });
 
   if (lease) {
     const body = `${BOOTSTRAP_MARKER}\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify(lease, null, 2)}\n\`\`\``;
@@ -144,7 +156,7 @@ async function main() {
 
   const outputPath = String(process.env.GITHUB_OUTPUT ?? '').trim();
   if (outputPath) await appendFile(outputPath, `reserved=${lease ? 'true' : 'false'}\nattempts=${lease?.implementationAttempts ?? priorImplementationAttempts}\ndispatch_nonce=${lease?.dispatchNonce ?? ''}\n`, 'utf8');
-  process.stdout.write(`${JSON.stringify({ reserved: Boolean(lease), decision, changedPaths })}\n`);
+  process.stdout.write(`${JSON.stringify({ reserved: Boolean(lease), decision, changedPaths, implementation: plan.implementation })}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
