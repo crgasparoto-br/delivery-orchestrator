@@ -63,6 +63,9 @@ test('controller target policy binds each rollout repository to one stable requi
   assert.equal(config.targets['crgasparoto-br/controle_calorias'].ciWorkflowPath, '.github/workflows/agent-check.yml');
   assert.equal(config.targets['crgasparoto-br/training-system'].requiredStatusName, 'Validate repository');
   assert.equal(config.targets['crgasparoto-br/training-system'].ciWorkflowPath, '.github/workflows/validate-pr.yml');
+  assert.equal(config.targets['crgasparoto-br/SolverFin'].baseBranch, 'main');
+  assert.equal(config.targets['crgasparoto-br/SolverFin'].requiredStatusName, 'Delivery V2 gate');
+  assert.equal(config.targets['crgasparoto-br/SolverFin'].ciWorkflowPath, '.github/workflows/delivery-v2-ci.yml');
 });
 
 test('initial and resumed controllers share persistent observability and the same metrics builder', async () => {
@@ -78,7 +81,6 @@ test('initial and resumed controllers share persistent observability and the sam
   assert.match(resume, /partialMetrics/);
   assert.doesNotMatch(resume, /legacy-state-missing-observability/);
 });
-
 
 test('controller continuation documentation resolves to the canonical accepted ADR', async () => {
   const canonicalAdr = 'docs/delivery-v2/adr/0006-bounded-polling-before-event-driven.md';
