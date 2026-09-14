@@ -23,6 +23,8 @@ import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-pol
 import {
   createControllerDeliveryMetrics,
   createControllerObservability,
+  createControllerPartialMetrics,
+  recordControllerAuditWorkflowFailure,
   recordControllerCiObservation,
   recordControllerProviderObservation,
   runDurationMs
@@ -533,7 +535,63 @@ export async function main() {
       await persist({ nextAction: 'observe-audit', auditRunId: auditRun.id, auditDispatchNonce });
       auditRun = await waitWorkflowRun(orchestratorRepository, auditRun.id, actionsToken);
       auditRuns.push(auditRun);
-      if (auditRun.conclusion !== 'success') throw new Error(`independent audit workflow failed: ${auditRun.html_url}`);
+      if (auditRun.conclusion !== 'success') {
+        const terminalReason =
+          `independent-audit-workflow-${auditRun.conclusion ?? 'failed'}`;
+
+        observability = recordControllerAuditWorkflowFailure(observability, {
+          runId: auditRun.id,
+          durationMs: runDurationMs(auditRun),
+          evidenceRef: auditRun.html_url
+        });
+
+        const partialMetrics = createControllerPartialMetrics({
+          observability,
+          terminalReason
+        });
+
+        await persist({
+          nextAction: 'audit-workflow-failed',
+          auditRunId: auditRun.id,
+          auditDispatchNonce,
+          terminalReason,
+          providerAccountingComplete:
+            observability.providerAccountingComplete
+        });
+
+        const failurePayload = {
+          schemaVersion: 1,
+          status: 'audit-workflow-failed',
+          repository: targetRepository,
+          issueNumber,
+          pullRequestNumber: pullRequest.number,
+          materialHeadSha,
+          risk: state.riskProfile,
+          provider,
+          providerCalls: partialMetrics.providerCalls,
+          observedProviderCalls: partialMetrics.observedProviderCalls,
+          observabilityHistoryComplete: false,
+          metricsStatus: 'partial-audit-workflow-failure',
+          metrics: null,
+          partialMetrics,
+          terminalReason,
+          attempts: {
+            implementation: state.implementationAttempts,
+            audit: state.auditAttempts,
+            auditRemediation: state.auditRemediationAttempts
+          }
+        };
+
+        await writeFile(
+          resultPath,
+          `${JSON.stringify(failurePayload, null, 2)}\n`,
+          'utf8'
+        );
+
+        throw new Error(
+          `independent audit workflow failed: ${auditRun.html_url}`
+        );
+      }
       lastAudit = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: pullRequest.number, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });
       observability = recordControllerProviderObservation(observability, {
         runId: auditRun.id,

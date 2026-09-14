@@ -132,3 +132,65 @@ test('initial and resumed controllers accumulate every terminal CI run before st
     /ciExecution:\s*observability\.ciExecutionDurationMs/
   );
 });
+
+
+test('both controllers persist failed audit telemetry before surfacing workflow failure', () => {
+  for (const body of [initialController, resumeController]) {
+    const throwIndex = body.indexOf(
+      '`independent audit workflow failed: ${auditRun.html_url}`'
+    );
+
+    assert.ok(throwIndex >= 0);
+
+    const recordIndex = body.lastIndexOf(
+      'recordControllerAuditWorkflowFailure(observability',
+      throwIndex
+    );
+
+    const partialIndex = body.lastIndexOf(
+      'createControllerPartialMetrics({',
+      throwIndex
+    );
+
+    const persistIndex = body.lastIndexOf(
+      "nextAction: 'audit-workflow-failed'",
+      throwIndex
+    );
+
+    const resultIndex = body.lastIndexOf(
+      "metricsStatus: 'partial-audit-workflow-failure'",
+      throwIndex
+    );
+
+    const writeIndex = body.lastIndexOf(
+      'await writeFile(',
+      throwIndex
+    );
+
+    assert.ok(recordIndex >= 0);
+    assert.ok(recordIndex < partialIndex);
+    assert.ok(partialIndex < persistIndex);
+    assert.ok(persistIndex < resultIndex);
+    assert.ok(resultIndex < writeIndex);
+    assert.ok(writeIndex < throwIndex);
+
+    const failureWindow = body.slice(recordIndex, throwIndex);
+
+    assert.match(
+      failureWindow,
+      /providerAccountingComplete:\s*observability\.providerAccountingComplete/
+    );
+
+    assert.match(
+      failureWindow,
+      /providerCalls:\s*partialMetrics\.providerCalls/
+    );
+
+    assert.match(
+      failureWindow,
+      /observedProviderCalls:\s*partialMetrics\.observedProviderCalls/
+    );
+
+    assert.match(failureWindow, /terminalReason/);
+  }
+});

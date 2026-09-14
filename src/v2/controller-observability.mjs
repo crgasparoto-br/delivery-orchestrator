@@ -43,6 +43,9 @@ export function createControllerObservability({ startedAtMs = Date.now() } = {})
     providerCalls: 0,
     providerRunIds: Object.freeze([]),
     observedRunIds: Object.freeze([]),
+    providerAccountingComplete: true,
+    failedAuditRunIds: Object.freeze([]),
+    auditTimingComplete: true,
     aiUsageByStage: Object.freeze({
       implementation: normalizeGhAwUsage({}),
       audit: normalizeGhAwUsage({})
@@ -66,6 +69,38 @@ export function normalizeControllerObservability(raw) {
   }
   const providerCalls = nonNegativeInteger(value.providerCalls, 'observability.providerCalls');
   if (providerCalls !== normalizedRunIds.length) throw new Error('observability.providerCalls must equal providerRunIds length');
+
+  const hasAnyProviderAccountingField = [
+    'providerAccountingComplete',
+    'failedAuditRunIds',
+    'auditTimingComplete'
+  ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
+
+  const hasCompleteProviderAccountingFields =
+    typeof value.providerAccountingComplete === 'boolean' &&
+    Array.isArray(value.failedAuditRunIds) &&
+    typeof value.auditTimingComplete === 'boolean';
+
+  if (hasAnyProviderAccountingField && !hasCompleteProviderAccountingFields) {
+    throw new Error('controller observability provider accounting fields must be complete when present');
+  }
+
+  const providerAccountingComplete = hasCompleteProviderAccountingFields
+    ? value.providerAccountingComplete
+    : false;
+
+  const failedAuditRunIds = hasCompleteProviderAccountingFields
+    ? normalizeRunIds(value.failedAuditRunIds, 'observability.failedAuditRunIds')
+    : [];
+
+  const auditTimingComplete = hasCompleteProviderAccountingFields
+    ? value.auditTimingComplete
+    : false;
+
+  if (providerAccountingComplete && failedAuditRunIds.length > 0) {
+    throw new Error('complete provider accounting cannot contain failed audit runs with unknown provider usage');
+  }
+
   const stages = requiredObject(value.aiUsageByStage, 'observability.aiUsageByStage');
 
   const hasAnyCiTimingField = [
@@ -110,6 +145,9 @@ export function normalizeControllerObservability(raw) {
     providerCalls,
     providerRunIds: Object.freeze(normalizedRunIds),
     observedRunIds: Object.freeze(observedRunIds),
+    providerAccountingComplete,
+    failedAuditRunIds: Object.freeze(failedAuditRunIds),
+    auditTimingComplete,
     aiUsageByStage: Object.freeze({
       implementation: normalizeGhAwUsage(stages.implementation ?? {}),
       audit: normalizeGhAwUsage(stages.audit ?? {})
@@ -161,6 +199,77 @@ export function recordControllerProviderObservation(raw, { runId, stage, usage =
     }),
     auditDurationMs,
     evidenceRefs: normalizeRefs(refs)
+  });
+}
+
+export function recordControllerAuditWorkflowFailure(
+  raw,
+  { runId, durationMs = null, evidenceRef = null } = {}
+) {
+  const current = normalizeControllerObservability(raw);
+  const resolvedRunId = positiveInteger(runId, 'runId');
+
+  if (
+    current.observedRunIds.includes(resolvedRunId) ||
+    current.failedAuditRunIds.includes(resolvedRunId)
+  ) {
+    return current;
+  }
+
+  const durationKnown = durationMs != null;
+  const resolvedDuration = durationKnown
+    ? nonNegativeInteger(durationMs, 'durationMs')
+    : 0;
+
+  const refs = evidenceRef
+    ? [...current.evidenceRefs, requiredString(evidenceRef, 'evidenceRef')]
+    : [...current.evidenceRefs];
+
+  return Object.freeze({
+    ...current,
+    providerAccountingComplete: false,
+    failedAuditRunIds: Object.freeze([
+      ...current.failedAuditRunIds,
+      resolvedRunId
+    ]),
+    auditTimingComplete: current.auditTimingComplete && durationKnown,
+    auditDurationMs: current.auditDurationMs + resolvedDuration,
+    evidenceRefs: normalizeRefs(refs)
+  });
+}
+
+export function createControllerPartialMetrics({
+  observability,
+  terminalReason,
+  nowMs = Date.now()
+} = {}) {
+  const observed = normalizeControllerObservability(observability);
+
+  return Object.freeze({
+    schemaVersion: 1,
+    providerCalls: observed.providerAccountingComplete
+      ? observed.providerCalls
+      : null,
+    observedProviderCalls: observed.providerCalls,
+    providerAccountingComplete: observed.providerAccountingComplete,
+    aiUsageByStage: observed.aiUsageByStage,
+    durationsMs: Object.freeze({
+      ciQueue: observed.ciTimingHistoryComplete
+        ? observed.ciQueueDurationMs
+        : null,
+      ciExecution: observed.ciTimingHistoryComplete
+        ? observed.ciExecutionDurationMs
+        : null,
+      audit: observed.auditTimingComplete
+        ? observed.auditDurationMs
+        : null,
+      endToEnd: Math.max(
+        0,
+        nonNegativeInteger(nowMs, 'nowMs') - observed.startedAtMs
+      )
+    }),
+    terminalReason: requiredString(terminalReason, 'terminalReason'),
+    evidenceRefs: observed.evidenceRefs
   });
 }
 
@@ -230,6 +339,12 @@ export function createControllerDeliveryMetrics({
   ]);
   if (!observed.ciTimingHistoryComplete) {
     throw new Error('CI timing history is incomplete; refusing to publish complete delivery metrics');
+  }
+  if (!observed.providerAccountingComplete) {
+    throw new Error('provider accounting is incomplete; refusing to publish complete delivery metrics');
+  }
+  if (!observed.auditTimingComplete) {
+    throw new Error('audit timing history is incomplete; refusing to publish complete delivery metrics');
   }
   if (observed.ciRunIds.length === 0) {
     throw new Error('CI timing history has no observed workflow run');

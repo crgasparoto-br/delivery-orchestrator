@@ -3,7 +3,9 @@ import test from 'node:test';
 import {
   ciQueueDurationMs,
   createControllerObservability,
+  createControllerPartialMetrics,
   normalizeControllerObservability,
+  recordControllerAuditWorkflowFailure,
   recordControllerCiObservation,
   recordControllerProviderObservation,
   createControllerDeliveryMetrics,
@@ -226,4 +228,90 @@ test('CI observation fails closed when required timing is unavailable', () => {
     }),
     /CI timing is unavailable/
   );
+});
+
+
+test('failed audit workflow preserves known duration while provider calls remain explicitly unknown', () => {
+  let state = createControllerObservability({ startedAtMs: 1000 });
+
+  state = recordControllerAuditWorkflowFailure(state, {
+    runId: 701,
+    durationMs: 750,
+    evidenceRef: 'audit:701'
+  });
+
+  state = recordControllerAuditWorkflowFailure(state, {
+    runId: 701,
+    durationMs: 9999,
+    evidenceRef: 'audit:701-duplicate'
+  });
+
+  assert.equal(state.providerCalls, 0);
+  assert.equal(state.providerAccountingComplete, false);
+  assert.deepEqual(state.failedAuditRunIds, [701]);
+  assert.equal(state.auditTimingComplete, true);
+  assert.equal(state.auditDurationMs, 750);
+  assert.deepEqual(state.evidenceRefs, ['audit:701']);
+
+  const partial = createControllerPartialMetrics({
+    observability: state,
+    terminalReason: 'independent-audit-workflow-failure',
+    nowMs: 2000
+  });
+
+  assert.equal(partial.providerCalls, null);
+  assert.equal(partial.observedProviderCalls, 0);
+  assert.equal(partial.providerAccountingComplete, false);
+  assert.equal(partial.durationsMs.audit, 750);
+  assert.equal(
+    partial.terminalReason,
+    'independent-audit-workflow-failure'
+  );
+
+  assert.throws(
+    () => createControllerDeliveryMetrics(metricsInput(state)),
+    /provider accounting is incomplete/
+  );
+});
+
+test('failed audit workflow with unavailable timing remains unknown instead of zero', () => {
+  const state = recordControllerAuditWorkflowFailure(
+    createControllerObservability({ startedAtMs: 1000 }),
+    {
+      runId: 702,
+      durationMs: null,
+      evidenceRef: 'audit:702'
+    }
+  );
+
+  assert.equal(state.providerAccountingComplete, false);
+  assert.deepEqual(state.failedAuditRunIds, [702]);
+  assert.equal(state.auditTimingComplete, false);
+  assert.equal(state.auditDurationMs, 0);
+
+  const partial = createControllerPartialMetrics({
+    observability: state,
+    terminalReason: 'independent-audit-workflow-failure',
+    nowMs: 2000
+  });
+
+  assert.equal(partial.providerCalls, null);
+  assert.equal(partial.durationsMs.audit, null);
+});
+
+test('legacy observability without failed-audit accounting is explicitly incomplete', () => {
+  const current = createControllerObservability({ startedAtMs: 1000 });
+
+  const {
+    providerAccountingComplete,
+    failedAuditRunIds,
+    auditTimingComplete,
+    ...legacy
+  } = current;
+
+  const normalized = normalizeControllerObservability(legacy);
+
+  assert.equal(normalized.providerAccountingComplete, false);
+  assert.deepEqual(normalized.failedAuditRunIds, []);
+  assert.equal(normalized.auditTimingComplete, false);
 });
