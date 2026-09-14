@@ -2,8 +2,10 @@
 import { appendFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
+import { loadV2Config } from '../src/v2/config.mjs';
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
 import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
+import { resolveProviderSelectionForRisk } from '../src/v2/provider-policy.mjs';
 import { expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { parseTrustedJsonEnvelope, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 
@@ -82,6 +84,7 @@ export function parseBootstrapLease(comments, { trustedLogin } = {}) {
     issueNumber: Number(value.issueNumber),
     baseBranch: String(value.baseBranch ?? ''),
     provider: String(value.provider ?? '').toLowerCase(),
+    model: value.model == null ? null : String(value.model),
     requestedRisk: String(value.requestedRisk ?? '').toLowerCase(),
     effectiveRisk: String(value.effectiveRisk ?? 'critical').toLowerCase(),
     implementationAttempts: Number(value.implementationAttempts),
@@ -93,7 +96,16 @@ export function parseBootstrapLease(comments, { trustedLogin } = {}) {
   });
 }
 
-export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, recoveredWorkerRun = null } = {}) {
+function assertAiPolicyMatch({ persistedProvider, persistedModel = null, expectedProvider, expectedModel = null, label }) {
+  if (String(persistedProvider ?? '').toLowerCase() !== String(expectedProvider ?? '').toLowerCase()) {
+    throw new Error(`${label} provider does not match resolved delivery policy`);
+  }
+  if (persistedModel != null && expectedModel != null && String(persistedModel) !== String(expectedModel)) {
+    throw new Error(`${label} model does not match resolved delivery policy`);
+  }
+}
+
+export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null } = {}) {
   const resolvedIssue = positiveInteger(issueNumber, 'issueNumber');
   const resolvedProvider = String(provider ?? '').toLowerCase();
 
@@ -118,7 +130,7 @@ export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, ta
     const persistent = stateEnvelope.persistent;
     if (persistent.issueNumber !== resolvedIssue) throw new Error('persisted state issue does not match requested issue');
     if (String(persistent.baseRef ?? '') !== String(baseBranch ?? '')) throw new Error('persisted state baseRef does not match requested base branch');
-    if (String(persistent.provider ?? '').toLowerCase() !== resolvedProvider) throw new Error('persisted state provider does not match requested provider');
+    assertAiPolicyMatch({ persistedProvider: persistent.provider, persistedModel: persistent.model ?? null, expectedProvider: resolvedProvider, expectedModel: model, label: 'persisted state' });
 
     const resumed = reconcilePersistentState(persistent, {
       repository: targetRepository,
@@ -142,7 +154,8 @@ export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, ta
 
   if (bootstrapLease) {
     if (bootstrapLease.repository !== targetRepository || bootstrapLease.issueNumber !== resolvedIssue) throw new Error('bootstrap lease target does not match requested delivery');
-    if (bootstrapLease.baseBranch !== String(baseBranch ?? '') || bootstrapLease.provider !== resolvedProvider) throw new Error('bootstrap lease policy does not match requested delivery');
+    if (bootstrapLease.baseBranch !== String(baseBranch ?? '')) throw new Error('bootstrap lease base branch does not match requested delivery');
+    assertAiPolicyMatch({ persistedProvider: bootstrapLease.provider, persistedModel: bootstrapLease.model, expectedProvider: resolvedProvider, expectedModel: model, label: 'bootstrap lease' });
     const policy = executionPolicyFor(bootstrapLease.effectiveRisk || 'critical');
     if (recoveredWorkerRun && !['completed'].includes(String(recoveredWorkerRun.status ?? ''))) {
       return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
@@ -219,7 +232,7 @@ async function main() {
   const targetRepository = requiredEnv('TARGET_REPOSITORY');
   const issueNumber = positiveInteger(requiredEnv('TARGET_ISSUE'), 'TARGET_ISSUE');
   const baseBranch = requiredEnv('BASE_BRANCH');
-  const provider = requiredEnv('DELIVERY_AI_PROVIDER');
+  requiredEnv('DELIVERY_AI_PROVIDER');
   const readToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const actionsToken = requiredEnv('GITHUB_TOKEN');
   const orchestratorRepository = requiredEnv('GITHUB_REPOSITORY');
@@ -241,7 +254,20 @@ async function main() {
     validateControllerRunProvenance(controllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
   }
   const recoveredWorkerRun = bootstrapLease ? await recoverBootstrapWorkerRun(bootstrapLease, orchestratorRepository, orchestratorRef, actionsToken) : null;
-  const decision = evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, recoveredWorkerRun });
+  const effectiveRisk = stateEnvelope?.persistent?.effectiveRisk ?? bootstrapLease?.effectiveRisk ?? 'critical';
+  const aiPolicy = loadV2Config({}, process.env).aiPolicy;
+  const expectedImplementer = resolveProviderSelectionForRisk(aiPolicy, effectiveRisk).implementer;
+  const decision = evaluateReentry({
+    pullRequest,
+    stateEnvelope,
+    bootstrapLease,
+    targetRepository,
+    issueNumber,
+    baseBranch,
+    provider: expectedImplementer.provider,
+    model: expectedImplementer.model,
+    recoveredWorkerRun
+  });
   await writeGithubOutput(decision);
 
   if (!decision.runController && resultPath) {
