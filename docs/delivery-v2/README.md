@@ -11,6 +11,10 @@ Read in this order:
 
 Run `npm run verify:v2` after changing any of these sources.
 
+## Operational configuration
+
+- [`AI_CONFIGURATION.md`](./AI_CONFIGURATION.md) — GitHub Actions Variables for implementation/remediation and independent-audit providers/models, precedence, concrete defaults, credentials, and evidence.
+
 ## Architecture decisions
 
 - [`adr/0001-deterministic-github-control-plane.md`](./adr/0001-deterministic-github-control-plane.md)
