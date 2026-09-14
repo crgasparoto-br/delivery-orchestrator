@@ -188,10 +188,12 @@ jobs:
         run: /usr/local/bin/npm ci --no-audit --no-fund
 
       - name: Install pinned Copilot CLI for Copilot audit
-        if: env.DELIVERY_AUDITOR_PROVIDER == 'copilot'
         shell: bash
         run: |
           set -euo pipefail
+          if [ "$DELIVERY_AUDITOR_PROVIDER" != "copilot" ]; then
+            exit 0
+          fi
           root="${RUNNER_TEMP}/delivery-v2-copilot-cli-${GITHUB_RUN_ID}"
           /usr/local/bin/npm install --prefix "$root" @github/copilot@1.0.80 --no-audit --no-fund
           echo "$root/node_modules/.bin" >> "$GITHUB_PATH"
