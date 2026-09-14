@@ -34,7 +34,9 @@ pre-steps:
       GITHUB_TOKEN: ${{ github.token }}
       DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
     run: node .github/scripts/validate-delivery-v2-worker-authorization.mjs
-engine: claude
+engine:
+  id: claude
+  model: ${{ vars.DELIVERY_STANDARD_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'agent' }}
 max-turns: 40
 max-ai-credits: 250
 timeout-minutes: 35
