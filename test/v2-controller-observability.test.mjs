@@ -72,9 +72,35 @@ test('deterministic zero-call audit preserves duration and evidence without incr
 test('unavailable workflow timing remains unknown while a real zero duration remains zero', () => {
   assert.equal(runDurationMs(null), null);
   assert.equal(ciQueueDurationMs(null), null);
+
   assert.equal(runDurationMs({ run_started_at: 'invalid', updated_at: 'invalid' }), null);
   assert.equal(ciQueueDurationMs({ created_at: 'invalid', run_started_at: 'invalid' }), null);
-  assert.equal(runDurationMs({ run_started_at: '2026-09-13T20:00:00.000Z', updated_at: '2026-09-13T20:00:00.000Z' }), 0);
+
+  assert.equal(runDurationMs({ run_started_at: '2026-09-13T20:00:00.000Z' }), null);
+  assert.equal(runDurationMs({ updated_at: '2026-09-13T20:00:03.000Z' }), null);
+
+  assert.equal(ciQueueDurationMs({ created_at: '2026-09-13T20:00:00.000Z' }), null);
+  assert.equal(ciQueueDurationMs({ run_started_at: '2026-09-13T20:00:01.000Z' }), null);
+
+  assert.equal(runDurationMs({
+    run_started_at: '2026-09-13T20:00:03.000Z',
+    updated_at: '2026-09-13T20:00:02.000Z'
+  }), null);
+
+  assert.equal(ciQueueDurationMs({
+    created_at: '2026-09-13T20:00:02.000Z',
+    run_started_at: '2026-09-13T20:00:01.000Z'
+  }), null);
+
+  assert.equal(runDurationMs({
+    run_started_at: '2026-09-13T20:00:00.000Z',
+    updated_at: '2026-09-13T20:00:00.000Z'
+  }), 0);
+
+  assert.equal(ciQueueDurationMs({
+    created_at: '2026-09-13T20:00:00.000Z',
+    run_started_at: '2026-09-13T20:00:00.000Z'
+  }), 0);
 });
 
 test('final metrics preserve unknown usage instead of fabricating zero', () => {
@@ -91,4 +117,26 @@ test('final metrics preserve unknown usage instead of fabricating zero', () => {
 test('final metrics fail closed instead of inventing zero CI timing', () => {
   const state = createControllerObservability({ startedAtMs: 1000 });
   assert.throws(() => createControllerDeliveryMetrics(metricsInput(state, { finalCiRun: null })), /timing is unavailable/);
+});
+
+test('provider invocation with unavailable usage is counted without fabricating token usage', () => {
+  const state = recordControllerProviderObservation(
+    createControllerObservability({ startedAtMs: 1000 }),
+    {
+      runId: 77,
+      stage: 'implementation',
+      usage: {},
+      evidenceRef: 'run:77'
+    }
+  );
+
+  assert.equal(state.providerCalls, 1);
+  assert.deepEqual(state.providerRunIds, [77]);
+  assert.deepEqual(state.observedRunIds, [77]);
+  assert.equal(state.aiUsageByStage.implementation.turns, null);
+  assert.equal(state.aiUsageByStage.implementation.credits, null);
+  assert.equal(state.aiUsageByStage.implementation.inputTokens, null);
+  assert.equal(state.aiUsageByStage.implementation.outputTokens, null);
+  assert.equal(state.aiUsageByStage.implementation.totalTokens, null);
+  assert.deepEqual(state.evidenceRefs, ['run:77']);
 });

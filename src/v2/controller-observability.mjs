@@ -117,16 +117,18 @@ export function recordControllerProviderObservation(raw, { runId, stage, usage =
 
 export function runDurationMs(run) {
   if (!run) return null;
-  const started = Date.parse(run.run_started_at ?? run.created_at ?? run.updated_at);
-  const ended = Date.parse(run.updated_at ?? run.run_started_at ?? run.created_at);
-  return Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : null;
+  const started = Date.parse(run.run_started_at);
+  const ended = Date.parse(run.updated_at);
+  if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) return null;
+  return ended - started;
 }
 
 export function ciQueueDurationMs(run) {
   if (!run) return null;
   const created = Date.parse(run.created_at);
-  const started = Date.parse(run.run_started_at ?? run.created_at);
-  return Number.isFinite(created) && Number.isFinite(started) ? Math.max(0, started - created) : null;
+  const started = Date.parse(run.run_started_at);
+  if (!Number.isFinite(created) || !Number.isFinite(started) || started < created) return null;
+  return started - created;
 }
 
 export function createControllerDeliveryMetrics({

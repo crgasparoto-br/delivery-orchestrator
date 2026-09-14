@@ -446,8 +446,20 @@ export async function main() {
       }
       if (!Number.isInteger(workerRunId) || workerRunId < 1) throw new Error('cannot safely resume an in-flight implementation without persisted worker identity');
       const run = await waitWorkflowRun(orchestratorRepository, workerRunId, actionsToken);
-      if (run.conclusion !== 'success') throw new Error(`persisted remediation worker failed: ${run.html_url}`);
       await recordWorkerUsage(run);
+      if (run.conclusion !== 'success') {
+        await persist({ nextAction: 'remediation-worker-failed', workerRunId: run.id });
+        await publishReleaseStatus({
+          repository: targetRepository,
+          sha: materialHeadSha,
+          context: targetPolicy.finalStatusName,
+          state: 'failure',
+          description: 'Delivery V2 remediation worker failed',
+          token: targetWriteToken,
+          targetUrl: run.html_url
+        });
+        throw new Error(`persisted remediation worker failed: ${run.html_url}`);
+      }
       const beforeSha = materialHeadSha;
       pullRequest = await waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken);
       materialHeadSha = String(pullRequest.head.sha).toLowerCase();
@@ -540,8 +552,24 @@ export async function main() {
       });
       await persist({ nextAction: 'observe-remediation', workerRunId: worker.id, workerDispatchNonce });
       worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
-      if (worker.conclusion !== 'success') throw new Error(`remediation worker failed: ${worker.html_url}`);
       await recordWorkerUsage(worker);
+      if (worker.conclusion !== 'success') {
+        await persist({
+          nextAction: 'remediation-worker-failed',
+          workerRunId: worker.id,
+          workerDispatchNonce
+        });
+        await publishReleaseStatus({
+          repository: targetRepository,
+          sha: materialHeadSha,
+          context: targetPolicy.finalStatusName,
+          state: 'failure',
+          description: 'Delivery V2 remediation worker failed',
+          token: targetWriteToken,
+          targetUrl: worker.html_url
+        });
+        throw new Error(`remediation worker failed: ${worker.html_url}`);
+      }
       pullRequest = await waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken);
       materialHeadSha = String(pullRequest.head.sha).toLowerCase();
       changedPaths = await fetchChangedPaths(targetRepository, resumePr, targetReadToken);

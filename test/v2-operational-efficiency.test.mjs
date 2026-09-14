@@ -78,3 +78,22 @@ test('initial and resumed controllers share persistent observability and the sam
   assert.match(resume, /partialMetrics/);
   assert.doesNotMatch(resume, /legacy-state-missing-observability/);
 });
+
+
+test('controller continuation documentation resolves to the canonical accepted ADR', async () => {
+  const canonicalAdr = 'docs/delivery-v2/adr/0006-bounded-polling-before-event-driven.md';
+  const retiredReference = 'docs/delivery-v2/adr/0006-controller-continuation-model.md';
+
+  const [readme, guide, adr] = await Promise.all([
+    readFile('README.md', 'utf8'),
+    readFile('docs/delivery-v2.md', 'utf8'),
+    readFile(canonicalAdr, 'utf8')
+  ]);
+
+  for (const body of [readme, guide]) {
+    assert.ok(body.includes(canonicalAdr));
+    assert.ok(!body.includes(retiredReference));
+  }
+
+  assert.match(adr, /Status: Accepted/);
+});

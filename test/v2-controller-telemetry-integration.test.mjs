@@ -49,3 +49,48 @@ test('resume controller persists partial legacy telemetry without fabricating hi
   assert.match(resumeController, /observedProviderCalls/);
   assert.match(resumeController, /partialMetrics/);
 });
+
+
+test('resume persists failed remediation worker observation before surfacing failure', () => {
+  const recoveredThrow = resumeController.indexOf(
+    'throw new Error(`persisted remediation worker failed: ${run.html_url}`);'
+  );
+  const recoveredRecord = resumeController.lastIndexOf(
+    'await recordWorkerUsage(run);',
+    recoveredThrow
+  );
+  const recoveredPersist = resumeController.lastIndexOf(
+    "nextAction: 'remediation-worker-failed'",
+    recoveredThrow
+  );
+  const recoveredStatus = resumeController.lastIndexOf(
+    "description: 'Delivery V2 remediation worker failed'",
+    recoveredThrow
+  );
+
+  assert.ok(recoveredRecord >= 0);
+  assert.ok(recoveredRecord < recoveredPersist);
+  assert.ok(recoveredPersist < recoveredStatus);
+  assert.ok(recoveredStatus < recoveredThrow);
+
+  const dispatchedThrow = resumeController.indexOf(
+    'throw new Error(`remediation worker failed: ${worker.html_url}`);'
+  );
+  const dispatchedRecord = resumeController.lastIndexOf(
+    'await recordWorkerUsage(worker);',
+    dispatchedThrow
+  );
+  const dispatchedPersist = resumeController.lastIndexOf(
+    "nextAction: 'remediation-worker-failed'",
+    dispatchedThrow
+  );
+  const dispatchedStatus = resumeController.lastIndexOf(
+    "description: 'Delivery V2 remediation worker failed'",
+    dispatchedThrow
+  );
+
+  assert.ok(dispatchedRecord >= 0);
+  assert.ok(dispatchedRecord < dispatchedPersist);
+  assert.ok(dispatchedPersist < dispatchedStatus);
+  assert.ok(dispatchedStatus < dispatchedThrow);
+});

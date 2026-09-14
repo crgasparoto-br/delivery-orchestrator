@@ -91,7 +91,7 @@ The CI trigger and syntax checks cover repository scripts by surface (`scripts/*
 
 ## Controller continuation model
 
-V2.2 keeps bounded polling inside a controller invocation and uses persisted state/re-entry for interruption recovery. Converting every CI/audit transition into an event-triggered continuation would change workflow ownership, concurrency and failure semantics across repositories; that is intentionally deferred to a separate architectural change. Polling itself performs no model calls, so this hardening first removes token/provider waste without silently expanding orchestration risk. See ADR `docs/delivery-v2/adr/0006-controller-continuation-model.md`.
+V2.2 keeps bounded polling inside a controller invocation and uses persisted state/re-entry for interruption recovery. Converting every CI/audit transition into an event-triggered continuation would change workflow ownership, concurrency and failure semantics across repositories; that is intentionally deferred to a separate architectural change. Polling itself performs no model calls, so this hardening first removes token/provider waste without silently expanding orchestration risk. See ADR `docs/delivery-v2/adr/0006-bounded-polling-before-event-driven.md`.
 
 ## V1 retirement
 

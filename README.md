@@ -102,7 +102,7 @@ The executable completeness gate supports requirement-specific maturity through 
 
 ## Controller continuation
 
-V2.2 keeps bounded polling within a controller invocation and persistent re-entry across interruptions. Polling performs no model calls. Moving every CI/audit transition to event-driven continuation changes workflow ownership/concurrency/failure semantics and is deferred as a separately governed architecture change; see `docs/delivery-v2/adr/0006-controller-continuation-model.md`.
+V2.2 keeps bounded polling within a controller invocation and persistent re-entry across interruptions. Polling performs no model calls. Moving every CI/audit transition to event-driven continuation changes workflow ownership/concurrency/failure semantics and is deferred as a separately governed architecture change; see `docs/delivery-v2/adr/0006-bounded-polling-before-event-driven.md`.
 
 ## V1 retirement
 
