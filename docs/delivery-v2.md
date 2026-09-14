@@ -9,7 +9,7 @@
 The normal operational path is now a bounded GitHub workflow, not a sequence reconstructed by a chat:
 
 ```text
-issue/scope -> provider worker -> managed PR -> exact-head CI
+issue/scope -> provider/model worker -> managed PR -> exact-head CI
            -> bounded same-PR remediation when needed
            -> risk-required independent audit
            -> bounded same-PR audit remediation when needed
@@ -17,6 +17,14 @@ issue/scope -> provider worker -> managed PR -> exact-head CI
 ```
 
 The controller persists state on the managed PR. Material head drift invalidates candidate-bound CI/audit evidence. Attempt ceilings are deterministic and exhausted budgets escalate instead of opening another AI-on-AI loop.
+
+## AI provider/model configuration
+
+Implementation/remediation and independent-audit AI choices are configured through GitHub Actions Variables in `delivery-orchestrator`, not selected manually on every dispatch. The controller determines effective risk first, then resolves the applicable role/risk provider and model.
+
+Precedence is risk-specific role variable → general role variable → concrete versioned default. Supported providers are `codex`, `claude`, and `copilot`. There is no silent provider/model fallback: invalid/unavailable model, failed provider invocation, or missing authentication blocks the attempt rather than substituting another AI.
+
+The full variable matrix, current concrete defaults, secrets mapping, and examples are documented in `docs/delivery-v2/AI_CONFIGURATION.md`.
 
 ## Scope discovery and risk
 
@@ -39,7 +47,7 @@ Baseline ceilings remain:
 
 All compiled provider/risk workers have an initial mode and a remediation mode. Initial mode creates one managed `[delivery-v2] ` PR. Remediation mode receives the controller's structured CI/audit failure packet, works on the exact current PR head, and may write only through constrained `push-to-pull-request-branch` safe output.
 
-A remediation worker cannot create a replacement PR. FAST applies the same file allowlist to both create-PR and remediation-push outputs. Protected-file policy, repository allowlists, explicit provider choice and write-token isolation remain unchanged.
+A remediation worker cannot create a replacement PR. FAST applies the same file allowlist to both create-PR and remediation-push outputs. Protected-file policy, repository allowlists, resolved provider/model policy and write-token isolation remain unchanged.
 
 ## Adaptive CI and exact-head release
 
@@ -55,7 +63,7 @@ STANDARD audit applicability is resolved before any audit-provider call from the
 
 ## Generic independent audit
 
-`.github/workflows/delivery-v2-audit.yml` is the normal GitHub-native audit workflow. It accepts any configured target repository/PR; it is not gated by an old pilot marker or issue #27.
+`.github/workflows/delivery-v2-audit.yml` is the normal GitHub-native audit workflow. It accepts any configured target repository/PR; it is not gated by an old pilot marker or issue #27. Its provider/model is resolved independently from implementation through the audit GitHub Variables, and its runtime remains isolated from the implementer context.
 
 The reviewer receives a deterministic sanitized bundle containing:
 
@@ -70,6 +78,8 @@ The reviewer receives a deterministic sanitized bundle containing:
 Diff/material sub-budgets remain risk-adaptive: STANDARD uses 32 KiB diff + 48 KiB material context, while CRITICAL uses 64 KiB + 96 KiB. A second **total bundle** gate now accounts for the issue/PR projections and all model files before a provider call: STANDARD caps issue body at 24 KiB, PR body at 16 KiB and total bundle at 128 KiB; CRITICAL caps them at 48 KiB, 32 KiB and 256 KiB. If an issue/PR body would be truncated or the total budget is exceeded, the runtime emits deterministic `audit-context-insufficient` evidence and performs **zero audit-provider calls**.
 
 Product repositories use the compact `docs/delivery-v2/AUDIT_CONTRACT.md` projection to reduce repeated tokens. Changes to the Delivery V2 control plane itself use the full `MASTER_SPEC.md`. Hidden implementer reasoning, generated worker locks and unrelated repository inventory are not reviewer context.
+
+Audit artifacts persist the reviewer provider/model used for that candidate. Compiled implementation workflows expose their resolved model in GitHub Actions outputs, so later changes to Variables do not rewrite historical execution identity.
 
 ## Observability and token accounting
 
