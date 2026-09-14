@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "repository": "crgasparoto-br/SolverFin",
+  "baseBranch": "main",
+  "packageDir": ".delivery-v2",
+  "riskPolicy": {
+    "fastSafeRoots": [
+      "apps/web/src/design-system",
+      "apps/web/public",
+      "imagens"
+    ],
+    "standardRoots": [
+      "apps/web/src",
+      "docs"
+    ],
+    "criticalRoots": [
+      "apps/api/src",
+      "prisma",
+      "packages",
+      "apps/web/src/dev-server"
+    ],
+    "criticalPaths": [
+      "agents.md",
+      "docs/architecture.md",
+      "docs/evolution_strategy.md",
+      "scripts/delivery-v2-ci-classifier.mjs",
+      "scripts/delivery-v2-ci-classifier.test.mjs"
+    ],
+    "criticalPathFragments": [
+      "account",
+      "card",
+      "invoice",
+      "transaction",
+      "currency",
+      "exchange",
+      "budget",
+      "forecast",
+      "projection",
+      "balance",
+      "statement",
+      "import",
+      "reconcil",
+      "financial",
+      "assistant",
+      "tenant",
+      "profile",
+      "privacy",
+      "lgpd",
+      "webhook",
+      "notification",
+      "payment",
+      "billing",
+      "remuneration",
+      "cdi",
+      "open-finance",
+      "openfinance",
+      "openai",
+      "provider"
+    ]
+  }
+}
