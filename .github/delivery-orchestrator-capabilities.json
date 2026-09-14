@@ -10,6 +10,9 @@
   "delivery_v2_completeness_gate": "enabled",
   "legacy_runtime": "retired",
   "ai_provider_selection": "codex|claude|copilot",
+  "ai_model_selection": "github-actions-variables-by-role-and-risk",
+  "independent_audit_ai_selection": "separate-provider-and-model",
+  "ai_silent_fallback": "disabled",
   "risk_profiles": "auto|fast|standard|critical",
   "gh_aw_compiler": "v0.88.7"
 }
