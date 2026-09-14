@@ -36,7 +36,7 @@ pre-steps:
     run: node .github/scripts/validate-delivery-v2-worker-authorization.mjs
 engine:
   id: claude
-  model: ${{ vars.DELIVERY_FAST_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'agent' }}
+  model: ${{ vars.DELIVERY_FAST_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'claude-sonnet-5' }}
 max-turns: 20
 max-ai-credits: 100
 timeout-minutes: 20
