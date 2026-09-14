@@ -11,12 +11,6 @@ on:
         description: Target issue number
         required: true
         type: string
-      ai_provider:
-        description: AI implementation provider
-        required: true
-        default: copilot
-        type: choice
-        options: [copilot, codex, claude]
       risk_profile:
         description: Delivery risk profile
         required: true
@@ -53,7 +47,21 @@ jobs:
       TARGET_REPOSITORY: ${{ inputs.target_repository }}
       TARGET_ISSUE: ${{ inputs.target_issue }}
       BASE_BRANCH: ${{ inputs.base_branch }}
-      DELIVERY_AI_PROVIDER: ${{ inputs.ai_provider }}
+      DELIVERY_AI_PROVIDER: ${{ vars.DELIVERY_IMPLEMENTER_PROVIDER || 'copilot' }}
+      DELIVERY_IMPLEMENTER_PROVIDER: ${{ vars.DELIVERY_IMPLEMENTER_PROVIDER }}
+      DELIVERY_IMPLEMENTER_MODEL: ${{ vars.DELIVERY_IMPLEMENTER_MODEL }}
+      DELIVERY_AUDITOR_PROVIDER: ${{ vars.DELIVERY_AUDITOR_PROVIDER }}
+      DELIVERY_AUDITOR_MODEL: ${{ vars.DELIVERY_AUDITOR_MODEL }}
+      DELIVERY_FAST_IMPLEMENTER_PROVIDER: ${{ vars.DELIVERY_FAST_IMPLEMENTER_PROVIDER }}
+      DELIVERY_FAST_IMPLEMENTER_MODEL: ${{ vars.DELIVERY_FAST_IMPLEMENTER_MODEL }}
+      DELIVERY_STANDARD_IMPLEMENTER_PROVIDER: ${{ vars.DELIVERY_STANDARD_IMPLEMENTER_PROVIDER }}
+      DELIVERY_STANDARD_IMPLEMENTER_MODEL: ${{ vars.DELIVERY_STANDARD_IMPLEMENTER_MODEL }}
+      DELIVERY_CRITICAL_IMPLEMENTER_PROVIDER: ${{ vars.DELIVERY_CRITICAL_IMPLEMENTER_PROVIDER }}
+      DELIVERY_CRITICAL_IMPLEMENTER_MODEL: ${{ vars.DELIVERY_CRITICAL_IMPLEMENTER_MODEL }}
+      DELIVERY_STANDARD_AUDITOR_PROVIDER: ${{ vars.DELIVERY_STANDARD_AUDITOR_PROVIDER }}
+      DELIVERY_STANDARD_AUDITOR_MODEL: ${{ vars.DELIVERY_STANDARD_AUDITOR_MODEL }}
+      DELIVERY_CRITICAL_AUDITOR_PROVIDER: ${{ vars.DELIVERY_CRITICAL_AUDITOR_PROVIDER }}
+      DELIVERY_CRITICAL_AUDITOR_MODEL: ${{ vars.DELIVERY_CRITICAL_AUDITOR_MODEL }}
       DELIVERY_RISK_PROFILE: ${{ inputs.risk_profile }}
       DELIVERY_CHANGED_PATHS: ${{ inputs.changed_paths }}
       DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
