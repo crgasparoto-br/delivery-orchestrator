@@ -155,7 +155,15 @@ async function main() {
   }
 
   const outputPath = String(process.env.GITHUB_OUTPUT ?? '').trim();
-  if (outputPath) await appendFile(outputPath, `reserved=${lease ? 'true' : 'false'}\nattempts=${lease?.implementationAttempts ?? priorImplementationAttempts}\ndispatch_nonce=${lease?.dispatchNonce ?? ''}\n`, 'utf8');
+  if (outputPath) {
+    await appendFile(outputPath, [
+      `reserved=${lease ? 'true' : 'false'}`,
+      `attempts=${lease?.implementationAttempts ?? priorImplementationAttempts}`,
+      `dispatch_nonce=${lease?.dispatchNonce ?? ''}`,
+      `provider=${plan.implementation.provider}`,
+      `model=${plan.implementation.model}`
+    ].join('\n') + '\n', 'utf8');
+  }
   process.stdout.write(`${JSON.stringify({ reserved: Boolean(lease), decision, changedPaths, implementation: plan.implementation })}\n`);
 }
 
