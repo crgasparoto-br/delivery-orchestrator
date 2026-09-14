@@ -52,7 +52,8 @@ const forbiddenActiveV1Markers = [
 const historicalRootPattern = /(?:^|[^A-Za-z0-9_$])(?:\.audit(?:\/|\b)|skills\/catalog(?:\/|\b))/i;
 const workerSourcePattern = /^delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)\.md$/;
 const workerLockPattern = /^delivery-v2-worker-(?:codex|claude|copilot)-(?:fast|standard|critical)\.lock\.yml$/;
-const workerContextHygieneFragment = 'Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts';
+const workerContextHygieneFragment = 'Context hygiene: do not inventory retired or generated delivery snapshots, `.generated/**`, compiled `*.lock.yml`, or unrelated repository history unless the issue explicitly targets them or a deterministic check requires them.';
+const legacyWorkerContextHygieneFragment = 'Context hygiene: do not inspect or summarize `.audit/**`, `skills/catalog/**`, `.generated/**`, compiled `*.lock.yml`, or other historical/generated delivery artifacts';
 const declarativeRequirementSummaries = Object.freeze({
   'DV2-008': 'Independent audit consumes exact GitHub candidate identity and CI evidence directly; a legacy .audit handoff is not mandatory for normal V2 deliveries.',
   'DV2-014': 'Delivery V2 is the only active normal-path entrypoint; the legacy delivery-request queue, recursive max-cycle controller, nested-Skill orchestration, mandatory V1 handoff/certificate path and retired snapshot roots are physically absent from the active tree; only minimal provenance remains under docs/delivery-v2/history/v1 and Git history.'
@@ -75,12 +76,17 @@ function sanitizeDeclarativeWorkflowText(fileName, body) {
   if (workerSourcePattern.test(fileName)) {
     const count = countOccurrences(body, workerContextHygieneFragment);
     assert.equal(count, 1, `${fileName} must contain exactly one canonical context-hygiene declaration`);
+    assert.equal(countOccurrences(body, legacyWorkerContextHygieneFragment), 0, `${fileName} must not carry retired V1-root prompt text`);
     return body.replace(workerContextHygieneFragment, '');
   }
   if (workerLockPattern.test(fileName)) {
-    const count = countOccurrences(body, workerContextHygieneFragment);
-    assert.ok(count <= 1, `${fileName} must contain at most one generated context-hygiene declaration`);
-    return count === 1 ? body.replace(workerContextHygieneFragment, '') : body;
+    const currentCount = countOccurrences(body, workerContextHygieneFragment);
+    const legacyCount = countOccurrences(body, legacyWorkerContextHygieneFragment);
+    assert.ok(currentCount <= 1, `${fileName} must contain at most one generated current context-hygiene declaration`);
+    assert.ok(legacyCount <= 1, `${fileName} must contain at most one generated legacy context-hygiene declaration before lock recompilation`);
+    let sanitized = currentCount === 1 ? body.replace(workerContextHygieneFragment, '') : body;
+    sanitized = legacyCount === 1 ? sanitized.replace(legacyWorkerContextHygieneFragment, '') : sanitized;
+    return sanitized;
   }
   return body;
 }

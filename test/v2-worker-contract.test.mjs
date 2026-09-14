@@ -53,8 +53,8 @@ for (const provider of ['copilot', 'codex', 'claude']) {
       assert.doesNotMatch(body, /entregar-issue|auditar-issue/i);
       assert.doesNotMatch(body, /permissions:[\s\S]{0,200}contents: write/);
       assert.match(body, /Context hygiene:/);
-      assert.match(body, /\.audit\/\*\*/);
-      assert.match(body, /skills\/catalog\/\*\*/);
+      assert.doesNotMatch(body, /\.audit\/\*\*|skills\/catalog\/\*\*/);
+      assert.match(body, /retired or generated delivery snapshots/);
       assert.match(body, /\.generated\/\*\*/);
       assert.match(body, /compiled `\*\.lock\.yml`/);
       assert.match(body, /issue-relevant source\/test\/docs paths/);

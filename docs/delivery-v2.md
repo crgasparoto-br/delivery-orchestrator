@@ -49,43 +49,53 @@ CI and audit evidence is exact-material-SHA-bound. Actionable CI failure becomes
 
 The release gate becomes ready only when the current remote PR head equals the evaluated material head, the classifier/fingerprint applies to that candidate, the stable required check is terminal green, risk-required audit approves the same candidate, and no blocking finding or budget blocker remains.
 
+The aggregate exact-head result is published as `Delivery V2 release`. Target policy now records whether GitHub **natively requires** that status (`native-required-status`) or whether it is only published by the controller (`controller-status-only`). A controller-only target must state the limitation explicitly and cannot claim branch/ruleset enforcement that is not actually configured. Human/manual merge remains the governance boundary in that mode.
+
 STANDARD audit applicability is resolved before any audit-provider call from the effective risk plus the target repository policy. A target with `standardAuditRequired: false` goes directly from exact-head CI success to release evaluation; CRITICAL remains mandatory-audit and cannot be downgraded by that switch.
 
 ## Generic independent audit
 
-`.github/workflows/delivery-v2-audit.yml` is the normal GitHub-native audit workflow. It accepts any configured target repository/PR; it is not gated by the old `DV2-AUDIT-PILOT: critical` marker or issue #27.
+`.github/workflows/delivery-v2-audit.yml` is the normal GitHub-native audit workflow. It accepts any configured target repository/PR; it is not gated by an old pilot marker or issue #27.
 
 The reviewer receives a deterministic sanitized bundle containing:
 
 - exact GitHub audit request and check evidence;
-- target issue contract;
-- PR metadata;
+- bounded target issue contract;
+- bounded PR identity/description projection rather than raw GitHub API objects;
 - a bounded prioritized subset of the immutable candidate diff;
 - `DIFF_MANIFEST.json`, which binds the full raw diff by SHA-256 and byte count, lists every changed path and records every included/omitted diff block;
 - Delivery V2 audit contract;
 - bounded exact-SHA material context with prioritized full changed text files plus one-hop direct relative dependencies when resolvable.
 
-Both the diff context and material-context expansion have explicit file, per-file and total-byte ceilings; material context also limits dependency probes. The byte budget is risk-adaptive: STANDARD is capped at 32 KiB of bounded diff plus 48 KiB of material context (80 KiB aggregate), while CRITICAL retains 64 KiB plus 96 KiB (160 KiB aggregate). Missing/unsupported audit risk fails closed, and explicit smaller limits used by focused tests remain valid. The exact base/head SHAs remain the candidate identity, while the diff manifest preserves integrity of the full raw diff without placing all of its bytes in the model context. When either bounded manifest omits material that is genuinely required to support a release-blocking conclusion, the reviewer must fail closed with an `audit-context-insufficient` finding rather than guess or browse the repository. This preserves evidence strength while cutting the STANDARD model-context byte ceiling by 50%.
+Diff/material sub-budgets remain risk-adaptive: STANDARD uses 32 KiB diff + 48 KiB material context, while CRITICAL uses 64 KiB + 96 KiB. A second **total bundle** gate now accounts for the issue/PR projections and all model files before a provider call: STANDARD caps issue body at 24 KiB, PR body at 16 KiB and total bundle at 128 KiB; CRITICAL caps them at 48 KiB, 32 KiB and 256 KiB. If an issue/PR body would be truncated or the total budget is exceeded, the runtime emits deterministic `audit-context-insufficient` evidence and performs **zero audit-provider calls**.
 
-Product repositories use the compact `docs/delivery-v2/AUDIT_CONTRACT.md` projection to reduce repeated tokens. Changes to the Delivery V2 control plane itself use the full `MASTER_SPEC.md`. Hidden implementer reasoning, generated worker locks and unrelated repository inventory are not reviewer context. The physically retired V1 roots `.audit/entregar-issue/**` and `skills/catalog/**` are ignored and blocked from reintroduction.
+Product repositories use the compact `docs/delivery-v2/AUDIT_CONTRACT.md` projection to reduce repeated tokens. Changes to the Delivery V2 control plane itself use the full `MASTER_SPEC.md`. Hidden implementer reasoning, generated worker locks and unrelated repository inventory are not reviewer context.
 
 ## Observability and token accounting
 
 Every compiled worker retains native `gh-aw` usage artifacts. The normal controller downloads and normalizes those artifacts when available. Audit model usage is normalized into the same delivery record.
 
-Metrics preserve unknown values as `null`; a provider that does not report tokens/credits never becomes a fabricated zero. The final controller artifact includes provider calls, attempts, per-stage usage, CI/audit/end-to-end duration, exact material SHA, change size, evidence references and terminal state.
+The same observability accumulator is persisted with controller state and reused after re-entry. Provider runs are deduplicated by run ID, so recovering an in-flight worker/audit cannot charge the same call twice. Metrics preserve unknown values as `null`; a provider that does not report tokens/credits never becomes a fabricated zero. A deterministic audit-context rejection has a known provider-call count of zero without inventing token usage.
+
+The final controller artifact includes provider calls, attempts, per-stage usage, CI/audit/end-to-end duration, exact material SHA, change size, evidence references and terminal state. Legacy state created before persistent observability is reported explicitly rather than backfilled from guesses.
 
 ## Deterministic work deduplication
 
 `Delivery V2 CI` remains the trusted automatic exact-head gate. Its aggregate `verify:v2` command runs the strict terminal-completeness verifier exactly once and the target-policy verifier exactly once. `verify:v2:complete` remains available as the focused strict-completeness command, but the CI does not invoke it a second time after `verify:v2`.
 
+Completeness is no longer a single global set-membership check. A requirement can declare `minimumCompletionStatus`; the default is `validated`, while DV2-012 and DV2-013 require `rolled-out`. This prevents a real-rollout requirement from being declared complete while merely validated.
+
 Before installing `gh-aw`, the CI compares the worker compilation identity with the trusted base. When worker Markdown sources, generated worker locks/actions lock and compiler-workflow identity are unchanged, the previously trusted base attestation is reused and the `gh-aw` setup/compile steps are skipped. When that identity changes, the same CI performs exactly one strict compile and verifies zero generated drift. `Delivery V2 - Compile gh-aw` remains manual preflight only and cannot create a second automatic compile for a PR.
 
 The CI trigger and syntax checks cover repository scripts by surface (`scripts/**` and generic `*.mjs` loops) rather than by a manually maintained list. A newly added V2 controller/helper script therefore cannot silently bypass the platform gate merely because its filename was not enumerated.
 
+## Controller continuation model
+
+V2.2 keeps bounded polling inside a controller invocation and uses persisted state/re-entry for interruption recovery. Converting every CI/audit transition into an event-triggered continuation would change workflow ownership, concurrency and failure semantics across repositories; that is intentionally deferred to a separate architectural change. Polling itself performs no model calls, so this hardening first removes token/provider waste without silently expanding orchestration risk. See ADR `docs/delivery-v2/adr/0006-bounded-polling-before-event-driven.md`.
+
 ## V1 retirement
 
-V1 remains retired. No active `delivery-request`, `max_cycles`, recursive controller, nested-Skill normal path or mandatory V1 handoff/certificate dependency is reintroduced. The former `.audit/entregar-issue/**` and `skills/catalog/**` snapshot roots have also been physically removed from the working tree and are ignored to prevent accidental regeneration. Minimal historical provenance remains under `docs/delivery-v2/history/v1/**` and in Git history only.
+V1 remains retired. No active `delivery-request`, `max_cycles`, recursive controller, nested-Skill normal path or mandatory V1 handoff/certificate dependency is reintroduced. Former V1 snapshot roots have been physically removed from the working tree and are ignored to prevent accidental regeneration. Active worker prompts refer generically to retired/generated snapshots instead of carrying obsolete V1 path names. Minimal historical provenance remains under `docs/delivery-v2/history/v1/**` and in Git history only.
 
 ## Validation
 
@@ -95,4 +105,4 @@ npm run validate
 npm run verify:v2
 ```
 
-Use `npm run verify:v2:complete` only when the strict completeness verifier is needed in isolation. The terminal V2 contract remains protected by that strict completeness gate and `test/v2-retirement.test.mjs`.
+Use `npm run verify:v2:complete` only when the strict completeness verifier is needed in isolation. The terminal V2 contract remains protected by that strict completeness gate and the V1-retirement regression tests.

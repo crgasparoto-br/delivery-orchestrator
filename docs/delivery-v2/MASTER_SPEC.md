@@ -367,7 +367,7 @@ provider + worker identity
 prior V2 findings for this same candidate lineage
 ```
 
-A stale V1 certificate inherited from the base may be noted but cannot, by itself, fail a V2-native delivery.
+Historical V1 certificates inherited from older Git history are never required by the active V2 audit path.
 
 ### Independence
 
@@ -388,6 +388,17 @@ Audit findings must be machine-usable and include:
 - whether the finding blocks release.
 
 An audit is not allowed to reuse approval from another material SHA.
+
+### Audit context budget
+
+The audit bundle is bounded before the model is invoked. The budget includes the sanitized issue/PR projections in addition to bounded diff, manifests, contract and material context. Raw GitHub PR/base/head API objects are not model context.
+
+Current hard ceilings are:
+
+- STANDARD: issue body 24 KiB, PR body 16 KiB, total bundle 128 KiB;
+- CRITICAL: issue body 48 KiB, PR body 32 KiB, total bundle 256 KiB.
+
+If an issue/PR body would be truncated or the total bundle exceeds its risk budget, the runtime emits a deterministic blocking `audit-context-insufficient` result and performs **zero audit-provider calls**. It never sends known-incomplete contract context to a model just to save bytes. Diff/material sub-budgets remain separately enforced.
 
 ### Policy by risk
 
@@ -441,7 +452,12 @@ For a PR to become `ready-for-human-merge`:
 
 If the head changes, readiness returns to an earlier state automatically.
 
-The release gate stores references to evidence; it does not create an extra result-only commit just to certify what GitHub already attests.
+The controller publishes the aggregate exact-head result under the target's configured final status (currently `Delivery V2 release`). Merge enforcement is a separate repository capability and must be represented explicitly in target policy:
+
+- `native-required-status`: branch/ruleset protection demonstrably requires the same final status;
+- `controller-status-only`: the controller publishes the exact-head status, but GitHub does not natively enforce it for merge; this mode must carry an explicit limitation and must never claim native protection.
+
+A green release status is evidence, not proof that branch protection exists. Where native enforcement is unavailable, human/manual merge remains an external governance boundary. The release gate stores references to evidence; it does not create an extra result-only commit just to certify what GitHub already attests.
 
 ## 15. DV2-011 — Observability and cost accounting
 
@@ -463,7 +479,7 @@ Every delivery should emit normalized metrics:
 - number of files/lines changed;
 - whether escalation occurred.
 
-Metrics must be usable for per-repository and cross-repository comparisons. Provider-sensitive cost values must never expose secrets.
+Metrics must be usable for per-repository and cross-repository comparisons. Provider-sensitive cost values must never expose secrets. Observability state is persisted with the controller and survives deterministic re-entry; a resumed delivery must continue the same counters/usage accumulator rather than restart them. Provider runs are deduplicated by run identity. Missing provider telemetry remains `null`; a deterministic audit rejection that makes no model call records zero provider calls without fabricating token values.
 
 The first measured FAST pilot in `controle_calorias` observed approximately 128 seconds versus an earlier approximately 1,255-second full baseline (~89.8% reduction, ~9.8x faster). This is evidence, not a universal SLA.
 
@@ -495,22 +511,24 @@ The pilot is complete only when:
 6. a real small UI change proves FAST;
 7. the benchmark and executed/skipped steps are recorded.
 
+Rollout means that the generated adaptive routing is merged and active on the target branch and the real FAST benchmark is captured as exact-head evidence. The deliberately disposable benchmark PR does **not** have to be merged solely to prove routing rollout; its immutable head/run/artifact remain validation evidence. The `training-system` routing migration is active on `develop`, and the real FAST benchmark is recorded, so DV2-013 is `rolled-out`.
+
 A green CRITICAL self-test does not prove the future FAST/STANDARD routing by itself; adversarial classifier tests are mandatory.
 
 ## 18. DV2-014 — V1 and nested-Skill retirement
 
-V1 remains available only as a migration fallback until V2 completion criteria are met.
+V1 is retired from the active tree and normal delivery path. Minimal historical provenance may remain only in the dedicated V2 history area and Git history; it is not a runnable fallback.
 
 Retirement includes:
 
 - disabling/removing legacy `delivery-request` orchestration paths from the default route;
-- removing normal-path dependence on nested Skills and `.audit/entregar-issue` certificates;
+- removing normal-path dependence on nested Skills and legacy delivery certificates;
 - removing dead `max_cycles`/legacy loop code when no consumer remains;
 - closing or migrating active V1 queue items;
 - updating README/docs/capabilities so V2 is the default;
 - preserving only history needed for traceability.
 
-V1 must not be retired merely because the foundation code exists.
+Any reintroduction of active V1 orchestration or retired snapshot roots is a regression.
 
 ## 19. DV2-015 — Executable completeness contract
 
@@ -518,6 +536,7 @@ V1 must not be retired merely because the foundation code exists.
 
 - status;
 - whether it is required for V2 default;
+- optional `minimumCompletionStatus` (`validated` by default; `rolled-out` when real rollout is part of completion);
 - implementation references;
 - validation references;
 - rollout references;
@@ -531,9 +550,9 @@ V1 must not be retired merely because the foundation code exists.
 - terminal statuses have validation evidence;
 - rolled-out statuses have rollout evidence;
 - local `file:` evidence exists;
-- all required requirements are terminal when `--require-complete` is requested.
+- every required requirement meets both a globally terminal status and its own minimum completion maturity when `--require-complete` is requested.
 
-Normal CI runs structural verification now. The strict `--require-complete` mode becomes a release/retirement gate when V2 is ready to become the only path.
+A requirement whose minimum is `rolled-out` is incomplete while merely `validated`, even though `validated` is terminal for requirements that do not require rollout. Normal CI runs structural verification; strict `--require-complete` is the release/retirement regression gate.
 
 ## 20. DV2-016 — Persistent resumable delivery state
 
@@ -552,7 +571,7 @@ At minimum, persistent state must retain:
 - evidence references;
 - last terminal/non-terminal reason.
 
-State updates must be idempotent and tied to observed GitHub identity. A stale state document cannot override fresher remote PR/SHA facts.
+Controller metadata may additionally persist observability accumulation needed for DV2-011. State updates must be idempotent and tied to observed GitHub identity. A stale state document cannot override fresher remote PR/SHA facts.
 
 ## 21. Security model
 
@@ -582,14 +601,14 @@ STANDARD roots
 always-CRITICAL paths/boundaries
 repository-specific critical integrations
 post-merge full-regression workflow
-merge policy
+merge policy + enforcement mode/limitation
 ```
 
-The policy cannot weaken orchestrator core invariants. Its generated fingerprint is included in classification evidence.
+The policy cannot weaken orchestrator core invariants. It must not represent `native-required-status` unless native enforcement is actually present. Its generated fingerprint is included in classification evidence.
 
 ## 23. Completion criteria
 
-Delivery V2 may be declared the default and V1 retirement may complete only when all `requiredForV2Default=true` requirements in the manifest are `validated` or `rolled-out`.
+Delivery V2 may be declared the default and V1 retirement may complete only when all `requiredForV2Default=true` requirements satisfy their configured minimum completion maturity. The default minimum is `validated`; requirements whose contract includes real rollout use `minimumCompletionStatus: rolled-out`.
 
 In practical terms that includes:
 
@@ -602,7 +621,7 @@ In practical terms that includes:
 - persistent resumable state;
 - observability/cost accounting;
 - `controle_calorias` pilot rolled out;
-- `training-system` pilot rolled out with real FAST benchmark;
+- `training-system` adaptive routing rolled out with real FAST benchmark evidence;
 - completeness gate itself validated;
 - V1 retirement performed and verified.
 

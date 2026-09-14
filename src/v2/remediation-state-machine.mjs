@@ -15,6 +15,7 @@ export const DELIVERY_V2_STATES = Object.freeze([
 
 const STATE_SET = new Set(DELIVERY_V2_STATES);
 const CI_FAILURE_CLASSES = new Set(['actionable', 'external', 'preexisting']);
+const NON_REMEDIABLE_AUDIT_FINDING_IDS = new Set(['DV2-AUDIT-CONTEXT-INSUFFICIENT']);
 const SHA_RE = /^[0-9a-f]{40}$/i;
 
 function requiredString(value, label) {
@@ -228,6 +229,10 @@ export function recordAuditResult(state, result = {}) {
     blockingFindings: Object.freeze(blocking),
     auditInFlight: false
   });
+  const nonRemediable = blocking.filter((finding) => NON_REMEDIABLE_AUDIT_FINDING_IDS.has(finding.id));
+  if (nonRemediable.length > 0) {
+    return escalate(failed, 'audit-context-insufficient', { findingIds: Object.freeze(nonRemediable.map((finding) => finding.id)) });
+  }
   if (failed.auditRemediationAttempts >= failed.limits.maxAuditRemediationAttempts) return escalate(failed, 'audit-remediation-budget-exhausted');
   if (failed.implementationAttempts >= failed.limits.maxImplementationAttempts) return escalate(failed, 'implementation-budget-exhausted-after-audit');
   return transition(failed, { status: 'audit-failed-remediable' });

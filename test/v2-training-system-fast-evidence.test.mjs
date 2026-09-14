@@ -46,7 +46,7 @@ test('DV2-013 FAST routing executed focused web gates and skipped STANDARD/CRITI
   assert.deepEqual(jobs.fastValidation.skippedSteps, ['Documentation checks']);
 });
 
-test('DV2-013 benchmark preserves measured timings and does not overclaim rollout or prior audit disposition', async () => {
+test('DV2-013 rollout is the merged adaptive routing plus immutable FAST benchmark, without pretending the benchmark PR merged', async () => {
   const value = await evidence();
   const benchmark = value.fastPilot.benchmark;
 
@@ -66,6 +66,8 @@ test('DV2-013 benchmark preserves measured timings and does not overclaim rollou
 
   assert.equal(value.fastPilot.merged, false);
   assert.equal(value.fastPilot.humanDisposition.mergePerformedByController, false);
-  assert.equal(value.statusDecision.status, 'validated');
-  assert.equal(value.statusDecision.rolledOut, false);
+  assert.match(value.fastPilot.humanDisposition.reason, /benchmark change is disposable validation material/);
+  assert.equal(value.statusDecision.status, 'rolled-out');
+  assert.equal(value.statusDecision.rolledOut, true);
+  assert.match(value.statusDecision.rolloutBoundary, /PR #436 is immutable benchmark evidence/);
 });
