@@ -21,6 +21,12 @@ function requireString(value, label) {
   return resolved;
 }
 
+function optionalString(value, label, { lowerCase = false } = {}) {
+  if (value == null) return null;
+  const resolved = requireString(value, label);
+  return lowerCase ? resolved.toLowerCase() : resolved;
+}
+
 function requirePositiveInteger(value, label, { allowZero = false } = {}) {
   const floor = allowZero ? 0 : 1;
   if (!Number.isInteger(value) || value < floor) throw new Error(`${label} must be ${allowZero ? 'a non-negative' : 'a positive'} integer`);
@@ -165,6 +171,9 @@ export function normalizePersistentDeliveryState(rawState) {
     effectiveRisk: policy.profile,
     classifier: normalizeClassifier(value.classifier, materialHeadSha),
     provider: requireString(value.provider, 'provider').toLowerCase(),
+    model: optionalString(value.model, 'model'),
+    auditorProvider: optionalString(value.auditorProvider, 'auditorProvider', { lowerCase: true }),
+    auditorModel: optionalString(value.auditorModel, 'auditorModel'),
     status,
     attempts,
     workflowChecks: Object.freeze(workflowChecks),
@@ -192,6 +201,9 @@ export function createPersistentDeliveryState(input) {
     effectiveRisk: value.effectiveRisk,
     classifier: value.classifier,
     provider: value.provider,
+    model: value.model ?? null,
+    auditorProvider: value.auditorProvider ?? null,
+    auditorModel: value.auditorModel ?? null,
     status: value.status ?? 'queued',
     attempts: value.attempts ?? { implementation: 0, audit: 0, auditRemediation: 0 },
     workflowChecks: value.workflowChecks ?? [],
@@ -327,6 +339,9 @@ export function applyPersistentCheckpoint(rawState, checkpoint) {
     effectiveRisk: value.effectiveRisk ?? state.effectiveRisk,
     classifier,
     provider: value.provider ?? state.provider,
+    model: value.model ?? state.model,
+    auditorProvider: value.auditorProvider ?? state.auditorProvider,
+    auditorModel: value.auditorModel ?? state.auditorModel,
     attempts,
     workflowChecks,
     ciFailure,

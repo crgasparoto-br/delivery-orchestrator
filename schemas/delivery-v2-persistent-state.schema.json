@@ -47,6 +47,9 @@
       }
     },
     "provider": { "type": "string", "minLength": 1 },
+    "model": { "type": ["string", "null"], "minLength": 1 },
+    "auditorProvider": { "type": ["string", "null"], "minLength": 1 },
+    "auditorModel": { "type": ["string", "null"], "minLength": 1 },
     "status": {
       "enum": [
         "queued",
@@ -72,6 +75,27 @@
       }
     },
     "workflowChecks": { "type": "array", "items": { "type": "object" } },
+    "ciFailure": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["candidateSha", "failureClass", "cause", "evidenceRef"],
+      "properties": {
+        "candidateSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+        "failureClass": { "enum": ["actionable", "external", "preexisting"] },
+        "cause": { "type": "string", "minLength": 1 },
+        "evidenceRef": { "type": "string", "minLength": 1 }
+      }
+    },
+    "auditEvidence": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["candidateSha", "decision", "evidenceRef"],
+      "properties": {
+        "candidateSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+        "decision": { "enum": ["approved", "rejected"] },
+        "evidenceRef": { "type": "string", "minLength": 1 }
+      }
+    },
     "blockingFindings": { "type": "array", "items": { "type": "object" } },
     "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
     "lastReason": { "type": ["string", "null"] },

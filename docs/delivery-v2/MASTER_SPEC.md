@@ -34,12 +34,12 @@ Delivery V2 must:
 - make small, low-risk changes materially faster and cheaper than the V1 full-delivery path;
 - keep sensitive changes at least as safe as the old full gate;
 - make repository/PR/SHA identity explicit at every transition;
-- keep AI calls bounded by provider, risk, attempts, turns, credits, and wall-clock policy;
-- eliminate silent provider fallback;
+- keep AI calls bounded by provider, model, risk, attempts, turns, credits, and wall-clock policy;
+- eliminate silent provider/model fallback;
 - avoid mandatory nested ChatGPT Skills in the normal V2 path;
 - make CI depth proportional to deterministic risk;
 - preserve independent semantic review where risk justifies it;
-- fail closed when evidence, identity, classification, or release state is uncertain;
+- fail closed when evidence, identity, classification, AI selection, or release state is uncertain;
 - persist enough state that a new process or chat can resume from the repository/GitHub without reconstructing decisions from conversation history;
 - expose measurable cost, latency, retry, and quality signals;
 - retire V1 only after V2 is proven in real repositories.
@@ -96,7 +96,7 @@ The controller, not an LLM, owns:
 
 - repository, issue, PR, base ref, head ref, base SHA, material head SHA, and merge-preview SHA;
 - risk classification;
-- provider selection and worker selection;
+- provider/model selection and worker selection;
 - budgets and attempt counters;
 - workflow/check state;
 - release-state transitions;
@@ -108,11 +108,11 @@ AI may propose code, findings, or semantic judgments, but it cannot silently mut
 
 ### 4.2 Fail closed
 
-Uncertainty never grants a cheaper path. Missing changed-file evidence, an unknown path, an unrecognized state, ambiguous target identity, missing required check, stale audit, or missing provider authentication must promote/block rather than downgrade.
+Uncertainty never grants a cheaper path. Missing changed-file evidence, an unknown path, an unrecognized state, ambiguous target identity, missing required check, stale audit, invalid AI provider/model selection, missing provider authentication, or missing release evidence must promote/block rather than downgrade.
 
-### 4.3 No silent provider fallback
+### 4.3 No silent provider/model fallback
 
-The configured provider is part of the delivery contract. Supported providers are `codex`, `claude`, and `copilot`. A failed provider invocation or missing provider authentication is a hard failure for that attempt. The system must not transparently substitute another model/provider.
+The configured provider and model are part of the delivery contract. Supported providers are `codex`, `claude`, and `copilot`. A failed provider invocation, unavailable/invalid configured model, or missing provider authentication is a hard failure for that attempt. The system must not transparently substitute another provider or model.
 
 ### 4.4 Exact-SHA evidence
 
@@ -142,18 +142,21 @@ base_sha
 material_head_sha
 merge_preview_sha (when applicable)
 risk_profile
-provider
+implementation_provider + implementation_model
+audit_provider + audit_model (when applicable)
 implementation_attempt
 audit_attempt
 required_checks
 terminal_state
 ```
 
-The record may be stored as GitHub state, repository artifacts, or a controller-owned state document, but the values must be reconstructable without chat history.
+The record may be stored as GitHub state, repository artifacts, workflow outputs, or a controller-owned state document, but the values must be reconstructable without chat history. Historical evidence must retain the provider/model identity actually used even if GitHub Variables change later.
 
-## 6. DV2-002 — Provider dispatch
+## 6. DV2-002 — Provider and model dispatch
 
-User-facing selection is `provider + risk`. The dispatcher resolves the pair to exactly one compiled worker:
+Operator-facing AI selection is configured through **GitHub Actions Variables** in `delivery-orchestrator`; a delivery dispatch does not require the operator to reselect the provider/model each time. The controller determines effective risk first, then resolves implementation/remediation and independent-audit AI policy separately.
+
+The implementation dispatcher maps the resolved provider and risk to exactly one compiled worker:
 
 ```text
 codex   x fast|standard|critical
@@ -161,15 +164,77 @@ claude  x fast|standard|critical
 copilot x fast|standard|critical
 ```
 
-`gh-aw` is the current AI execution runtime. Worker sources are compiled to lock workflows with a pinned compiler. `max-ai-credits` is compile-time, so provider/risk variants remain explicit.
+### 6.1 Implementation/remediation variables
+
+General role variables:
+
+```text
+DELIVERY_IMPLEMENTER_PROVIDER
+DELIVERY_IMPLEMENTER_MODEL
+```
+
+Risk-specific overrides:
+
+```text
+DELIVERY_FAST_IMPLEMENTER_PROVIDER
+DELIVERY_FAST_IMPLEMENTER_MODEL
+DELIVERY_STANDARD_IMPLEMENTER_PROVIDER
+DELIVERY_STANDARD_IMPLEMENTER_MODEL
+DELIVERY_CRITICAL_IMPLEMENTER_PROVIDER
+DELIVERY_CRITICAL_IMPLEMENTER_MODEL
+```
+
+Resolution order is:
+
+```text
+risk-specific implementation variable
+  -> general implementation variable
+  -> versioned orchestrator default
+```
+
+### 6.2 Independent-audit variables
+
+General role variables:
+
+```text
+DELIVERY_AUDITOR_PROVIDER
+DELIVERY_AUDITOR_MODEL
+```
+
+Risk-specific overrides:
+
+```text
+DELIVERY_STANDARD_AUDITOR_PROVIDER
+DELIVERY_STANDARD_AUDITOR_MODEL
+DELIVERY_CRITICAL_AUDITOR_PROVIDER
+DELIVERY_CRITICAL_AUDITOR_MODEL
+```
+
+FAST has no mandatory LLM audit and therefore no FAST auditor override. Audit resolution order is:
+
+```text
+risk-specific audit variable
+  -> general audit variable
+  -> versioned orchestrator default
+```
+
+The audit provider/model is resolved independently from the implementation provider/model. Independence still requires a fresh isolated reviewer context; using a different provider/model strengthens separation but is not a substitute for context isolation.
+
+### 6.3 Versioned defaults and runtime
+
+Defaults must be concrete model identifiers, never mutable aliases such as `auto` or `agent`. Current versioned defaults are documented in `docs/delivery-v2/AI_CONFIGURATION.md` and implemented by `src/v2/provider-policy.mjs`.
+
+`gh-aw` is the current implementation-worker execution runtime. Worker sources are compiled to lock workflows with a pinned compiler. `max-ai-credits` is compile-time, so provider/risk variants remain explicit.
 
 Provider authentication policy:
 
-- Codex: `CODEX_API_KEY` or `OPENAI_API_KEY`;
-- Claude: `ANTHROPIC_API_KEY` or supported WIF;
-- Copilot: supported Copilot request/token configuration.
+- Codex: `CODEX_API_KEY` or `OPENAI_API_KEY`, or the explicitly configured isolated ChatGPT/Codex credential mode;
+- Claude: `ANTHROPIC_API_KEY` or supported WIF where the active runtime supports it;
+- Copilot: supported Copilot request/token configuration, with `COPILOT_GITHUB_TOKEN` used by the independent audit CLI runtime.
 
-Authentication failure stops that provider attempt. It never triggers provider substitution.
+Secrets contain credentials only. Provider/model names and policy are GitHub Variables. Authentication failure, unsupported provider, or invalid/unavailable configured model stops that attempt. It never triggers provider/model substitution.
+
+Every AI invocation must expose enough GitHub-native evidence to reconstruct role, risk, provider, model, worker/run identity, and candidate lineage.
 
 ## 7. DV2-003 — Safe outputs and credential isolation
 
@@ -363,7 +428,8 @@ required checks + conclusions
 workflow run IDs
 changed paths
 implementation attempt count
-provider + worker identity
+implementation provider + model + worker identity
+audit provider + model + reviewer identity
 prior V2 findings for this same candidate lineage
 ```
 
@@ -371,7 +437,7 @@ Historical V1 certificates inherited from older Git history are never required b
 
 ### Independence
 
-For CRITICAL, the semantic reviewer must be independent of the implementing agent context. Independence means the reviewer receives candidate code/evidence and the contract, but not the implementer's hidden reasoning. It does not require replaying the full V1 Skill ritual.
+For CRITICAL, the semantic reviewer must be independent of the implementing agent context. Independence means the reviewer receives candidate code/evidence and the contract, but not the implementer's hidden reasoning. It does not require replaying the full V1 Skill ritual. The audit role resolves its own provider/model GitHub Variables and uses an isolated reviewer runtime; it does not inherit implementation provider/model selection implicitly.
 
 ### Audit output
 
@@ -387,7 +453,7 @@ Audit findings must be machine-usable and include:
 - remediation mode (`targeted` or `systemic`);
 - whether the finding blocks release.
 
-An audit is not allowed to reuse approval from another material SHA.
+An audit is not allowed to reuse approval from another material SHA. Audit evidence must persist the reviewer provider/model actually invoked for that candidate.
 
 ### Audit context budget
 
@@ -465,7 +531,7 @@ V2 is incomplete without evidence that it is actually cheaper/faster.
 
 Every delivery should emit normalized metrics:
 
-- repository, issue, PR, risk, provider;
+- repository, issue, PR, risk, provider/model identity by AI role;
 - classifier version/fingerprint;
 - number of provider calls;
 - implementation attempts;
@@ -563,7 +629,7 @@ At minimum, persistent state must retain:
 - target identity;
 - material SHA;
 - effective risk and classifier fingerprint;
-- provider;
+- implementation provider/model and, when applicable, audit provider/model;
 - current state;
 - implementation/audit attempt counters;
 - workflow/check references;
@@ -584,10 +650,10 @@ The controller follows least privilege:
 - fail-closed integrity level;
 - no secret echoing;
 - no automatic broadening of network/tool access;
-- no provider fallback;
+- no provider/model fallback;
 - no automatic merge by default.
 
-Risk classification itself is a security boundary and must be tested adversarially.
+Risk classification and AI provider/model dispatch are security boundaries and must be tested adversarially.
 
 ## 22. Repository policy contract
 

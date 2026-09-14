@@ -27,7 +27,7 @@ for (const provider of ['copilot', 'codex', 'claude']) {
       const lockFile = `.github/workflows/delivery-v2-worker-${provider}-${risk}.lock.yml`;
       const body = await readFile(file, 'utf8');
       const lockBody = await readFile(lockFile, 'utf8');
-      assert.match(body, new RegExp(`engine: ${provider}`));
+      assert.match(body, new RegExp(`engine:\\s*\\n\\s+id: ${provider}`));
       assert.match(body, new RegExp(`max-turns: ${policy[risk].turns}`));
       assert.match(body, new RegExp(`max-ai-credits: ${policy[risk].credits}`));
       assert.match(body, /target_ref:/);

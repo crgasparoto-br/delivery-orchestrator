@@ -78,6 +78,7 @@ jobs:
       TARGET_ISSUE: ${{ inputs.target_issue }}
       TARGET_PR: ${{ inputs.target_pr }}
       AUDIT_RISK_PROFILE: ${{ inputs.risk_profile }}
+      AUDIT_DISPATCH_NONCE: ${{ inputs.dispatch_nonce }}
       SOURCE_WORKFLOW_RUN_ID: ${{ inputs.source_workflow_run_id }}
       SOURCE_WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
       SOURCE_WORKFLOW_PATH: ${{ inputs.source_workflow_path }}
@@ -93,8 +94,15 @@ jobs:
       CODEX_AUDITOR_HOME: ${{ vars.CODEX_AUDITOR_HOME }}
       DELIVERY_IMPLEMENTER_USER: ${{ vars.DELIVERY_IMPLEMENTER_USER || 'delivery-implementer' }}
       DELIVERY_AUDITOR_USER: ${{ vars.DELIVERY_AUDITOR_USER || 'delivery-auditor' }}
-      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.6-sol' }}
+      DELIVERY_AUDITOR_PROVIDER_GENERAL: ${{ vars.DELIVERY_AUDITOR_PROVIDER }}
+      DELIVERY_AUDITOR_MODEL_GENERAL: ${{ vars.DELIVERY_AUDITOR_MODEL }}
+      DELIVERY_STANDARD_AUDITOR_PROVIDER_CONFIG: ${{ vars.DELIVERY_STANDARD_AUDITOR_PROVIDER }}
+      DELIVERY_STANDARD_AUDITOR_MODEL_CONFIG: ${{ vars.DELIVERY_STANDARD_AUDITOR_MODEL }}
+      DELIVERY_CRITICAL_AUDITOR_PROVIDER_CONFIG: ${{ vars.DELIVERY_CRITICAL_AUDITOR_PROVIDER }}
+      DELIVERY_CRITICAL_AUDITOR_MODEL_CONFIG: ${{ vars.DELIVERY_CRITICAL_AUDITOR_MODEL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
       DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
     steps:
       - name: Restrict target repository
@@ -110,6 +118,9 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
 
+      - name: Validate frozen audit AI identity
+        run: /usr/local/bin/node scripts/validate-delivery-v2-audit-ai-identity.mjs validate
+
       - name: Validate isolated auditor runtime
         shell: bash
         run: |
@@ -121,19 +132,38 @@ jobs:
           test "$("$node_bin" -p 'Number(process.versions.node.split(".")[0])')" -ge 22
           test "$DELIVERY_IMPLEMENTER_USER" != "$DELIVERY_AUDITOR_USER"
           id "$DELIVERY_AUDITOR_USER" >/dev/null
-          auditor_home="${CODEX_AUDITOR_HOME:-$(getent passwd "$DELIVERY_AUDITOR_USER" | cut -d: -f6)/.codex-delivery/auditor}"
-          if [ "$CODEX_AUTH_MODE" = "chatgpt" ]; then
-            sudo -n -u "$DELIVERY_AUDITOR_USER" -H -- test -r "$auditor_home/auth.json"
-          elif [ "$CODEX_AUTH_MODE" = "api-key" ]; then
-            test -n "$OPENAI_API_KEY"
-          else
-            echo "CODEX_AUTH_MODE must be chatgpt or api-key" >&2
-            exit 2
-          fi
+          case "$DELIVERY_AUDITOR_PROVIDER" in
+            codex)
+              auditor_home="${CODEX_AUDITOR_HOME:-$(getent passwd "$DELIVERY_AUDITOR_USER" | cut -d: -f6)/.codex-delivery/auditor}"
+              if [ "$CODEX_AUTH_MODE" = "chatgpt" ]; then
+                sudo -n -u "$DELIVERY_AUDITOR_USER" -H -- test -r "$auditor_home/auth.json"
+              elif [ "$CODEX_AUTH_MODE" = "api-key" ]; then
+                test -n "$OPENAI_API_KEY"
+              else
+                echo "CODEX_AUTH_MODE must be chatgpt or api-key" >&2
+                exit 2
+              fi
+              ;;
+            claude) test -n "$ANTHROPIC_API_KEY" ;;
+            copilot) test -n "$COPILOT_GITHUB_TOKEN" ;;
+            *) echo "Unsupported auditor provider" >&2; exit 2 ;;
+          esac
+          test -n "$DELIVERY_AUDITOR_MODEL_RESOLVED"
           test -n "$DELIVERY_GITHUB_READ_TOKEN"
 
       - name: Install trusted runtime dependencies
         run: /usr/local/bin/npm ci --no-audit --no-fund
+
+      - name: Install pinned Copilot CLI for Copilot audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$DELIVERY_AUDITOR_PROVIDER" != "copilot" ]; then
+            exit 0
+          fi
+          root="${RUNNER_TEMP}/delivery-v2-copilot-cli-${GITHUB_RUN_ID}"
+          /usr/local/bin/npm install --prefix "$root" @github/copilot@1.0.80 --no-audit --no-fund
+          echo "$root/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Prepare isolated auditor role runtime
         shell: bash
@@ -148,6 +178,9 @@ jobs:
 
       - name: Run exact-head GitHub-native audit
         run: /usr/local/bin/node scripts/run-delivery-v2-github-audit.mjs
+
+      - name: Bind audit runtime identity to evidence
+        run: /usr/local/bin/node scripts/validate-delivery-v2-audit-ai-identity.mjs bind-result
 
       - name: Publish machine-readable result to target PR
         uses: actions/github-script@v7
@@ -166,6 +199,7 @@ jobs:
               decision: payload.result.decision,
               requestFingerprint: payload.result.requestFingerprint,
               auditWorkflowRunId: payload.auditWorkflowRunId,
+              auditRuntime: payload.auditRuntime,
               findings: payload.result.findings,
               modelUsage: payload.modelUsage ?? null,
             })).toString('base64');
@@ -176,6 +210,8 @@ jobs:
               '',
               `- Candidate: \`${payload.result.candidateSha}\``,
               `- Risk: \`${payload.request.candidate.risk.profile}\``,
+              `- Auditor provider: \`${payload.auditRuntime.provider}\``,
+              `- Auditor model: \`${payload.auditRuntime.model}\``,
               `- Decision: **${payload.result.decision}**`,
               `- Audit run: ${payload.auditWorkflowRunId}`,
               `- Request fingerprint: \`${payload.result.requestFingerprint}\``,

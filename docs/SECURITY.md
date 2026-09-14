@@ -1,18 +1,20 @@
 # Security and independence model
 
-Delivery V2 treats GitHub and deterministic code as the control plane. AI execution is bounded by explicit provider/risk policy and cannot grant itself additional attempts, credentials, release authority or another provider.
+Delivery V2 treats GitHub and deterministic code as the control plane. AI execution is bounded by explicit provider/model/risk policy and cannot grant itself additional attempts, credentials, release authority, another provider, or another model.
 
 ## Deterministic control plane
 
 GitHub owns the durable delivery identity: repository, issue/PR, base/head refs, exact material SHA, CI runs, independent-audit evidence and release state. A material SHA change invalidates candidate-bound CI and audit evidence.
 
-The controller fails closed when risk classification is unknown or sensitive, provider selection cannot be satisfied exactly, required exact-head checks are stale/missing/red, or a required audit is missing/rejected.
+The controller fails closed when risk classification is unknown or sensitive, configured provider/model selection cannot be satisfied exactly, required exact-head checks are stale/missing/red, or a required audit is missing/rejected.
+
+Provider/model selection is operator-controlled through GitHub Actions Variables. Risk-specific role variables override general role variables; versioned concrete defaults apply only when no corresponding Variable is configured. Credentials remain Secrets. Invalid/unavailable configured models and missing credentials are blocking errors rather than reasons to substitute another AI.
 
 ## Credential boundary
 
-Normal V2 workers do not receive a generic control-plane write token. Privileged mutations are performed by GitHub Actions or other explicitly bounded publishers after deterministic validation. Provider dispatch has no silent fallback.
+Normal V2 workers do not receive a generic control-plane write token. Privileged mutations are performed by GitHub Actions or other explicitly bounded publishers after deterministic validation. Provider/model dispatch has no silent fallback.
 
-Independent semantic review is separated from implementation by fresh context and evidence scope. The reviewer receives the exact candidate/evidence required for review, not implementer hidden reasoning. The current self-hosted audit runtime uses the dedicated auditor OS identity and an isolated Codex home; role execution helpers remain only where the V2 audit runtime requires them.
+Independent semantic review is separated from implementation by fresh context and evidence scope. The reviewer receives the exact candidate/evidence required for review, not implementer hidden reasoning. The self-hosted audit runtime uses the dedicated auditor OS identity. Codex keeps its isolated Codex home; Claude and Copilot use the same isolated auditor role boundary with their own configured credentials/runtime path. Audit provider/model selection is resolved separately from implementation selection.
 
 ## Risk and attempt budgets
 
@@ -22,7 +24,7 @@ FAST is an allowlist: unknown paths and authentication/authorization/session/ide
 
 ## Independent audit
 
-CRITICAL release requires an independent result bound to the exact candidate and request evidence. The normal V2 audit is GitHub-native and does not require retired V1 certificates.
+CRITICAL release requires an independent result bound to the exact candidate and request evidence. The normal V2 audit is GitHub-native and does not require retired V1 certificates. Its artifact records the resolved audit provider/model identity used for the candidate.
 
 Audit context is risk-adaptive at two levels. Diff/material sub-budgets remain 80 KiB aggregate for STANDARD and 160 KiB for CRITICAL. A total pre-model bundle budget also covers bounded issue/PR projections and every model-visible bundle file: STANDARD caps issue body at 24 KiB, PR body at 16 KiB and total bundle at 128 KiB; CRITICAL uses 48 KiB, 32 KiB and 256 KiB. Raw GitHub PR/base/head objects are not sent to the model.
 
@@ -43,7 +45,7 @@ The currently configured private targets use `controller-status-only`; manual me
 
 ## Persistent observability
 
-Provider-call and usage accounting is part of controller state. Re-entry continues the same observation record, deduplicates provider runs by run identity and preserves unavailable token/credit values as `null`. A deterministic no-model audit rejection records zero provider calls without synthesizing token usage.
+Provider/model identity, provider-call and usage accounting are part of durable delivery evidence. Re-entry continues the same observation record, deduplicates provider runs by run identity and preserves unavailable token/credit values as `null`. A deterministic no-model audit rejection records zero provider calls without synthesizing token usage. Later GitHub Variable changes do not rewrite historical execution identity.
 
 ## Retired V1 boundary
 

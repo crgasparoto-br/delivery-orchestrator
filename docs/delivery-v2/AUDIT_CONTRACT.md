@@ -4,9 +4,9 @@
 
 ## Global invariants
 
-- Deterministic software owns repository/issue/PR identity, risk, provider selection, budgets, workflow/check state, release transitions, audit applicability, evidence freshness and terminal reason.
-- Missing/ambiguous identity, changed-file evidence, classification, required check, provider authentication or release evidence fails closed; uncertainty never grants a cheaper path.
-- Provider selection is explicit. A failed/missing provider never silently falls back to another provider.
+- Deterministic software owns repository/issue/PR identity, risk, provider/model selection, budgets, workflow/check state, release transitions, audit applicability, evidence freshness and terminal reason.
+- Missing/ambiguous identity, changed-file evidence, classification, required check, provider/model selection, provider authentication or release evidence fails closed; uncertainty never grants a cheaper path.
+- Provider/model selection is explicit and GitHub-variable controlled. A failed/missing provider, invalid/unavailable configured model, or missing credential never silently falls back to another provider/model.
 - CI and audit evidence are valid only for the exact material SHA observed. A material commit invalidates downstream evidence for the older SHA.
 - Implementation and audit/remediation loops are bounded. Exhausted budgets escalate to a human instead of opening an AI-on-AI loop.
 - Workers have no implicit merge authority. Merge remains repository/human policy unless an explicit versioned policy says otherwise.
@@ -23,6 +23,7 @@
 - FAST has no mandatory LLM audit.
 - STANDARD uses focused independent audit only when repository/risk policy requires it; that applicability is resolved before provider dispatch.
 - CRITICAL requires independent semantic audit and cannot be disabled by a STANDARD policy switch.
+- The audit role resolves its own provider/model GitHub Variables independently from implementation and persists the effective reviewer provider/model in candidate-bound evidence.
 - The reviewer receives candidate code/evidence and the contract, not hidden implementer reasoning.
 - Candidate context is bounded and exact-SHA: immutable diff plus prioritized full changed text files and resolvable one-hop direct relative dependencies, under deterministic file/byte/probe ceilings.
 - Issue and PR inputs are bounded projections rather than raw GitHub API objects. STANDARD allows at most 24 KiB issue body, 16 KiB PR body and 128 KiB total model bundle; CRITICAL allows 48 KiB, 32 KiB and 256 KiB.
@@ -49,5 +50,6 @@ The final `Delivery V2 release` status is release evidence. Whether GitHub nativ
 
 - Agent execution receives read capability; privileged mutations use constrained safe outputs.
 - Protected governance paths and repository/path allowlists remain enforced.
+- Provider/model names live in GitHub Variables; credentials live in Secrets.
 - Secrets are never echoed and network/tool access is never broadened automatically.
 - Retired/generated delivery snapshots, generated locks and unrelated repository inventory are not normal reviewer context.

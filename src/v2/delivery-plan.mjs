@@ -1,9 +1,20 @@
 import { DELIVERY_V2_AUDIT_SCHEMA_VERSION } from './audit-contract.mjs';
 import { resolveOperationalAuditPolicy } from './audit-policy.mjs';
 import { executionPolicyFor } from './execution-policy.mjs';
+import { resolveProviderSelectionForRisk } from './provider-policy.mjs';
 import { DELIVERY_V2_RELEASE_GATE_SCHEMA_VERSION, DELIVERY_V2_RELEASE_STATUS_NAME } from './release-gate.mjs';
 import { resolveImplementationWorkflow } from './provider-dispatch.mjs';
 import { resolveRiskProfile } from './risk-profile.mjs';
+
+function aiPolicyFromConfig(config) {
+  if (config.aiPolicy) return config.aiPolicy;
+  return Object.freeze({
+    implementerProvider: config.providers?.implementer?.provider,
+    implementerModel: config.providers?.implementer?.model,
+    auditorProvider: config.providers?.auditor?.provider,
+    auditorModel: config.providers?.auditor?.model
+  });
+}
 
 export function createDeliveryPlan(config) {
   const risk = resolveRiskProfile({
@@ -11,13 +22,14 @@ export function createDeliveryPlan(config) {
     changedPaths: config.changedPaths,
     repositoryPolicy: config.repositoryPolicy
   });
+  const providers = resolveProviderSelectionForRisk(aiPolicyFromConfig(config), risk.profile);
   const policy = executionPolicyFor(risk.profile);
   const auditPolicy = resolveOperationalAuditPolicy({
     riskProfile: risk.profile,
     repository: config.repository,
     standardAuditRequired: config.standardAuditRequired
   });
-  const workflow = resolveImplementationWorkflow(config.providers.implementer.provider, risk.profile);
+  const workflow = resolveImplementationWorkflow(providers.implementer.provider, risk.profile);
   return {
     schemaVersion: 2,
     architecture: 'github-native-v2',
@@ -25,14 +37,14 @@ export function createDeliveryPlan(config) {
     issueNumber: config.issueNumber ?? null,
     risk,
     implementation: {
-      ...config.providers.implementer,
+      ...providers.implementer,
       workflow,
       maxAttempts: policy.maxImplementationAttempts,
       maxTurns: policy.maxAiTurns,
       maxAiCredits: policy.maxAiCredits
     },
     audit: {
-      ...config.providers.auditor,
+      ...providers.auditor,
       required: auditPolicy.required,
       mode: auditPolicy.mode,
       maxAttempts: auditPolicy.maxAttempts,
@@ -58,6 +70,8 @@ export function createDeliveryPlan(config) {
     controls: {
       deterministicControlPlane: true,
       noSilentProviderFallback: true,
+      noSilentModelFallback: true,
+      githubVariablesOwnAiSelection: true,
       noAutomaticMerge: true,
       agentWriteTokenExposed: false
     }

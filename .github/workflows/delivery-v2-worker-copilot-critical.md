@@ -31,11 +31,14 @@ pre-steps:
       DISPATCH_NONCE: ${{ github.event.inputs.dispatch_nonce }}
       EXPECTED_PROVIDER: copilot
       EXPECTED_RISK: critical
+      EXPECTED_MODEL: ${{ vars.DELIVERY_CRITICAL_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.3-codex' }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       GITHUB_TOKEN: ${{ github.token }}
       DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
     run: node .github/scripts/validate-delivery-v2-worker-authorization.mjs
-engine: copilot
+engine:
+  id: copilot
+  model: ${{ vars.DELIVERY_CRITICAL_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.3-codex' }}
 max-turns: 80
 max-ai-credits: 500
 timeout-minutes: 55
