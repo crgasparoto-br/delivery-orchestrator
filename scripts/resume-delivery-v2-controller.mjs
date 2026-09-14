@@ -20,10 +20,10 @@ import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from 
 import { parseTrustedJsonEnvelope, selectTrustedMarkerComment, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-policy.mjs';
 import {
-  ciQueueDurationMs,
   createControllerDeliveryMetrics,
   createControllerObservability,
   normalizeControllerObservability,
+  recordControllerCiObservation,
   recordControllerProviderObservation,
   runDurationMs
 } from '../src/v2/controller-observability.mjs';
@@ -310,11 +310,17 @@ export function initializeResumeObservability(controller = {}, { startedAtMs = D
   if (explicitHistoryComplete === true && !hasPersistedObservability) {
     throw new Error('complete observability history requires persisted observability');
   }
+  const observability = hasPersistedObservability
+    ? normalizeControllerObservability(controller.observability)
+    : createControllerObservability({ startedAtMs });
+
+  const declaredHistoryComplete =
+    explicitHistoryComplete ?? hasPersistedObservability;
+
   return Object.freeze({
-    observability: hasPersistedObservability
-      ? normalizeControllerObservability(controller.observability)
-      : createControllerObservability({ startedAtMs }),
-    historyComplete: explicitHistoryComplete ?? hasPersistedObservability
+    observability,
+    historyComplete:
+      declaredHistoryComplete && observability.ciTimingHistoryComplete
   });
 }
 
@@ -503,6 +509,10 @@ export async function main() {
 
       latestCheck = observed.check;
       latestSourceRun = observed.sourceRun;
+      observability = recordControllerCiObservation(observability, {
+        run: latestSourceRun,
+        evidenceRef: latestSourceRun.html_url
+      });
       const ciConclusion = latestCheck.conclusion === 'success' ? latestSourceRun.conclusion : latestCheck.conclusion;
       if (ciConclusion === 'success') {
         state = applyOperationalEvent(state, { type: 'ci-result', result: { candidateSha: materialHeadSha, conclusion: 'success', evidenceRef: latestCheck.details_url ?? latestSourceRun.html_url } });
@@ -651,6 +661,10 @@ export async function main() {
     latestCheck = (await fetchCheckRuns(targetRepository, materialHeadSha, targetReadToken)).find((item) => item.name === targetPolicy.requiredStatusName);
     if (!latestCheck || latestCheck.status !== 'completed' || latestCheck.conclusion !== 'success') throw new Error('release gate requires exact-head terminal green source CI');
     latestSourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
+    observability = recordControllerCiObservation(observability, {
+      run: latestSourceRun,
+      evidenceRef: latestSourceRun.html_url
+    });
     let audit = null;
     if (state.auditRequired) {
       const auditRunId = positiveInteger(controller.auditRunId, 'persisted auditRunId');
@@ -694,7 +708,6 @@ export async function main() {
     provider,
     classifier: { version: classifier.version, fingerprint: classifier.fingerprint },
     attempts: { implementation: state.implementationAttempts, audit: state.auditAttempts },
-    finalCiRun: latestSourceRun,
     change: { files: pullRequest.changed_files ?? 0, additions: pullRequest.additions ?? 0, deletions: pullRequest.deletions ?? 0 },
     terminalReason: state.status === 'ready-for-human-merge' ? 'ready-for-human-merge' : (state.terminalReason ?? state.status),
     escalated: state.status === 'escalated',
@@ -707,9 +720,11 @@ export async function main() {
     providerCalls: observability.providerCalls,
     aiUsageByStage: observability.aiUsageByStage,
     auditDurationMs: observability.auditDurationMs,
+    ciTimingHistoryComplete: observability.ciTimingHistoryComplete,
+    ciRunIds: observability.ciRunIds,
     durationsMs: {
-      ciQueue: ciQueueDurationMs(latestSourceRun),
-      ciExecution: runDurationMs(latestSourceRun),
+      ciQueue: observability.ciQueueDurationMs,
+      ciExecution: observability.ciExecutionDurationMs,
       endToEnd: Math.max(0, Date.now() - observability.startedAtMs)
     },
     evidenceRefs: observability.evidenceRefs

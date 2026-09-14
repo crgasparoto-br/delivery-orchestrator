@@ -3,12 +3,15 @@ import test from 'node:test';
 import {
   ciQueueDurationMs,
   createControllerObservability,
+  normalizeControllerObservability,
+  recordControllerCiObservation,
   recordControllerProviderObservation,
   createControllerDeliveryMetrics,
   runDurationMs
 } from '../src/v2/controller-observability.mjs';
 
 const finalCiRun = {
+  id: 501,
   created_at: '2026-09-13T20:00:00.000Z',
   run_started_at: '2026-09-13T20:00:01.000Z',
   updated_at: '2026-09-13T20:00:03.000Z'
@@ -25,7 +28,6 @@ function metricsInput(observability, overrides = {}) {
     provider: 'codex',
     classifier: { version: 'v', fingerprint: 'f' },
     attempts: { implementation: 1, audit: 1 },
-    finalCiRun,
     change: { files: 1, additions: 1, deletions: 0 },
     terminalReason: 'ready-for-human-merge',
     nowMs: 2000,
@@ -104,7 +106,8 @@ test('unavailable workflow timing remains unknown while a real zero duration rem
 });
 
 test('final metrics preserve unknown usage instead of fabricating zero', () => {
-  const state = recordControllerProviderObservation(createControllerObservability({ startedAtMs: 1000 }), { runId: 1, stage: 'audit', usage: {}, durationMs: 50 });
+  let state = recordControllerProviderObservation(createControllerObservability({ startedAtMs: 1000 }), { runId: 1, stage: 'audit', usage: {}, durationMs: 50 });
+  state = recordControllerCiObservation(state, { run: finalCiRun, evidenceRef: 'ci:501' });
   const metrics = createControllerDeliveryMetrics(metricsInput(state));
   assert.equal(metrics.providerCalls, 1);
   assert.equal(metrics.aiUsage.turns, null);
@@ -114,9 +117,12 @@ test('final metrics preserve unknown usage instead of fabricating zero', () => {
   assert.equal(metrics.durationsMs.endToEnd, 1000);
 });
 
-test('final metrics fail closed instead of inventing zero CI timing', () => {
+test('final metrics fail closed instead of inventing incomplete CI timing', () => {
   const state = createControllerObservability({ startedAtMs: 1000 });
-  assert.throws(() => createControllerDeliveryMetrics(metricsInput(state, { finalCiRun: null })), /timing is unavailable/);
+  assert.throws(
+    () => createControllerDeliveryMetrics(metricsInput(state)),
+    /no observed workflow run/
+  );
 });
 
 test('provider invocation with unavailable usage is counted without fabricating token usage', () => {
@@ -139,4 +145,85 @@ test('provider invocation with unavailable usage is counted without fabricating 
   assert.equal(state.aiUsageByStage.implementation.outputTokens, null);
   assert.equal(state.aiUsageByStage.implementation.totalTokens, null);
   assert.deepEqual(state.evidenceRefs, ['run:77']);
+});
+
+
+test('CI timing accumulates every terminal workflow run exactly once across multiple cycles', () => {
+  let state = createControllerObservability({ startedAtMs: 1000 });
+
+  const first = {
+    id: 601,
+    created_at: '2026-09-13T20:00:00.000Z',
+    run_started_at: '2026-09-13T20:00:01.000Z',
+    updated_at: '2026-09-13T20:00:03.000Z'
+  };
+  const second = {
+    id: 602,
+    created_at: '2026-09-13T20:10:00.000Z',
+    run_started_at: '2026-09-13T20:10:02.000Z',
+    updated_at: '2026-09-13T20:10:07.000Z'
+  };
+
+  state = recordControllerCiObservation(state, {
+    run: first,
+    evidenceRef: 'ci:601'
+  });
+  state = recordControllerCiObservation(state, {
+    run: second,
+    evidenceRef: 'ci:602'
+  });
+
+  // Re-entry/re-observation of the same workflow run must be idempotent.
+  state = recordControllerCiObservation(state, {
+    run: second,
+    evidenceRef: 'ci:602-duplicate'
+  });
+
+  assert.equal(state.ciTimingHistoryComplete, true);
+  assert.deepEqual(state.ciRunIds, [601, 602]);
+  assert.equal(state.ciQueueDurationMs, 3000);
+  assert.equal(state.ciExecutionDurationMs, 7000);
+
+  const metrics = createControllerDeliveryMetrics(metricsInput(state));
+  assert.equal(metrics.durationsMs.ciQueue, 3000);
+  assert.equal(metrics.durationsMs.ciExecution, 7000);
+  assert.ok(!state.evidenceRefs.includes('ci:602-duplicate'));
+});
+
+test('legacy observability without cumulative CI fields is explicitly partial, never zero-complete', () => {
+  const current = createControllerObservability({ startedAtMs: 1000 });
+  const {
+    ciTimingHistoryComplete,
+    ciRunIds,
+    ciQueueDurationMs,
+    ciExecutionDurationMs,
+    ...legacy
+  } = current;
+
+  const normalized = normalizeControllerObservability(legacy);
+
+  assert.equal(normalized.ciTimingHistoryComplete, false);
+  assert.deepEqual(normalized.ciRunIds, []);
+  assert.equal(normalized.ciQueueDurationMs, 0);
+  assert.equal(normalized.ciExecutionDurationMs, 0);
+
+  assert.throws(
+    () => createControllerDeliveryMetrics(metricsInput(normalized)),
+    /CI timing history is incomplete/
+  );
+});
+
+test('CI observation fails closed when required timing is unavailable', () => {
+  const state = createControllerObservability({ startedAtMs: 1000 });
+
+  assert.throws(
+    () => recordControllerCiObservation(state, {
+      run: {
+        id: 603,
+        created_at: '2026-09-13T20:00:00.000Z',
+        updated_at: '2026-09-13T20:00:03.000Z'
+      }
+    }),
+    /CI timing is unavailable/
+  );
 });

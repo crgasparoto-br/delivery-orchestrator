@@ -94,3 +94,41 @@ test('resume persists failed remediation worker observation before surfacing fai
   assert.ok(dispatchedPersist < dispatchedStatus);
   assert.ok(dispatchedStatus < dispatchedThrow);
 });
+
+
+test('initial and resumed controllers accumulate every terminal CI run before state transition', () => {
+  for (const body of [initialController, resumeController]) {
+    assert.match(body, /recordControllerCiObservation/);
+
+    const sourceIndex = body.indexOf('latestSourceRun = observed.sourceRun;');
+    const recordIndex = body.indexOf(
+      'observability = recordControllerCiObservation(observability',
+      sourceIndex
+    );
+    const resultIndex = body.indexOf(
+      "type: 'ci-result'",
+      sourceIndex
+    );
+
+    assert.ok(sourceIndex >= 0);
+    assert.ok(recordIndex > sourceIndex);
+    assert.ok(resultIndex > recordIndex);
+  }
+
+  assert.doesNotMatch(
+    resumeController,
+    /ciQueue:\s*ciQueueDurationMs\(latestSourceRun\)/
+  );
+  assert.doesNotMatch(
+    resumeController,
+    /ciExecution:\s*runDurationMs\(latestSourceRun\)/
+  );
+  assert.match(
+    resumeController,
+    /ciQueue:\s*observability\.ciQueueDurationMs/
+  );
+  assert.match(
+    resumeController,
+    /ciExecution:\s*observability\.ciExecutionDurationMs/
+  );
+});

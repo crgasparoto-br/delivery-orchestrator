@@ -47,6 +47,10 @@ export function createControllerObservability({ startedAtMs = Date.now() } = {})
       implementation: normalizeGhAwUsage({}),
       audit: normalizeGhAwUsage({})
     }),
+    ciTimingHistoryComplete: true,
+    ciRunIds: Object.freeze([]),
+    ciQueueDurationMs: 0,
+    ciExecutionDurationMs: 0,
     auditDurationMs: 0,
     evidenceRefs: Object.freeze([])
   });
@@ -63,6 +67,43 @@ export function normalizeControllerObservability(raw) {
   const providerCalls = nonNegativeInteger(value.providerCalls, 'observability.providerCalls');
   if (providerCalls !== normalizedRunIds.length) throw new Error('observability.providerCalls must equal providerRunIds length');
   const stages = requiredObject(value.aiUsageByStage, 'observability.aiUsageByStage');
+
+  const hasAnyCiTimingField = [
+    'ciTimingHistoryComplete',
+    'ciRunIds',
+    'ciQueueDurationMs',
+    'ciExecutionDurationMs'
+  ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
+
+  const hasCompleteCiTimingFields =
+    Array.isArray(value.ciRunIds) &&
+    Number.isInteger(value.ciQueueDurationMs) &&
+    value.ciQueueDurationMs >= 0 &&
+    Number.isInteger(value.ciExecutionDurationMs) &&
+    value.ciExecutionDurationMs >= 0;
+
+  if (value.ciTimingHistoryComplete != null &&
+      typeof value.ciTimingHistoryComplete !== 'boolean') {
+    throw new Error('observability.ciTimingHistoryComplete must be boolean when present');
+  }
+
+  if (hasAnyCiTimingField && !hasCompleteCiTimingFields) {
+    throw new Error('controller observability CI timing fields must be complete when present');
+  }
+
+  const ciTimingHistoryComplete =
+    value.ciTimingHistoryComplete == null
+      ? hasCompleteCiTimingFields
+      : value.ciTimingHistoryComplete;
+
+  if (ciTimingHistoryComplete && !hasCompleteCiTimingFields) {
+    throw new Error('complete CI timing history requires persisted CI timing fields');
+  }
+
+  const ciRunIds = hasCompleteCiTimingFields
+    ? normalizeRunIds(value.ciRunIds, 'observability.ciRunIds')
+    : [];
+
   return Object.freeze({
     schemaVersion: 1,
     startedAtMs: nonNegativeInteger(value.startedAtMs, 'observability.startedAtMs'),
@@ -73,6 +114,14 @@ export function normalizeControllerObservability(raw) {
       implementation: normalizeGhAwUsage(stages.implementation ?? {}),
       audit: normalizeGhAwUsage(stages.audit ?? {})
     }),
+    ciTimingHistoryComplete,
+    ciRunIds: Object.freeze(ciRunIds),
+    ciQueueDurationMs: hasCompleteCiTimingFields
+      ? nonNegativeInteger(value.ciQueueDurationMs, 'observability.ciQueueDurationMs')
+      : 0,
+    ciExecutionDurationMs: hasCompleteCiTimingFields
+      ? nonNegativeInteger(value.ciExecutionDurationMs, 'observability.ciExecutionDurationMs')
+      : 0,
     auditDurationMs: nonNegativeInteger(value.auditDurationMs, 'observability.auditDurationMs'),
     evidenceRefs: normalizeRefs(value.evidenceRefs)
   });
@@ -115,6 +164,33 @@ export function recordControllerProviderObservation(raw, { runId, stage, usage =
   });
 }
 
+export function recordControllerCiObservation(raw, { run, evidenceRef = null } = {}) {
+  const current = normalizeControllerObservability(raw);
+  const workflowRun = requiredObject(run, 'CI workflow run');
+  const runId = positiveInteger(workflowRun.id, 'CI workflow run id');
+
+  if (current.ciRunIds.includes(runId)) return current;
+
+  const queueDuration = ciQueueDurationMs(workflowRun);
+  const executionDuration = runDurationMs(workflowRun);
+
+  if (queueDuration == null || executionDuration == null) {
+    throw new Error(`CI timing is unavailable for workflow run ${runId}; refusing to fabricate duration`);
+  }
+
+  const refs = evidenceRef
+    ? [...current.evidenceRefs, requiredString(evidenceRef, 'evidenceRef')]
+    : [...current.evidenceRefs];
+
+  return Object.freeze({
+    ...current,
+    ciRunIds: Object.freeze([...current.ciRunIds, runId]),
+    ciQueueDurationMs: current.ciQueueDurationMs + queueDuration,
+    ciExecutionDurationMs: current.ciExecutionDurationMs + executionDuration,
+    evidenceRefs: normalizeRefs(refs)
+  });
+}
+
 export function runDurationMs(run) {
   if (!run) return null;
   const started = Date.parse(run.run_started_at);
@@ -141,7 +217,6 @@ export function createControllerDeliveryMetrics({
   provider,
   classifier,
   attempts,
-  finalCiRun,
   change,
   terminalReason,
   escalated = false,
@@ -153,9 +228,12 @@ export function createControllerDeliveryMetrics({
     observed.aiUsageByStage.implementation,
     observed.aiUsageByStage.audit
   ]);
-  const ciQueue = ciQueueDurationMs(finalCiRun);
-  const ciExecution = runDurationMs(finalCiRun);
-  if (ciQueue == null || ciExecution == null) throw new Error('final CI timing is unavailable; refusing to fabricate zero duration');
+  if (!observed.ciTimingHistoryComplete) {
+    throw new Error('CI timing history is incomplete; refusing to publish complete delivery metrics');
+  }
+  if (observed.ciRunIds.length === 0) {
+    throw new Error('CI timing history has no observed workflow run');
+  }
   return createDeliveryMetrics({
     repository,
     issueNumber,
@@ -170,8 +248,8 @@ export function createControllerDeliveryMetrics({
     aiUsageByStage: observed.aiUsageByStage,
     providerCost: { available: false, amount: null, currency: null },
     durationsMs: {
-      ciQueue,
-      ciExecution,
+      ciQueue: observed.ciQueueDurationMs,
+      ciExecution: observed.ciExecutionDurationMs,
       audit: observed.auditDurationMs,
       endToEnd: Math.max(0, nonNegativeInteger(nowMs, 'nowMs') - observed.startedAtMs)
     },

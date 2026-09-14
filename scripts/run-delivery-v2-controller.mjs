@@ -23,6 +23,7 @@ import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-pol
 import {
   createControllerDeliveryMetrics,
   createControllerObservability,
+  recordControllerCiObservation,
   recordControllerProviderObservation,
   runDurationMs
 } from '../src/v2/controller-observability.mjs';
@@ -427,6 +428,10 @@ export async function main() {
 
     latestCheck = observed.check;
     latestSourceRun = observed.sourceRun;
+    observability = recordControllerCiObservation(observability, {
+      run: latestSourceRun,
+      evidenceRef: latestSourceRun.html_url
+    });
     const ciConclusion = latestCheck.conclusion === 'success' ? latestSourceRun.conclusion : latestCheck.conclusion;
     if (ciConclusion !== 'success') {
       const failureEvidence = await collectCiFailureEvidence({ repository: targetRepository, check: latestCheck, token: targetReadToken });
@@ -649,7 +654,6 @@ export async function main() {
     provider,
     classifier: { version: classifier.version, fingerprint: classifier.fingerprint },
     attempts: { implementation: state.implementationAttempts, audit: state.auditAttempts },
-    finalCiRun: latestSourceRun,
     change: { files: pullRequest.changed_files ?? 0, additions: pullRequest.additions ?? 0, deletions: pullRequest.deletions ?? 0 },
     terminalReason: state.status === 'ready-for-human-merge' ? 'ready-for-human-merge' : (state.terminalReason ?? state.status),
     escalated: state.status === 'escalated',
