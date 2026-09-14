@@ -10,6 +10,7 @@ on:
       remediation_context: {description: Controller-provided CI/audit findings for bounded remediation, required: false, default: '', type: string}
       dispatch_nonce: {description: Deterministic controller dispatch correlation nonce, required: true, type: string}
       controller_run_id: {description: Authoritative Delivery V2 controller workflow run id, required: true, type: string}
+      implementer_model: {description: Exact controller-resolved implementation model, required: true, type: string}
 run-name: "Delivery V2 worker ${{ github.event.inputs.dispatch_nonce }}"
 permissions:
   actions: read
@@ -30,13 +31,14 @@ pre-steps:
       DISPATCH_NONCE: ${{ github.event.inputs.dispatch_nonce }}
       EXPECTED_PROVIDER: codex
       EXPECTED_RISK: standard
+      EXPECTED_MODEL: ${{ github.event.inputs.implementer_model }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       GITHUB_TOKEN: ${{ github.token }}
       DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
     run: node .github/scripts/validate-delivery-v2-worker-authorization.mjs
 engine:
   id: codex
-  model: ${{ vars.DELIVERY_STANDARD_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.4' }}
+  model: ${{ github.event.inputs.implementer_model }}
 max-turns: 40
 max-ai-credits: 250
 timeout-minutes: 35
