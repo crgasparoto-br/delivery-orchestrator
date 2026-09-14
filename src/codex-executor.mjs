@@ -1,6 +1,7 @@
 import { runRoleTask, validateRoleUsers } from './role-runtime.mjs';
+import { resolveAiModel, resolveAiProvider } from './v2/provider-policy.mjs';
 
-const AUTH_ENV_KEYS = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN'];
+const AUTH_ENV_KEYS = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'ANTHROPIC_API_KEY', 'COPILOT_GITHUB_TOKEN'];
 const ORCHESTRATOR_ONLY_ENV_KEYS = [
   'DELIVERY_GITHUB_WRITE_TOKEN',
   'DELIVERY_GITHUB_READ_TOKEN',
@@ -39,12 +40,28 @@ export function buildRoleEnvironment({ baseEnv, extraEnv = {}, codexHome, github
 }
 
 export class CodexExecutor {
-  constructor({ apiKey, authMode = 'chatgpt', model = 'gpt-5.6-sol', implementerUser, auditorUser, runRoleTaskFn = runRoleTask }) {
-    buildCodexClientOptions({ authMode, apiKey, env: {} });
+  constructor({
+    apiKey,
+    authMode = 'chatgpt',
+    model = 'gpt-5.6-sol',
+    provider = process.env.DELIVERY_AUDITOR_PROVIDER || 'codex',
+    anthropicApiKey = process.env.ANTHROPIC_API_KEY,
+    copilotToken = process.env.COPILOT_GITHUB_TOKEN,
+    implementerUser,
+    auditorUser,
+    runRoleTaskFn = runRoleTask
+  }) {
+    this.provider = resolveAiProvider(provider);
+    const configuredModel = String(process.env.DELIVERY_AUDITOR_MODEL_RESOLVED || '').trim();
+    this.model = resolveAiModel(configuredModel || (this.provider === 'codex' ? model : null), { provider: this.provider, role: 'auditor' });
+    if (this.provider === 'codex') buildCodexClientOptions({ authMode, apiKey, env: {} });
+    if (this.provider === 'claude' && !anthropicApiKey) throw new Error('ANTHROPIC_API_KEY is required when DELIVERY_AUDITOR_PROVIDER=claude');
+    if (this.provider === 'copilot' && !copilotToken) throw new Error('COPILOT_GITHUB_TOKEN is required when DELIVERY_AUDITOR_PROVIDER=copilot');
     validateRoleUsers(implementerUser, auditorUser);
     this.apiKey = apiKey;
+    this.anthropicApiKey = anthropicApiKey;
+    this.copilotToken = copilotToken;
     this.authMode = authMode;
-    this.model = model;
     this.roleUsers = { implementer: implementerUser, auditor: auditorUser };
     this.runRoleTask = runRoleTaskFn;
   }
@@ -52,9 +69,17 @@ export class CodexExecutor {
   async runFresh({ workingDirectory, codexHome, prompt, outputSchema, role, githubToken = '', sandboxMode, networkAccessEnabled = true, extraEnv = {} }) {
     if (!ROLES.has(role)) throw new Error(`Unsupported delivery role: ${role}`);
     const env = buildRoleEnvironment({ baseEnv: process.env, extraEnv, codexHome, githubToken, role });
-    return this.runRoleTask(this.roleUsers[role], 'run-codex', {
+    const task = {
+      codex: 'run-codex',
+      claude: 'run-anthropic',
+      copilot: 'run-copilot'
+    }[this.provider];
+    return this.runRoleTask(this.roleUsers[role], task, {
       authMode: this.authMode,
       apiKey: this.apiKey,
+      anthropicApiKey: this.anthropicApiKey,
+      copilotToken: this.copilotToken,
+      provider: this.provider,
       model: this.model,
       workingDirectory,
       codexHome,
