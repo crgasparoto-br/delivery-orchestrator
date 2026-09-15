@@ -28,9 +28,11 @@ jobs:
       - name: Focused tests
         run: node --test test/v2-operational-controller.test.mjs test/v2-technical-hygiene.test.mjs test/v2-technical-hygiene-release.test.mjs test/v2-gh-aw-hygiene-artifact.test.mjs
       - name: Install pinned gh-aw
-        run: npm install --no-save @github/gh-aw@0.88.7
+        uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
+        with:
+          version: v0.88.7
       - name: Compile worker locks officially
-        run: npx gh aw compile --strict
+        run: gh aw compile --strict
       - name: Full V2 verification
         run: npm run verify:v2
       - name: Build exact validated commit object
