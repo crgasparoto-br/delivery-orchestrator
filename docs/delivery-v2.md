@@ -37,6 +37,8 @@ A missing initial changed-path set has two separate meanings:
 
 The dispatch controller first uses supplied paths or deterministic issue path evidence. When it cannot establish any concrete path, it performs **zero provider calls**, keeps security fail-closed, records `needs-scope`, and asks for `changed_paths`. Once concrete scope exists, the normal material budget is selected from observed risk.
 
+When `changed_paths` is supplied explicitly, it is also a **hard material-output boundary**, not only a classification hint. The initial reservation persists a trusted binding between repository, issue number, SHA-256 of the issue title/body, and the normalized explicit paths. Before any `create-pull-request` or remediation push safe output can run, the `gh-aw` threat-detection job validates the staged `aw.patch` against that binding. Any changed path outside the explicit envelope, or any intervening mutation of the bound issue contract, fails closed before write-capable safe outputs execute. Deliveries without an explicit path envelope still bind the issue contract; legacy remediation without a stored binding is conservatively limited to paths already present in the managed PR.
+
 Baseline ceilings remain:
 
 - FAST — 20 turns / 100 credits, max 2 implementation attempts;
@@ -47,7 +49,7 @@ Baseline ceilings remain:
 
 All compiled provider/risk workers have an initial mode and a remediation mode. Initial mode creates one managed `[delivery-v2] ` PR. Remediation mode receives the controller's structured CI/audit failure packet, works on the exact current PR head, and may write only through constrained `push-to-pull-request-branch` safe output.
 
-A remediation worker cannot create a replacement PR. FAST applies the same file allowlist to both create-PR and remediation-push outputs. Protected-file policy, repository allowlists, resolved provider/model policy and write-token isolation remain unchanged.
+A remediation worker cannot create a replacement PR. FAST applies the same file allowlist to both create-PR and remediation-push outputs. The trusted scope detector runs for Copilot, Codex and Claude at FAST, STANDARD and CRITICAL before either safe-output write path. Protected-file policy, repository allowlists, resolved provider/model policy and write-token isolation remain unchanged.
 
 ## Adaptive CI and exact-head release
 
