@@ -15,7 +15,9 @@ test('workflow dispatch correlation requires exact nonce title and trusted ref',
 test('CI remediation requires explicit repository-cause evidence and fails closed on infrastructure or ambiguity', () => {
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'tests', failedStepNames: ['unit tests'], log: 'AssertionError: expected true to equal false' }] }), 'actionable');
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'tests', failedStepNames: ['unit tests'], log: 'runner lost communication; connection reset' }] }), 'external');
-  assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'browser tests', failedStepNames: ['pnpm test'], log: 'Error: Could not find Chrome (ver. 127.0.6533.88). cache path is /home/runner/.cache/puppeteer' }] }), 'external');
+  assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'browser tests', failedStepNames: ['pnpm test'], log: 'Error: Could not find Chrome (ver. 127.0.6533.88). cache path is /home/runner/.cache/puppeteer' }] }), 'actionable');
+  assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'browser tests', failedStepNames: ['pnpm test'], log: 'Browser executable not found in Puppeteer cache' }] }), 'actionable');
+  assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'browser tests', failedStepNames: ['pnpm test'], log: 'Could not find Chrome; runner offline while provisioning browser' }] }), 'external');
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'unknown', failedStepNames: [], log: 'Process completed with exit code 1' }] }), 'external');
   for (const conclusion of ['cancelled', 'timed_out', 'startup_failure', 'stale', 'neutral', 'skipped']) assert.equal(ciFailureClassForEvidence({ conclusion, failedJobs: [] }), 'external');
 });
