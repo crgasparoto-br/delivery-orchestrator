@@ -72,7 +72,13 @@ function pathsFromNumstatBuffer(buffer) {
 }
 
 export async function changedPathsFromPatchFile(patchPath) {
-  const patch = await readFile(patchPath, 'utf8');
+  let patch;
+  try {
+    patch = await readFile(patchPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error('candidate patch is missing; worker produced no material patch to authorize');
+    throw error;
+  }
   if (!patch.trim()) throw new Error('candidate patch is empty');
   let numstat;
   try {
