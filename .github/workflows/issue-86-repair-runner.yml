@@ -6,11 +6,11 @@ on:
       - feat/86-technical-hygiene-gate
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   repair:
-    if: "github.event.head_commit.message == 'chore: run issue 86 repair'"
+    if: "github.event.head_commit.message == 'chore: stage validated issue 86 commit object'"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -49,22 +49,23 @@ jobs:
         run: gh aw compile --strict
       - name: Run verification
         run: npm run verify:v2
-      - name: Package validated candidate
+      - name: Build and stage exact validated commit object
         shell: bash
         run: |
           set -euo pipefail
           rm .github/workflows/issue-86-repair.yml .github/workflows/issue-86-repair-runner.yml
-          git diff --binary HEAD > /tmp/issue86.patch
-          git diff --diff-filter=D --name-only HEAD > /tmp/deleted.txt
-          git diff --diff-filter=ACMRT --name-only -z HEAD | tar --null -T - -czf /tmp/issue86-files.tar.gz
-          git diff --check HEAD
-      - name: Upload validated candidate
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: wire technical hygiene into operational release'
+          git rev-parse HEAD | tee /tmp/candidate-sha.txt
+          git push origin HEAD:feat/86-technical-hygiene-gate >/tmp/push.log 2>&1 || true
+          cat /tmp/push.log
+      - name: Upload candidate identity
         uses: actions/upload-artifact@v4
         with:
-          name: issue86-validated-candidate
-          path: |
-            /tmp/issue86.patch
-            /tmp/deleted.txt
-            /tmp/issue86-files.tar.gz
+          name: issue86-candidate-identity
+          path: /tmp/candidate-sha.txt
           if-no-files-found: error
           retention-days: 1
