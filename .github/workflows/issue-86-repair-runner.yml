@@ -32,6 +32,13 @@ jobs:
             capture { sub(/^          /, ""); print }
           ' .github/workflows/issue-86-repair.yml > /tmp/issue-86-repair.sh
           test -s /tmp/issue-86-repair.sh
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '/tmp/issue-86-repair.sh';
+          let source = fs.readFileSync(file, 'utf8');
+          source = source.replace("text: `done\\\\nTECHNICAL_HYGIENE_JSON=${JSON.stringify(payload)}`", "text: 'done\\\\nTECHNICAL_HYGIENE_JSON=' + JSON.stringify(payload)");
+          fs.writeFileSync(file, source);
+          NODE
           bash /tmp/issue-86-repair.sh
       - name: Install pinned gh-aw
         uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
