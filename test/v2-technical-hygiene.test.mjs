@@ -25,3 +25,6 @@ test('missing complexity tool alone does not create UNKNOWN',()=>assert.equal(ev
 test('material SHA is part of the immutable result identity',()=>assert.equal(evaluateTechnicalHygiene(base()).materialSha,HEAD));
 test('local policy cannot weaken central invariants',()=>assert.throws(()=>evaluateTechnicalHygiene(base({localPolicy:{unknownMaterialAs:'warning'}})),/cannot override central hygiene invariant/));
 test('material semantic claim without evidence becomes UNKNOWN',()=>assert.equal(evaluateTechnicalHygiene(base({semanticJudgments:[{claim:'shared owner',decision:'REUSE_EXISTING',material:true,evidence:[]}]})).result,'UNKNOWN'));
+
+
+test('compact structural register preserves created files and symbols',()=>{const r=evaluateTechnicalHygiene(base({createdFiles:['src/new-helper.mjs'],reuseDiscovery:[{symbol:'NewHelper',decision:'CREATE_NEW',material:true,evidence:ev('new'),justificationEvidence:ev('owner')}]}));assert.deepEqual(r.createdFiles,['src/new-helper.mjs']);assert.deepEqual(r.createdSymbols,['NewHelper'])});

@@ -19,6 +19,7 @@ import { evaluateReleaseGate } from './release-gate.mjs';
 import { normalizeTechnicalHygieneResult } from './technical-hygiene.mjs';
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
+const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
 const AI_POLICY_ENV_KEYS = Object.freeze([
   'DELIVERY_AI_PROVIDER',
   'DELIVERY_AI_MODEL',
@@ -121,6 +122,22 @@ function bindPlanAiIdentity(state, plan) {
   });
 }
 
+function promoteOperationalRisk(state, plan) {
+  const value = requiredObject(plan, 'plan');
+  const profile = requiredString(value.risk?.profile, 'plan.risk.profile');
+  if (!(profile in RISK_RANK)) throw new Error(`unsupported promoted risk profile: ${profile}`);
+  if (RISK_RANK[profile] < RISK_RANK[state.riskProfile]) throw new Error('technical hygiene promotion cannot downgrade risk');
+  if (RISK_RANK[profile] === RISK_RANK[state.riskProfile]) return state;
+  const policy = executionPolicyFor(profile);
+  let next = Object.freeze({
+    ...state,
+    riskProfile: profile,
+    limits: Object.freeze({ maxImplementationAttempts: policy.maxImplementationAttempts, maxAuditRemediationAttempts: policy.maxAuditAttempts })
+  });
+  next = applyAuditPolicy(next, { repository: value.repository, audit: requiredObject(value.audit, 'plan.audit') });
+  return bindPlanAiIdentity(next, value);
+}
+
 export function createOperationalDelivery({ plan, materialHeadSha } = {}) {
   const value = requiredObject(plan, 'plan');
   if (value.architecture !== 'github-native-v2') throw new Error('Expected github-native-v2 delivery plan');
@@ -158,6 +175,7 @@ export function applyOperationalEvent(state, event) {
   const value = requiredObject(event, 'event');
   switch (requiredString(value.type, 'event.type')) {
     case 'classify': return classifyDelivery(state, { riskProfile: value.riskProfile ?? state.riskProfile });
+    case 'promote-risk': return promoteOperationalRisk(state, requiredObject(value.plan, 'event.plan'));
     case 'start-implementation': return startImplementation(state);
     case 'publish-material': return Object.freeze({ ...publishMaterial(state, { materialHeadSha: value.materialHeadSha }), technicalHygiene: null });
     case 'technical-hygiene-result': {

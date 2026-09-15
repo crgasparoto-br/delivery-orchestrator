@@ -119,6 +119,7 @@ export function evaluateTechnicalHygiene(rawInput) {
   const baselineSha = sha(input.baselineSha, 'baselineSha');
   const materialSha = sha(input.materialSha, 'materialSha');
   const previousMaterialSha = input.previousMaterialSha == null ? null : sha(input.previousMaterialSha, 'previousMaterialSha');
+  const createdFiles = evidence(input.createdFiles ?? [], 'createdFiles');
   normalizeLocalPolicy(input.localPolicy);
 
   const reuseDiscovery = (input.reuseDiscovery ?? []).map(normalizeReuse);
@@ -193,6 +194,7 @@ export function evaluateTechnicalHygiene(rawInput) {
     reusedSymbols: Object.freeze(reuseDiscovery.filter((entry) => entry.decision === 'REUSE_EXISTING').map((entry) => entry.symbol)),
     extendedSymbols: Object.freeze(reuseDiscovery.filter((entry) => entry.decision === 'EXTEND_EXISTING').map((entry) => entry.symbol)),
     createdSymbols: Object.freeze(reuseDiscovery.filter((entry) => entry.decision === 'CREATE_NEW').map((entry) => entry.symbol)),
+    createdFiles,
     structuralFindings: Object.freeze(findings),
     missingEvidence: Object.freeze(missingEvidence),
     overriddenSemanticClaims: Object.freeze(overriddenSemanticClaims),
@@ -216,6 +218,11 @@ export function normalizeTechnicalHygieneResult(rawResult) {
     result,
     effectiveProfile,
     promotionRequired: value.promotionRequired === true,
+    reusedSymbols: evidence(value.reusedSymbols ?? [], 'technical hygiene result.reusedSymbols'),
+    extendedSymbols: evidence(value.extendedSymbols ?? [], 'technical hygiene result.extendedSymbols'),
+    createdSymbols: evidence(value.createdSymbols ?? [], 'technical hygiene result.createdSymbols'),
+    createdFiles: evidence(value.createdFiles ?? [], 'technical hygiene result.createdFiles'),
+    structuralFindings: Object.freeze((value.structuralFindings ?? []).map((entry, index) => normalizeFinding(entry, index, 'technical hygiene result.structuralFindings'))),
     missingEvidence: Object.freeze((value.missingEvidence ?? []).map((entry, index) => {
       const item = object(entry, `technical hygiene result.missingEvidence[${index}]`);
       return missing(string(item.code, `technical hygiene result.missingEvidence[${index}].code`), string(item.detail, `technical hygiene result.missingEvidence[${index}].detail`), item.material !== false);
