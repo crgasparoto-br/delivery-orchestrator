@@ -1,0 +1,15 @@
+[Unit]
+Description=Delivery Orchestrator branch hygiene
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/delivery-orchestrator
+EnvironmentFile=/etc/delivery-orchestrator/hygiene.env
+ExecStart=/usr/bin/flock -n /run/lock/delivery-orchestrator-branch-hygiene.lock /usr/bin/node /opt/delivery-orchestrator/src/cli.mjs hygiene --older-than 7d --apply --lock-file /run/lock/delivery-orchestrator-branch-hygiene-process.lock
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/delivery-orchestrator /run/lock

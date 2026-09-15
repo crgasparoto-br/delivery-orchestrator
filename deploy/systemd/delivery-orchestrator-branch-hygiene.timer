@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Delivery Orchestrator branch hygiene
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+Unit=delivery-orchestrator-branch-hygiene.service
+
+[Install]
+WantedBy=timers.target
