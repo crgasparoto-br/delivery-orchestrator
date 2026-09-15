@@ -1,4 +1,6 @@
 ---
+imports:
+  - shared/delivery-v2-worker-scope-guard.md
 on:
   workflow_dispatch:
     inputs:
