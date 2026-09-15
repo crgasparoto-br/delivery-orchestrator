@@ -6,6 +6,7 @@ import { createDeliveryPlan } from './v2/delivery-plan.mjs';
 import { createDispatchDecision } from './v2/dispatch-policy.mjs';
 import { resumePersistentDelivery } from './v2/persistent-state.mjs';
 import { loadDeliveryMetricsStore, summarizeDeliveryMetrics } from './v2/metrics.mjs';
+import { loadRepositoryRiskPolicy } from './v2/repository-risk-policy-loader.mjs';
 
 function parseArgs(argv) {
   const out = { changedPaths: [] };
@@ -24,6 +25,13 @@ function parseArgs(argv) {
     else if (argv[i] === '--path') out.changedPaths.push(argv[++i]);
   }
   return out;
+}
+
+async function withConfiguredRiskPolicy(args) {
+  if (process.env.DELIVERY_RISK_POLICY_JSON) return args;
+  const repository = args.repository ?? process.env.TARGET_REPOSITORY;
+  if (!repository) return args;
+  return { ...args, riskPolicyJson: JSON.stringify(await loadRepositoryRiskPolicy(repository)) };
 }
 
 async function validate() {
@@ -67,10 +75,12 @@ async function validate() {
 const [command = 'plan-v2', ...rest] = process.argv.slice(2);
 if (command === 'validate') await validate();
 else if (command === 'plan-v2') {
-  const plan = createDeliveryPlan(loadV2Config(parseArgs(rest)));
+  const args = await withConfiguredRiskPolicy(parseArgs(rest));
+  const plan = createDeliveryPlan(loadV2Config(args));
   console.log(JSON.stringify(plan, null, 2));
 } else if (command === 'dispatch-v2') {
-  const plan = createDeliveryPlan(loadV2Config(parseArgs(rest)));
+  const args = await withConfiguredRiskPolicy(parseArgs(rest));
+  const plan = createDeliveryPlan(loadV2Config(args));
   console.log(JSON.stringify({ plan, decision: createDispatchDecision(plan) }, null, 2));
 } else if (command === 'resume-v2') {
   const args = parseArgs(rest);
