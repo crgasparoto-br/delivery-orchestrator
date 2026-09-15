@@ -79,11 +79,22 @@ test('correlated worker run must be unique and current', () => {
   assert.throws(() => validateUniqueCorrelatedWorkerRun([workerRun, { ...workerRun, id: 702 }], { currentRunId: 701, dispatchNonce: 'nonce-1', defaultBranch: 'main' }), /exactly one correlated run/);
 });
 
-test('all provider/risk worker sources delegate authorization to one deterministic guard', async () => {
+test('all provider/risk worker sources bootstrap and delegate authorization to one deterministic guard', async () => {
   for (const provider of ['copilot', 'codex', 'claude']) {
     for (const risk of ['fast', 'standard', 'critical']) {
       const body = await readFile(`.github/workflows/delivery-v2-worker-${provider}-${risk}.md`, 'utf8');
-      assert.match(body, /node \.github\/scripts\/validate-delivery-v2-worker-authorization\.mjs/);
+      const checkoutIndex = body.indexOf('- name: Checkout trusted authorization guard');
+      const validationIndex = body.indexOf('- name: Validate controller-selected worker authorization');
+      assert.notEqual(checkoutIndex, -1, `${provider}/${risk} must checkout the trusted authorization guard`);
+      assert.notEqual(validationIndex, -1, `${provider}/${risk} must validate worker authorization`);
+      assert.ok(checkoutIndex < validationIndex, `${provider}/${risk} must checkout the guard before validation`);
+      assert.match(body, /repository: \$\{\{ github\.repository \}\}/);
+      assert.match(body, /ref: \$\{\{ github\.sha \}\}/);
+      assert.match(body, /path: \.delivery-v2-control-plane/);
+      assert.match(body, /sparse-checkout: \.github\/scripts\/validate-delivery-v2-worker-authorization\.mjs/);
+      assert.match(body, /persist-credentials: false/);
+      assert.match(body, /trap 'rm -rf \.delivery-v2-control-plane' EXIT/);
+      assert.match(body, /node \.delivery-v2-control-plane\/\.github\/scripts\/validate-delivery-v2-worker-authorization\.mjs/);
       assert.match(body, new RegExp(`EXPECTED_PROVIDER: ${provider}`));
       assert.match(body, new RegExp(`EXPECTED_RISK: ${risk}`));
       assert.match(body, /TARGET_PR: \$\{\{ github\.event\.inputs\.target_pr \}\}/);

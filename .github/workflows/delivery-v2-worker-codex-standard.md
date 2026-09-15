@@ -18,6 +18,16 @@ permissions:
 env:
   GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "${{ github.event.inputs.target_pr == '' && 'true' || 'false' }}"
 pre-steps:
+  - name: Checkout trusted authorization guard
+    uses: actions/checkout@v7
+    with:
+      repository: ${{ github.repository }}
+      ref: ${{ github.sha }}
+      path: .delivery-v2-control-plane
+      sparse-checkout: .github/scripts/validate-delivery-v2-worker-authorization.mjs
+      sparse-checkout-cone-mode: false
+      fetch-depth: 1
+      persist-credentials: false
   - name: Validate controller-selected worker authorization
     shell: bash
     env:
@@ -34,7 +44,10 @@ pre-steps:
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       GITHUB_TOKEN: ${{ github.token }}
       DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
-    run: node .github/scripts/validate-delivery-v2-worker-authorization.mjs
+    run: |
+      set -euo pipefail
+      trap 'rm -rf .delivery-v2-control-plane' EXIT
+      node .delivery-v2-control-plane/.github/scripts/validate-delivery-v2-worker-authorization.mjs
 engine:
   id: codex
   model: ${{ vars.DELIVERY_STANDARD_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.4' }}
