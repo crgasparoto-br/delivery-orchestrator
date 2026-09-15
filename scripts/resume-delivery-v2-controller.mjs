@@ -30,6 +30,7 @@ import {
   runDurationMs
 } from '../src/v2/controller-observability.mjs';
 import { downloadGhAwUsageArtifact } from '../src/v2/gh-aw-usage-artifact.mjs';
+import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
@@ -269,6 +270,35 @@ async function auditResultFromArtifact({ orchestratorRepository, orchestratorRef
 
 function higherRisk(next, current) { return RISK_RANK[next] > RISK_RANK[current]; }
 
+async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber, materialHeadSha, baselineSha, previousMaterialSha = null, actionsToken, targetReadToken }) {
+  if (!hygiene?.promotionRequired) return { hygiene, state, plan, promotionRun: null };
+  const promotedPlan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk: 'standard', changedPaths, repositoryPolicy });
+  let promotedState = applyOperationalEvent(state, { type: 'promote-risk', plan: promotedPlan });
+  const dispatchNonce = createDispatchNonce();
+  let promotionRun = await dispatchWorker({
+    orchestratorRepository,
+    orchestratorRef,
+    plan: promotedPlan,
+    controllerRunId,
+    targetRepository,
+    issueNumber,
+    baseBranch,
+    targetRef: materialHeadSha,
+    targetPr: pullRequestNumber,
+    remediationContext: JSON.stringify({ kind: 'technical-hygiene-evidence-promotion', evidenceOnly: true, materialSha: materialHeadSha, missingEvidence: hygiene.missingEvidence }),
+    token: actionsToken,
+    dispatchNonce
+  });
+  promotionRun = await waitWorkflowRun(orchestratorRepository, promotionRun.id, actionsToken);
+  if (promotionRun.conclusion !== 'success') throw new Error(`technical hygiene STANDARD promotion worker failed: ${promotionRun.html_url}`);
+  const currentPr = await fetchPullRequest(targetRepository, pullRequestNumber, targetReadToken);
+  if (String(currentPr.head.sha).toLowerCase() !== materialHeadSha.toLowerCase()) throw new Error('technical hygiene evidence-only promotion mutated the material head');
+  const reevaluated = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: promotionRun.id, token: actionsToken, baselineSha, materialSha: materialHeadSha, previousMaterialSha, profile: promotedState.riskProfile });
+  promotedState = applyOperationalEvent(promotedState, { type: 'technical-hygiene-result', result: reevaluated });
+  if (!['PASS', 'PASS_WITH_DEBT'].includes(reevaluated.result)) throw new Error(`technical hygiene remained ${reevaluated.result} after ${promotedState.riskProfile.toUpperCase()} re-evaluation`);
+  return { hygiene: reevaluated, state: promotedState, plan: promotedPlan, promotionRun };
+}
+
 export function controllerMetadataForNewMaterial({ controller = {}, workerRunId, plan } = {}) {
   const resolvedRunId = Number(workerRunId);
   if (!Number.isInteger(resolvedRunId) || resolvedRunId < 1) throw new Error('workerRunId must identify the material-producing worker run');
@@ -390,6 +420,9 @@ export async function main() {
       remoteHeadSha: materialHeadSha
     });
     state = operationalStateFromPersistent(reconciled.state);
+    if (!reconciled.staleStateDetected && stateEnvelope.controller?.technicalHygiene) {
+      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: stateEnvelope.controller.technicalHygiene });
+    }
     if (reconciled.staleStateDetected || ['queued', 'classified', 'ci-failed-remediable'].includes(state.status)) {
       state = rebuildCiPendingState({ plan, materialHeadSha, previousState: state });
       const materialIdentityStale = String(stateEnvelope.persistent.materialHeadSha).toLowerCase() !== materialHeadSha;
@@ -400,6 +433,7 @@ export async function main() {
         auditRunId: null,
         auditDispatchNonce: null,
         auditRequestFingerprint: null,
+        technicalHygiene: materialIdentityStale ? null : controller.technicalHygiene ?? null,
         ...(materialIdentityStale ? { materialWorkerRunId: null, materialWorkerIdentity: null, materialWorkerProvider: null } : {})
       };
     }
@@ -484,9 +518,18 @@ export async function main() {
       plan = nextPlan;
       classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
+      let technicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: run.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });
+      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: technicalHygiene });
+      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken });
+      if (hygienePromotion.promotionRun) {
+        await recordWorkerUsage(hygienePromotion.promotionRun);
+        state = hygienePromotion.state;
+        plan = hygienePromotion.plan;
+        technicalHygiene = hygienePromotion.hygiene;
+      }
       latestCheck = null;
       latestSourceRun = null;
-      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: run.id, plan }) });
+      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: run.id, plan }), technicalHygiene: state.technicalHygiene });
       continue;
     }
 
@@ -508,7 +551,7 @@ export async function main() {
         state = rebuildCiPendingState({ plan, materialHeadSha, previousState: state });
         latestCheck = null;
         latestSourceRun = null;
-        await persist({ nextAction: 'observe-ci', reason: 'reconciled-head-drift' });
+        await persist({ nextAction: 'observe-ci', reason: 'reconciled-head-drift', technicalHygiene: null });
         continue;
       }
 
@@ -597,9 +640,18 @@ export async function main() {
       plan = nextPlan;
       classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
+      let technicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });
+      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: technicalHygiene });
+      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken });
+      if (hygienePromotion.promotionRun) {
+        await recordWorkerUsage(hygienePromotion.promotionRun);
+        state = hygienePromotion.state;
+        plan = hygienePromotion.plan;
+        technicalHygiene = hygienePromotion.hygiene;
+      }
       latestCheck = null;
       latestSourceRun = null;
-      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: worker.id, plan }) });
+      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: worker.id, plan }), technicalHygiene: state.technicalHygiene });
       continue;
     }
 

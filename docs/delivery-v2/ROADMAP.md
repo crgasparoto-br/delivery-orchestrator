@@ -33,8 +33,9 @@ For `requiredForV2Default` requirements, the manifest may additionally define `m
 | F | DV2-014 | V1 and nested-Skill retirement | validated |
 | G | DV2-015 | Executable completeness contract | validated |
 | D | DV2-016 | Persistent resumable delivery state | validated |
+| H | DV2-017 | Technical Hygiene Gate, Reuse-First and structural regression protection | validated |
 
-All required DV2-001..DV2-016 requirements satisfy their configured minimum completion maturity. `npm run verify:v2:complete` is therefore a regression gate, not a pending-rollout signal.
+All required DV2-001..DV2-017 requirements satisfy their configured minimum completion maturity. `npm run verify:v2:complete` is therefore a regression gate, not a pending-rollout signal.
 
 ## Sequencing rationale
 
@@ -66,6 +67,10 @@ DV2-014 made V2 the only active normal delivery architecture. Active `delivery-r
 
 DV2-015 keeps the architecture reconstructable from repository state. The executable completeness gate ensures every manifest ID exists in both the master specification and this roadmap, terminal requirements have versioned evidence, and each required requirement meets its own configured minimum completion maturity.
 
+### Phase H — structural hygiene
+
+DV2-017 adds Reuse-First discovery and exact-SHA structural evidence before release. Deterministic facts and policy precede bounded semantic judgment; `UNKNOWN` material fails closed, FAST promotes to at least STANDARD, and local repository policy may tune thresholds/tools or promote severity but cannot weaken the central no-regression invariants.
+
 ## Post-completion hardening
 
 There is no remaining V2 rollout item in the original roadmap. New work is tracked through dedicated issues and must preserve the non-negotiable invariants in `MASTER_SPEC.md`.
@@ -75,6 +80,8 @@ Issue #59 is post-completion hardening, not a new architecture phase. It tighten
 Issue #63 extended that hardening into operational efficiency: deterministic end-to-end controller wiring, resumable/reentry-safe execution, automatic usage ingestion, compile-attestation reuse, bounded audit context, complete CI script-surface coverage and physical removal of the last V1 snapshot roots from active tool-discovery paths.
 
 Issue #66 closes the remaining completion/efficiency drift: per-requirement completion maturity, explicit merge-enforcement truthfulness, resumed-controller telemetry continuity, total audit-bundle budgets with zero-provider fail-closed rejection, and removal of obsolete V1-root names from active worker prompts. Event-driven controller continuation remains a separately governed architecture option rather than a silent rewrite in this hardening cycle.
+
+Issue #86 adds the structural-hygiene hardening contract without reintroducing repository-wide AI inventory or another orchestration layer. Its machine-readable gate lives in the existing deterministic V2 control plane and its durable policy remains in the master specification plus the requirements projection.
 
 Hardening does **not** infer a cheaper risk profile from issue prose or disable required review without evidence. If changed-file evidence is missing or uncertain, the classifier remains fail-closed and CRITICAL. STANDARD audit may be skipped only by explicit target policy; CRITICAL audit remains mandatory. Context-budget reductions fail closed when omitted evidence is material.
 
