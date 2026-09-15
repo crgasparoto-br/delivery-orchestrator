@@ -199,7 +199,7 @@
       "implementationRefs": ["file:src/v2/technical-hygiene.mjs", "file:src/v2/release-gate.mjs", "file:src/v2/delivery-plan.mjs", "file:.github/workflows/shared/delivery-v2-worker-scope-guard.md", "file:docs/delivery-v2/MASTER_SPEC.md"],
       "validationRefs": ["file:test/v2-technical-hygiene.test.mjs", "file:test/v2-technical-hygiene-release.test.mjs", "github:delivery-orchestrator#86"],
       "rolloutRefs": [],
-      "trackingIssue": 86
+      "trackingIssue": 27
     }
   ]
 }
