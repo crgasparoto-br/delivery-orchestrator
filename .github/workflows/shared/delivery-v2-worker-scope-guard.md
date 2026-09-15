@@ -47,10 +47,16 @@ safe-outputs:
           CONTROLLER_RUN_ID: ${{ github.event.inputs.controller_run_id }}
           DISPATCH_NONCE: ${{ github.event.inputs.dispatch_nonce }}
           DELIVERY_GITHUB_READ_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
-          PATCH_PATH: /tmp/gh-aw/threat-detection/aw.patch
         run: |
           set -euo pipefail
           trap 'rm -rf .delivery-v2-scope-guard' EXIT
+          mapfile -t patch_files < <(find /tmp/gh-aw/threat-detection -maxdepth 1 -type f -name '*.patch' -print | sort)
+          if [ "${#patch_files[@]}" -ne 1 ]; then
+            printf 'expected exactly one candidate patch, found %s\n' "${#patch_files[@]}" >&2
+            printf '%s\n' "${patch_files[@]}" >&2
+            exit 1
+          fi
+          export PATCH_PATH="${patch_files[0]}"
           node .delivery-v2-scope-guard/.github/scripts/validate-delivery-v2-worker-scope.mjs
 ---
 ## Trusted Delivery V2 target issue contract

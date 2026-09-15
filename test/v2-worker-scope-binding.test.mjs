@@ -122,6 +122,9 @@ test('all implementation workers import deterministic issue context and scope gu
   assert.match(shared, /Do not rely on `gh issue view`/);
   assert.match(shared, /authoritative task contract/);
   assert.match(shared, /Validate controller-authorized material scope/);
-  assert.match(shared, /\/tmp\/gh-aw\/threat-detection\/aw\.patch/);
+  assert.match(shared, /find \/tmp\/gh-aw\/threat-detection -maxdepth 1 -type f -name '\*\.patch'/);
+  assert.match(shared, /expected exactly one candidate patch/);
+  assert.match(shared, /export PATCH_PATH="\$\{patch_files\[0\]\}"/);
+  assert.doesNotMatch(shared, /PATCH_PATH: \/tmp\/gh-aw\/threat-detection\/aw\.patch/);
   assert.match(shared, /persist-credentials: false/);
 });
