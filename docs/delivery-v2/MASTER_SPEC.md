@@ -808,6 +808,7 @@ A compact machine result is bound to the candidate and contains at least:
   "reusedSymbols": [],
   "extendedSymbols": [],
   "createdSymbols": [],
+  "createdFiles": [],
   "structuralFindings": [],
   "missingEvidence": [],
   "result": "PASS",
