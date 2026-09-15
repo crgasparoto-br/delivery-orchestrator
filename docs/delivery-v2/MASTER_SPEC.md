@@ -39,7 +39,8 @@ Delivery V2 must:
 - avoid mandatory nested ChatGPT Skills in the normal V2 path;
 - make CI depth proportional to deterministic risk;
 - preserve independent semantic review where risk justifies it;
-- fail closed when evidence, identity, classification, AI selection, or release state is uncertain;
+- prevent material structural regression and prefer evidence-backed reuse over avoidable parallel abstractions;
+- fail closed when evidence, identity, classification, AI selection, structural hygiene, or release state is uncertain;
 - persist enough state that a new process or chat can resume from the repository/GitHub without reconstructing decisions from conversation history;
 - expose measurable cost, latency, retry, and quality signals;
 - retire V1 only after V2 is proven in real repositories.
@@ -53,13 +54,19 @@ GitHub Issue / PR
 deterministic identity + risk + policy
       |
       v
+bounded Reuse Discovery
+      |
+      v
 bounded AI implementation worker (only when needed)
       |
       v
 safe-output PR / exact material SHA
       |
       v
-deterministic adaptive CI
+Structural Delta Check + deterministic adaptive CI
+      |
+      v
+Technical Hygiene Gate
       |
       v
 risk-based independent semantic review
@@ -99,6 +106,7 @@ The controller, not an LLM, owns:
 - provider/model selection and worker selection;
 - budgets and attempt counters;
 - workflow/check state;
+- structural baseline identity and technical-hygiene evidence freshness;
 - release-state transitions;
 - audit applicability;
 - evidence freshness and SHA binding;
@@ -108,7 +116,7 @@ AI may propose code, findings, or semantic judgments, but it cannot silently mut
 
 ### 4.2 Fail closed
 
-Uncertainty never grants a cheaper path. Missing changed-file evidence, an unknown path, an unrecognized state, ambiguous target identity, missing required check, stale audit, invalid AI provider/model selection, missing provider authentication, or missing release evidence must promote/block rather than downgrade.
+Uncertainty never grants a cheaper path. Missing changed-file evidence, an unknown path, an unrecognized state, ambiguous target identity, missing required check, stale audit, stale or materially `UNKNOWN` technical-hygiene evidence, invalid AI provider/model selection, missing provider authentication, or missing release evidence must promote/block rather than downgrade.
 
 ### 4.3 No silent provider/model fallback
 
@@ -116,7 +124,7 @@ The configured provider and model are part of the delivery contract. Supported p
 
 ### 4.4 Exact-SHA evidence
 
-CI and audit evidence applies only to the material SHA it actually examined. Any material commit after validation invalidates downstream approvals that depend on the old SHA. The controller must re-enter the minimum safe stage for the new material SHA.
+CI, technical-hygiene and audit evidence applies only to the material SHA it actually examined. Any material commit after validation invalidates downstream approvals that depend on the old SHA. The controller must re-enter the minimum safe stage for the new material SHA.
 
 ### 4.5 Bounded loops
 
@@ -125,6 +133,24 @@ There are no open-ended AI-on-AI loops. Every implementation and review cycle co
 ### 4.6 No implicit merge authority
 
 Workers do not receive a generic merge capability. Default policy is `noAutomaticMerge=true`. A repository may later opt into an explicit merge policy only through versioned configuration and only after the exact-head release gate. Absence of that explicit policy means human merge.
+
+### 4.7 Reuse-First and No Structural Regression
+
+Before creating a material helper, hook, service, component, DTO, schema, type, repository, adapter or domain function, the worker must perform bounded Reuse Discovery. Preferred decision order is `REUSE_EXISTING -> EXTEND_EXISTING -> LOCAL_REFACTOR -> CREATE_NEW`; `KEEP_SEPARATE` is valid only with evidence, and insufficient material evidence produces `UNKNOWN`.
+
+A candidate must not materially worsen duplication, avoidable parallel abstractions, new dead code, responsibility concentration, avoidable complexity, or fallback/workaround layering relative to the applicable structural baseline. File size, line count, changed-file count or model confidence alone are signals, never the definition of regression.
+
+Durable hygiene policy exists only in this specification and its requirements projection. Repository-specific policy may tune versioned thresholds/tools or promote severity, but cannot disable No Structural Regression, convert material `UNKNOWN` to approval, authorize known duplication, or reverse deterministic facts.
+
+### 4.8 Facts before judgment
+
+Structural decisions follow this precedence:
+
+```text
+deterministic facts -> deterministic policy -> bounded semantic judgment (when necessary) -> gate result
+```
+
+A model cannot override an incompatible deterministic fact. Material semantic claims about duplication, ownership, dead code, shared abstraction, refactor necessity or root cause require reproducible evidence. When required evidence is missing, the answer is `UNKNOWN`, not an invented architectural conclusion.
 
 ## 5. DV2-001 — Deterministic GitHub-native control plane
 
@@ -373,8 +399,13 @@ A typical PR route is:
 ```text
 collect exact changed paths
   -> classify
+  -> bounded reuse discovery
+  -> implement
+  -> structural delta check
   -> validate merge-preview compatibility
   -> validate exact material head using exactly one risk path
+  -> technical hygiene gate
+  -> independent audit when applicable
   -> final stable required status
 ```
 
@@ -425,6 +456,7 @@ merge_preview_sha
 observed risk + reasons
 classifier version/fingerprint
 required checks + conclusions
+technical hygiene result + exact structural evidence references
 workflow run IDs
 changed paths
 implementation attempt count
@@ -457,7 +489,7 @@ An audit is not allowed to reuse approval from another material SHA. Audit evide
 
 ### Audit context budget
 
-The audit bundle is bounded before the model is invoked. The budget includes the sanitized issue/PR projections in addition to bounded diff, manifests, contract and material context. Raw GitHub PR/base/head API objects are not model context.
+The audit bundle is bounded before the model is invoked. The budget includes the sanitized issue/PR projections in addition to bounded diff, manifests, contract, structural-hygiene evidence and material context. Raw GitHub PR/base/head API objects are not model context.
 
 Current hard ceilings are:
 
@@ -468,8 +500,8 @@ If an issue/PR body would be truncated or the total bundle exceeds its risk budg
 
 ### Policy by risk
 
-- FAST: no mandatory LLM audit.
-- STANDARD: focused independent audit when configured by policy or promoted by detected risk.
+- FAST: no mandatory LLM audit solely because the hygiene gate exists when no material finding/`UNKNOWN` requires semantic review.
+- STANDARD: focused independent audit when configured by policy or promoted by detected risk; material structural findings enter the bounded bundle when applicable.
 - CRITICAL: independent audit mandatory.
 
 ## 13. DV2-009 — Bounded remediation state machine
@@ -496,10 +528,11 @@ Rules:
 1. CI failure with actionable repository cause consumes an implementation/remediation attempt.
 2. CI failure from external infrastructure does not trigger unrelated code changes.
 3. Audit failure must contain actionable findings. Those findings become the only remediation input unless the new diff opens a new risk surface.
-4. A remediation material commit invalidates CI/audit evidence from the old material SHA.
+4. A remediation material commit invalidates CI, technical-hygiene and audit evidence from the old material SHA.
 5. Attempt ceilings come from the effective risk profile.
 6. Exhausted implementation or audit budgets transition to `escalated` with a concise human packet.
 7. The controller never recursively asks an AI to orchestrate another AI.
+8. Every remediation is compared both with the initial delivery baseline and the immediately previous material SHA so incremental and cumulative structural regressions are visible.
 
 ## 14. DV2-010 — Exact-head release gate
 
@@ -511,6 +544,8 @@ For a PR to become `ready-for-human-merge`:
 - merge-preview compatibility is acceptable when required;
 - the classifier result and fingerprint apply to that head;
 - all required CI for the effective risk is terminal green;
+- the Technical Hygiene Gate is terminal for the same material SHA with `PASS` or `PASS_WITH_DEBT`;
+- no material structural `UNKNOWN` remains pending;
 - required independent audit for that risk is approved for the same head;
 - no unresolved blocking finding exists;
 - no budget/external blocker exists;
@@ -536,6 +571,8 @@ Every delivery should emit normalized metrics:
 - number of provider calls;
 - implementation attempts;
 - audit attempts;
+- Technical Hygiene result and promotion/block/unknown counts;
+- semantic-hygiene provider calls when any;
 - AI turns/credits/tokens where available;
 - provider cost where available;
 - CI queue time and execution time;
@@ -633,6 +670,7 @@ At minimum, persistent state must retain:
 - current state;
 - implementation/audit attempt counters;
 - workflow/check references;
+- current structural-hygiene evidence reference/result for the material SHA when produced;
 - current blocking findings;
 - evidence references;
 - last terminal/non-terminal reason.
@@ -653,7 +691,7 @@ The controller follows least privilege:
 - no provider/model fallback;
 - no automatic merge by default.
 
-Risk classification and AI provider/model dispatch are security boundaries and must be tested adversarially.
+Risk classification, structural-hygiene policy and AI provider/model dispatch are security boundaries and must be tested adversarially.
 
 ## 22. Repository policy contract
 
@@ -666,11 +704,12 @@ FAST-safe roots
 STANDARD roots
 always-CRITICAL paths/boundaries
 repository-specific critical integrations
+structural-analysis tools/thresholds (optional, promotion-only)
 post-merge full-regression workflow
 merge policy + enforcement mode/limitation
 ```
 
-The policy cannot weaken orchestrator core invariants. It must not represent `native-required-status` unless native enforcement is actually present. Its generated fingerprint is included in classification evidence.
+The policy cannot weaken orchestrator core invariants. It cannot convert material hygiene `UNKNOWN` into warning/PASS, disable No Structural Regression, authorize known duplication, or represent `native-required-status` unless native enforcement is actually present. Its generated fingerprint is included in classification evidence.
 
 ## 23. Completion criteria
 
@@ -686,6 +725,7 @@ In practical terms that includes:
 - exact-head release gate;
 - persistent resumable state;
 - observability/cost accounting;
+- Reuse-First and Technical Hygiene structural protection;
 - `controle_calorias` pilot rolled out;
 - `training-system` adaptive routing rolled out with real FAST benchmark evidence;
 - completeness gate itself validated;
@@ -718,3 +758,75 @@ Run npm run verify:v2 and the applicable V2 CI.
 ```
 
 This protocol is the guarantee that the project does not depend on preserving one conversation.
+
+## 25. DV2-017 — Technical Hygiene Gate, Reuse-First and structural regression protection
+
+DV2-017 makes structural quality a first-class, exact-SHA release invariant without turning the orchestrator into a repository-wide AI reviewer.
+
+### 25.1 Reuse Discovery
+
+Before creating a relevant abstraction, search bounded context in this priority order:
+
+1. files touched by the issue;
+2. direct local imports/dependencies;
+3. the related domain/directory;
+4. bounded symbolic/semantic search.
+
+The machine decision vocabulary is `REUSE_EXISTING`, `EXTEND_EXISTING`, `LOCAL_REFACTOR`, `CREATE_NEW`, `KEEP_SEPARATE`, and `UNKNOWN`. A material decision requires reproducible evidence. When bounded discovery cannot prove owner/equivalence and the distinction matters, the result is `UNKNOWN`, not assumed permission for `CREATE_NEW`.
+
+### 25.2 Structural baseline and delta
+
+The initial structural baseline is the deterministic `base_sha`. For remediation, the controller preserves both the initial baseline and the immediately previous material SHA. Structural evidence is bound to the current `material_sha`; a new material commit invalidates the previous approval while immutable baseline facts may be reused if the base identity is unchanged.
+
+The delta may use deterministic signals such as file growth, function/class/component additions, supported complexity/nesting measurements, duplication candidates, dead-code evidence, fallback/workaround additions and parallel-owner candidates. A metric is a signal, not a universal quality rule. Missing stack-specific tooling does not itself cause `BLOCK`; it produces `UNKNOWN` only when the missing evidence is material to an observed decision.
+
+### 25.3 Structural budget
+
+The budget evaluates growth + responsibility + complexity + duplication rather than a blind maximum line/file count. Preexisting debt outside scope is not mandatory refactor. If the candidate does not materially worsen it, `PASS_WITH_DEBT` is valid. A cohesive split of a monolith may increase file count and still improve structure.
+
+A second fallback/workaround for the same behavior requires reproducible root-cause evidence. Stacking defensive behavior without that evidence is `BLOCK`.
+
+### 25.4 Technical Hygiene Gate
+
+The gate has exactly four principal results:
+
+- `PASS` — no material structural regression and sufficient evidence;
+- `PASS_WITH_DEBT` — preexisting debt exists but the candidate does not materially aggravate it;
+- `BLOCK` — a material regression or mandatory invariant violation is proven;
+- `UNKNOWN` — a material decision required for release lacks sufficient evidence.
+
+`UNKNOWN` never equals approval. FAST with material `UNKNOWN` promotes to at least STANDARD for reevaluation; persistent material uncertainty then blocks/escalates. STANDARD/CRITICAL material `UNKNOWN` blocks release until evidence/remediation or human escalation according to budget. Non-material uncertainty may be telemetry only when deterministic evidence proves it cannot affect these invariants.
+
+A compact machine result is bound to the candidate and contains at least:
+
+```json
+{
+  "schemaVersion": 1,
+  "materialSha": "...",
+  "baselineSha": "...",
+  "previousMaterialSha": null,
+  "reusedSymbols": [],
+  "extendedSymbols": [],
+  "createdSymbols": [],
+  "structuralFindings": [],
+  "missingEvidence": [],
+  "result": "PASS",
+  "evidenceRef": "..."
+}
+```
+
+### 25.5 Semantic ambiguity and anti-hallucination rules
+
+Deterministic analysis runs first. Textual similarity is not semantic equivalence, and different names do not prove separation. Only relevant ambiguity may be sent to AI, with bounded code pairs, issue contract and minimum surrounding context. Material semantic decisions must reference reproducible evidence. `confidence` is telemetry only.
+
+The implementer is not the sole authority for a material semantic hygiene judgment. When a profile lacks independent audit but a material semantic decision is necessary, the hygiene stage obtains isolated bounded review or promotes/escalates instead of self-approving.
+
+### 25.6 Audit and release integration
+
+FAST does not gain mandatory LLM audit solely from this requirement when deterministic hygiene is terminal and there is no material ambiguity. STANDARD follows the existing audit policy. CRITICAL remains independently audited. Reviewers receive only the bounded structural evidence needed to validate material findings and do not recompute deterministic metrics unnecessarily.
+
+The release gate accepts hygiene only when its `materialSha` equals the exact release candidate and the principal result is `PASS` or `PASS_WITH_DEBT`. `BLOCK`, stale evidence and material `UNKNOWN` cannot be reinterpreted as warnings. Repository-specific configuration cannot weaken this rule.
+
+### 25.7 Efficiency and telemetry
+
+The default is deterministic delta analysis, reused baseline evidence and bounded neighborhood search. AI is called only for real semantic ambiguity. Telemetry must make hygiene `BLOCK`, `PASS_WITH_DEBT`, `UNKNOWN`, FAST promotion and semantic-hygiene calls observable without forcing token-heavy repository inventories.

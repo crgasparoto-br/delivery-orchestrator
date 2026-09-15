@@ -3,6 +3,7 @@ import { resolveOperationalAuditPolicy } from './audit-policy.mjs';
 import { executionPolicyFor } from './execution-policy.mjs';
 import { resolveProviderSelectionForRisk } from './provider-policy.mjs';
 import { DELIVERY_V2_RELEASE_GATE_SCHEMA_VERSION, DELIVERY_V2_RELEASE_STATUS_NAME } from './release-gate.mjs';
+import { DELIVERY_V2_TECHNICAL_HYGIENE_SCHEMA_VERSION } from './technical-hygiene.mjs';
 import { resolveImplementationWorkflow } from './provider-dispatch.mjs';
 import { resolveRiskProfile } from './risk-profile.mjs';
 
@@ -43,6 +44,20 @@ export function createDeliveryPlan(config) {
       maxTurns: policy.maxAiTurns,
       maxAiCredits: policy.maxAiCredits
     },
+    hygiene: {
+      required: true,
+      contractSchemaVersion: DELIVERY_V2_TECHNICAL_HYGIENE_SCHEMA_VERSION,
+      reuseFirst: true,
+      boundedDiscovery: true,
+      exactMaterialShaRequired: true,
+      initialBaselineRequired: true,
+      remediationPreviousMaterialRequired: true,
+      allowedResultsForRelease: ['PASS', 'PASS_WITH_DEBT'],
+      materialUnknownPromotesFastToAtLeastStandard: true,
+      materialUnknownBlocksRelease: true,
+      semanticJudgmentRequiresEvidence: true,
+      deterministicFactsTakePrecedence: true
+    },
     audit: {
       ...providers.auditor,
       required: auditPolicy.required,
@@ -62,6 +77,7 @@ export function createDeliveryPlan(config) {
       contractSchemaVersion: DELIVERY_V2_RELEASE_GATE_SCHEMA_VERSION,
       requiredStatusName: DELIVERY_V2_RELEASE_STATUS_NAME,
       exactRemoteHeadRequired: true,
+      technicalHygieneRequired: true,
       evidenceReferencesOnly: true,
       createsResultOnlyCommit: false,
       automaticMergeAllowed: false
@@ -73,7 +89,9 @@ export function createDeliveryPlan(config) {
       noSilentModelFallback: true,
       githubVariablesOwnAiSelection: true,
       noAutomaticMerge: true,
-      agentWriteTokenExposed: false
+      agentWriteTokenExposed: false,
+      noStructuralRegression: true,
+      localPolicyCannotWeakenHygiene: true
     }
   };
 }

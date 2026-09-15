@@ -1,4 +1,5 @@
 import { executionPolicyFor } from './execution-policy.mjs';
+import { normalizeTechnicalHygieneResult } from './technical-hygiene.mjs';
 
 export const DELIVERY_V2_RELEASE_GATE_SCHEMA_VERSION = 1;
 export const DELIVERY_V2_RELEASE_STATUS_NAME = 'Delivery V2 Release';
@@ -151,6 +152,8 @@ export function normalizeReleaseGateInput(input) {
     }),
     mergePreview,
     checks: Object.freeze(normalizedChecks),
+    technicalHygieneRequired: value.technicalHygieneRequired === true,
+    technicalHygiene: value.technicalHygiene == null ? null : normalizeTechnicalHygieneResult(value.technicalHygiene),
     standardAuditRequired: value.standardAuditRequired !== false,
     audit: normalizeAudit(value.audit),
     unresolvedFindings: Object.freeze((value.unresolvedFindings ?? []).map(normalizeFinding)),
@@ -191,6 +194,7 @@ export function evaluateReleaseGate(rawInput) {
     classifier: input.classifier.evidenceRef,
     mergePreview: input.mergePreview.evidenceRef,
     checks: input.checks.map((check) => check.evidenceRef),
+    technicalHygiene: input.technicalHygiene?.evidenceRef ?? null,
     audit: input.audit?.evidenceRef ?? null,
     findings: input.unresolvedFindings.map((finding) => finding.evidenceRef),
     blockers: input.blockers.map((blocker) => blocker.evidenceRef)
@@ -236,6 +240,27 @@ export function evaluateReleaseGate(rawInput) {
   const failedCheck = requiredChecks.find((check) => !CHECK_GREEN.has(check.conclusion));
   if (failedCheck) {
     return result(input, { state: 'ci-failed-remediable', reasons: [`required-check-not-green:${failedCheck.name}`], evidenceRefs });
+  }
+
+  if (input.technicalHygieneRequired && !input.technicalHygiene) {
+    return result(input, { state: 'ci-pending', reasons: ['technical-hygiene-missing'], evidenceRefs });
+  }
+  if (input.technicalHygiene) {
+    if (input.technicalHygiene.materialSha !== input.materialHeadSha) {
+      return result(input, { state: 'ci-pending', reasons: ['technical-hygiene-stale'], evidenceRefs });
+    }
+    if (input.technicalHygiene.result === 'BLOCK') {
+      return result(input, { state: 'ci-failed-remediable', reasons: ['technical-hygiene-block'], evidenceRefs });
+    }
+    if (input.technicalHygiene.result === 'UNKNOWN') {
+      if (input.classifier.profile === 'fast' && input.technicalHygiene.promotionRequired && input.technicalHygiene.effectiveProfile !== 'fast') {
+        return result(input, { state: 'classified', reasons: [`technical-hygiene-promote:${input.technicalHygiene.effectiveProfile}`], evidenceRefs });
+      }
+      return result(input, { state: 'audit-failed-remediable', reasons: ['technical-hygiene-unknown-material'], evidenceRefs });
+    }
+    if (!['PASS', 'PASS_WITH_DEBT'].includes(input.technicalHygiene.result)) {
+      return result(input, { state: 'ci-failed-remediable', reasons: ['technical-hygiene-not-releasable'], evidenceRefs });
+    }
   }
 
   const budgetBlocker = input.blockers.find((blocker) => blocker.kind === 'budget');

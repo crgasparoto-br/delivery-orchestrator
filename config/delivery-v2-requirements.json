@@ -189,6 +189,17 @@
       "validationRefs": ["file:test/v2-persistent-state.test.mjs", "file:docs/delivery-v2/evidence/dv2-016-live-resume.json", "github:delivery-orchestrator#39", "github-actions:34668025047"],
       "rolloutRefs": [],
       "trackingIssue": 27
+    },
+    {
+      "id": "DV2-017",
+      "title": "Technical Hygiene Gate, Reuse-First and structural regression protection",
+      "status": "validated",
+      "requiredForV2Default": true,
+      "summary": "Bounded Reuse Discovery, exact-SHA structural evidence and a fail-closed Technical Hygiene Gate prevent material structural regression while reserving AI for evidence-backed semantic ambiguity.",
+      "implementationRefs": ["file:src/v2/technical-hygiene.mjs", "file:src/v2/release-gate.mjs", "file:src/v2/delivery-plan.mjs", "file:.github/workflows/shared/delivery-v2-worker-scope-guard.md", "file:docs/delivery-v2/MASTER_SPEC.md"],
+      "validationRefs": ["file:test/v2-technical-hygiene.test.mjs", "file:test/v2-technical-hygiene-release.test.mjs", "github:delivery-orchestrator#86"],
+      "rolloutRefs": [],
+      "trackingIssue": 86
     }
   ]
 }

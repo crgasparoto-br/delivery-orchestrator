@@ -40,6 +40,17 @@
       "propertyNames": { "pattern": "^[a-z0-9][a-z0-9._-]*$" },
       "additionalProperties": { "$ref": "#/$defs/aiUsage" }
     },
+    "technicalHygiene": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["result", "promoted", "semanticCalls", "evidenceRef"],
+      "properties": {
+        "result": { "enum": ["PASS", "PASS_WITH_DEBT", "BLOCK", "UNKNOWN"] },
+        "promoted": { "type": "boolean" },
+        "semanticCalls": { "type": "integer", "minimum": 0 },
+        "evidenceRef": { "type": "string", "minLength": 1 }
+      }
+    },
     "providerCost": { "type": "object" },
     "durationsMs": { "type": "object" },
     "terminalReason": { "type": "string", "minLength": 1 },

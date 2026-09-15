@@ -17,11 +17,17 @@ test('builds deterministic plan with explicit provider, risk and repository safe
   assert.equal(plan.risk.profile, 'fast');
   assert.equal(plan.ci.mode, 'focused');
   assert.equal(plan.controls.noAutomaticMerge, true);
+  assert.equal(plan.controls.noStructuralRegression, true);
+  assert.equal(plan.controls.localPolicyCannotWeakenHygiene, true);
+  assert.equal(plan.hygiene.required, true);
+  assert.equal(plan.hygiene.reuseFirst, true);
+  assert.deepEqual(plan.hygiene.allowedResultsForRelease, ['PASS', 'PASS_WITH_DEBT']);
   assert.equal(plan.audit.contractSchemaVersion, 1);
   assert.equal(plan.audit.legacyV1HandoffRequired, false);
   assert.equal(plan.release.contractSchemaVersion, 1);
   assert.equal(plan.release.requiredStatusName, 'Delivery V2 Release');
   assert.equal(plan.release.exactRemoteHeadRequired, true);
+  assert.equal(plan.release.technicalHygieneRequired, true);
   assert.equal(plan.release.createsResultOnlyCommit, false);
   assert.equal(plan.release.automaticMergeAllowed, false);
 });

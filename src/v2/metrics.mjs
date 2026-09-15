@@ -7,6 +7,7 @@ export const DELIVERY_V2_METRICS_SCHEMA_VERSION = 1;
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const COST_KEYS = new Set(['available', 'amount', 'currency']);
 const USAGE_KEYS = new Set(['turns', 'credits', 'inputTokens', 'outputTokens', 'totalTokens']);
+const HYGIENE_RESULTS = new Set(['PASS', 'PASS_WITH_DEBT', 'BLOCK', 'UNKNOWN']);
 
 function requireObject(value, label) {
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be an object`);
@@ -128,6 +129,19 @@ function normalizeEvidenceRefs(value = []) {
   return Object.freeze([...new Set(value.map((item) => requireString(item, 'evidenceRefs entry')))]);
 }
 
+function normalizeTechnicalHygieneMetrics(value) {
+  if (value == null) return null;
+  const hygiene = requireObject(value, 'technicalHygiene');
+  const result = requireString(hygiene.result, 'technicalHygiene.result').toUpperCase();
+  if (!HYGIENE_RESULTS.has(result)) throw new Error(`unsupported technicalHygiene.result: ${result}`);
+  return Object.freeze({
+    result,
+    promoted: hygiene.promoted === true,
+    semanticCalls: requireInteger(hygiene.semanticCalls ?? 0, 'technicalHygiene.semanticCalls'),
+    evidenceRef: requireString(hygiene.evidenceRef, 'technicalHygiene.evidenceRef')
+  });
+}
+
 export function normalizeDeliveryMetrics(rawMetrics) {
   const value = requireObject(rawMetrics, 'Delivery V2 metrics');
   if (value.schemaVersion !== DELIVERY_V2_METRICS_SCHEMA_VERSION) {
@@ -163,6 +177,7 @@ export function normalizeDeliveryMetrics(rawMetrics) {
     }),
     aiUsage: normalizeAiUsage(value.aiUsage ?? {}),
     aiUsageByStage: normalizeAiUsageByStage(value.aiUsageByStage),
+    technicalHygiene: normalizeTechnicalHygieneMetrics(value.technicalHygiene),
     providerCost: normalizeProviderCost(value.providerCost),
     durationsMs: normalizeDurations(value.durationsMs),
     terminalReason: requireString(value.terminalReason, 'terminalReason'),
@@ -211,6 +226,19 @@ function summarizeAiUsage(usages) {
   });
 }
 
+function summarizeHygiene(records) {
+  const observations = records.map((record) => record.technicalHygiene).filter(Boolean);
+  return Object.freeze({
+    observations: observations.length,
+    pass: observations.filter((item) => item.result === 'PASS').length,
+    passWithDebt: observations.filter((item) => item.result === 'PASS_WITH_DEBT').length,
+    block: observations.filter((item) => item.result === 'BLOCK').length,
+    unknown: observations.filter((item) => item.result === 'UNKNOWN').length,
+    promotions: observations.filter((item) => item.promoted).length,
+    semanticCalls: observations.reduce((sum, item) => sum + item.semanticCalls, 0)
+  });
+}
+
 function summarizeGroup(records) {
   const endToEnd = records.map((record) => record.durationsMs.endToEnd);
   const ciExecution = records.map((record) => record.durationsMs.ciExecution);
@@ -226,6 +254,7 @@ function summarizeGroup(records) {
     implementationAttempts: records.reduce((sum, record) => sum + record.attempts.implementation, 0),
     auditAttempts: records.reduce((sum, record) => sum + record.attempts.audit, 0),
     aiUsage: summarizeAiUsage(records.map((record) => record.aiUsage)),
+    technicalHygiene: summarizeHygiene(records),
     endToEndMs: Object.freeze({ avg: average(endToEnd), p50: percentile(endToEnd, 50), p95: percentile(endToEnd, 95) }),
     ciExecutionMs: Object.freeze({ avg: average(ciExecution), p50: percentile(ciExecution, 50), p95: percentile(ciExecution, 95) }),
     providerCostTotals: Object.freeze(costByCurrency)
