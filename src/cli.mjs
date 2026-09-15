@@ -7,6 +7,7 @@ import { createDispatchDecision } from './v2/dispatch-policy.mjs';
 import { resumePersistentDelivery } from './v2/persistent-state.mjs';
 import { loadDeliveryMetricsStore, summarizeDeliveryMetrics } from './v2/metrics.mjs';
 import { loadRepositoryRiskPolicy } from './v2/repository-risk-policy-loader.mjs';
+import { formatHumanSummary, runBranchHygiene } from './v2/branch-hygiene.mjs';
 
 function parseArgs(argv) {
   const out = { changedPaths: [] };
@@ -22,6 +23,12 @@ function parseArgs(argv) {
     else if (argv[i] === '--head-ref') out.headRef = argv[++i];
     else if (argv[i] === '--remote-head') out.remoteHeadSha = argv[++i];
     else if (argv[i] === '--metrics-file') out.metricsFile = argv[++i];
+    else if (argv[i] === '--older-than') out.olderThan = argv[++i];
+    else if (argv[i] === '--log-dir') out.logDir = argv[++i];
+    else if (argv[i] === '--lock-file') out.lockFile = argv[++i];
+    else if (argv[i] === '--apply') out.apply = true;
+    else if (argv[i] === '--dry-run') out.dryRun = true;
+    else if (argv[i] === '--json') out.json = true;
     else if (argv[i] === '--path') out.changedPaths.push(argv[++i]);
   }
   return out;
@@ -57,6 +64,7 @@ async function validate() {
     'src/v2/persistent-state.mjs',
     'src/v2/metrics.mjs',
     'src/v2/usage-telemetry.mjs',
+    'src/v2/branch-hygiene.mjs',
     'scripts/guard-delivery-v2-reentry.mjs',
     'scripts/reserve-delivery-v2-initial-attempt.mjs',
     'scripts/resume-delivery-v2-controller.mjs',
@@ -102,6 +110,16 @@ else if (command === 'plan-v2') {
   if (!args.metricsFile) throw new Error('metrics-v2 requires --metrics-file');
   const store = await loadDeliveryMetricsStore(path.resolve(args.metricsFile));
   console.log(JSON.stringify(summarizeDeliveryMetrics(store.records), null, 2));
+} else if (command === 'hygiene') {
+  const args = parseArgs(rest);
+  if (args.apply && args.dryRun) throw new Error('choose either --apply or --dry-run');
+  const result = await runBranchHygiene({
+    mode: args.apply ? 'apply' : 'dry-run',
+    olderThan: args.olderThan ?? '7d',
+    logDir: args.logDir,
+    lockFile: args.lockFile
+  });
+  console.log(args.json ? JSON.stringify(result, null, 2) : formatHumanSummary(result));
 } else {
   throw new Error(`Unknown Delivery V2 command: ${command}`);
 }
