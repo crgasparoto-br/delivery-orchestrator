@@ -2,6 +2,7 @@
 import { appendFile, readFile, readdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
+import { createWorkerScopeBinding } from '../.github/scripts/delivery-v2-worker-scope-contract.mjs';
 import { loadV2Config } from '../src/v2/config.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { createDispatchDecision } from '../src/v2/dispatch-policy.mjs';
@@ -93,7 +94,7 @@ function makePlan({ repository, issueNumber, provider, requestedRisk, changedPat
   }, {}));
 }
 
-export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, model = null, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce() } = {}) {
+export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, model = null, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce(), scopeBinding = null } = {}) {
   if (!decision?.dispatchAllowed) return null;
   const policy = executionPolicyFor(decision.securityProfile);
   const nextAttempt = Number(priorImplementationAttempts) + 1;
@@ -112,7 +113,8 @@ export function bootstrapLeaseForDecision({ decision, repository, issueNumber, b
     controllerRunId: Number(runId),
     workerRunId: null,
     workerWorkflow: String(workerWorkflow ?? ''),
-    dispatchNonce: String(dispatchNonce)
+    dispatchNonce: String(dispatchNonce),
+    scopeBinding
   });
 }
 
@@ -128,8 +130,10 @@ async function main() {
   const priorImplementationAttempts = Number.parseInt(String(process.env.DELIVERY_V2_PRIOR_INITIAL_ATTEMPTS ?? '0'), 10);
 
   const issue = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}`, readToken);
-  let changedPaths = splitPaths(process.env.DELIVERY_CHANGED_PATHS);
+  const explicitChangedPaths = splitPaths(process.env.DELIVERY_CHANGED_PATHS);
+  let changedPaths = explicitChangedPaths;
   if (changedPaths.length === 0) changedPaths = await deterministicIssuePaths(repository, baseBranch, issue.body, readToken);
+  const scopeBinding = createWorkerScopeBinding({ repository, issue, authorizedPaths: explicitChangedPaths });
   const repositoryPolicy = await loadRepositoryRiskPolicy(repository);
   const plan = makePlan({ repository, issueNumber, provider: compatibilityProvider, requestedRisk, changedPaths, repositoryPolicy });
   const decision = createDispatchDecision(plan);
@@ -143,7 +147,8 @@ async function main() {
     requestedRisk,
     runId,
     priorImplementationAttempts,
-    workerWorkflow: plan.implementation.workflow
+    workerWorkflow: plan.implementation.workflow,
+    scopeBinding
   });
 
   if (lease) {
@@ -164,7 +169,7 @@ async function main() {
       `model=${plan.implementation.model}`
     ].join('\n') + '\n', 'utf8');
   }
-  process.stdout.write(`${JSON.stringify({ reserved: Boolean(lease), decision, changedPaths, implementation: plan.implementation })}\n`);
+  process.stdout.write(`${JSON.stringify({ reserved: Boolean(lease), decision, changedPaths, scopeBinding, implementation: plan.implementation })}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
