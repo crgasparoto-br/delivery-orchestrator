@@ -6,7 +6,7 @@ on:
       - feat/86-technical-hygiene-gate
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   repair:
@@ -49,13 +49,22 @@ jobs:
         run: gh aw compile --strict
       - name: Run verification
         run: npm run verify:v2
-      - name: Commit repaired candidate
+      - name: Package validated candidate
         shell: bash
         run: |
           set -euo pipefail
           rm .github/workflows/issue-86-repair.yml .github/workflows/issue-86-repair-runner.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'fix: wire technical hygiene into operational release'
-          git push origin HEAD:feat/86-technical-hygiene-gate
+          git diff --binary HEAD > /tmp/issue86.patch
+          git diff --diff-filter=D --name-only HEAD > /tmp/deleted.txt
+          git diff --diff-filter=ACMRT --name-only -z HEAD | tar --null -T - -czf /tmp/issue86-files.tar.gz
+          git diff --check HEAD
+      - name: Upload validated candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue86-validated-candidate
+          path: |
+            /tmp/issue86.patch
+            /tmp/deleted.txt
+            /tmp/issue86-files.tar.gz
+          if-no-files-found: error
+          retention-days: 1
