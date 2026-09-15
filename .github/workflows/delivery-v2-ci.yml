@@ -22,6 +22,7 @@ on:
       - '.github/workflows/delivery-v2-*.yml'
       - '.github/workflows/delivery-v2-*.md'
       - '.github/workflows/delivery-v2-*.lock.yml'
+      - '.github/workflows/shared/**'
       - '.github/scripts/**'
       - 'docs/delivery-v2.md'
       - 'docs/delivery-v2/**'

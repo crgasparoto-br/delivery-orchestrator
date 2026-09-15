@@ -93,7 +93,19 @@ test('candidate patch parser identifies the material file before scope authoriza
   }
 });
 
-test('all implementation workers import the single deterministic scope guard', async () => {
+test('missing candidate patch fails closed with a deterministic no-material error', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'dv2-scope-missing-patch-'));
+  try {
+    await assert.rejects(
+      () => changedPathsFromPatchFile(path.join(root, 'aw.patch')),
+      /candidate patch is missing; worker produced no material patch to authorize/
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('all implementation workers import deterministic issue context and scope guard', async () => {
   const providers = ['copilot', 'codex', 'claude'];
   const risks = ['fast', 'standard', 'critical'];
   for (const provider of providers) {
@@ -103,6 +115,12 @@ test('all implementation workers import the single deterministic scope guard', a
     }
   }
   const shared = await readFile('.github/workflows/shared/delivery-v2-worker-scope-guard.md', 'utf8');
+  assert.match(shared, /Materialize trusted target issue context/);
+  assert.match(shared, /GH_TOKEN: \$\{\{ secrets\.DELIVERY_GITHUB_READ_TOKEN \}\}/);
+  assert.doesNotMatch(shared, /GH_TOKEN: \$\{\{ secrets\.DELIVERY_GITHUB_WRITE_TOKEN \}\}/);
+  assert.match(shared, /\/tmp\/gh-aw\/agent\/delivery-v2-target-issue\.json/);
+  assert.match(shared, /Do not rely on `gh issue view`/);
+  assert.match(shared, /authoritative task contract/);
   assert.match(shared, /Validate controller-authorized material scope/);
   assert.match(shared, /\/tmp\/gh-aw\/threat-detection\/aw\.patch/);
   assert.match(shared, /persist-credentials: false/);

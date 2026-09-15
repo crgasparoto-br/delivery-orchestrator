@@ -8,12 +8,13 @@ const EXACT_IDENTITY_PATHS = new Set([
   'scripts/should-compile-delivery-v2-workers.mjs'
 ]);
 const WORKER_IDENTITY_PATH = /^\.github\/workflows\/delivery-v2-worker-[^/]+-[^/]+\.(?:md|lock\.yml)$/;
+const SHARED_WORKER_IDENTITY_PATH = /^\.github\/workflows\/shared\/[^/]+\.md$/;
 
 export function requiresWorkerCompilation(changedPaths) {
   if (!Array.isArray(changedPaths)) throw new Error('changedPaths must be an array');
   return changedPaths.some((value) => {
     const filePath = String(value ?? '').trim();
-    return EXACT_IDENTITY_PATHS.has(filePath) || WORKER_IDENTITY_PATH.test(filePath);
+    return EXACT_IDENTITY_PATHS.has(filePath) || WORKER_IDENTITY_PATH.test(filePath) || SHARED_WORKER_IDENTITY_PATH.test(filePath);
   });
 }
 
