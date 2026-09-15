@@ -1,0 +1,53 @@
+name: Issue 86 repair runner
+
+on:
+  push:
+    branches:
+      - feat/86-technical-hygiene-gate
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: "github.event.head_commit.message == 'chore: run issue 86 repair'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/86-technical-hygiene-gate
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Execute staged controller patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /      - name: Apply controller wiring/ { section=1; next }
+            section && /      - name: Install pinned gh-aw/ { exit }
+            section && /        run: \|/ { capture=1; next }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/issue-86-repair.yml > /tmp/issue-86-repair.sh
+          test -s /tmp/issue-86-repair.sh
+          bash /tmp/issue-86-repair.sh
+      - name: Install pinned gh-aw
+        uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
+        with:
+          version: v0.88.7
+      - name: Compile workers
+        run: gh aw compile --strict
+      - name: Run verification
+        run: npm run verify:v2
+      - name: Commit repaired candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/issue-86-repair.yml .github/workflows/issue-86-repair-runner.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: wire technical hygiene into operational release'
+          git push origin HEAD:feat/86-technical-hygiene-gate
