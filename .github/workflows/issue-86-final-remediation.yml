@@ -1,8 +1,10 @@
 name: Issue 86 final remediation
 on:
   push:
-    branches: [feat/86-technical-hygiene-gate]
-    paths: ['.github/workflows/issue-86-final-remediation.yml']
+    branches:
+      - feat/86-technical-hygiene-gate
+    paths:
+      - .github/workflows/issue-86-final-remediation.yml
 permissions:
   contents: write
 jobs:
@@ -18,149 +20,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: Apply bounded remediation
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path, old, new):
-              p = Path(path)
-              s = p.read_text()
-              if s.count(old) != 1:
-                  raise SystemExit(f'{path}: expected exactly one match, got {s.count(old)} for {old[:80]!r}')
-              p.write_text(s.replace(old, new, 1))
-
-          # Preserve the complete compact structural register, including created files.
-          p = Path('src/v2/technical-hygiene.mjs')
-          s = p.read_text()
-          s = s.replace("  const previousMaterialSha = input.previousMaterialSha == null ? null : sha(input.previousMaterialSha, 'previousMaterialSha');\n  normalizeLocalPolicy(input.localPolicy);",
-                        "  const previousMaterialSha = input.previousMaterialSha == null ? null : sha(input.previousMaterialSha, 'previousMaterialSha');\n  const createdFiles = evidence(input.createdFiles ?? [], 'createdFiles');\n  normalizeLocalPolicy(input.localPolicy);")
-          s = s.replace("    createdSymbols: Object.freeze(reuseDiscovery.filter((entry) => entry.decision === 'CREATE_NEW').map((entry) => entry.symbol)),\n    structuralFindings: Object.freeze(findings),",
-                        "    createdSymbols: Object.freeze(reuseDiscovery.filter((entry) => entry.decision === 'CREATE_NEW').map((entry) => entry.symbol)),\n    createdFiles,\n    structuralFindings: Object.freeze(findings),")
-          s = s.replace("    promotionRequired: value.promotionRequired === true,\n    missingEvidence: Object.freeze((value.missingEvidence ?? []).map((entry, index) => {",
-                        "    promotionRequired: value.promotionRequired === true,\n    reusedSymbols: evidence(value.reusedSymbols ?? [], 'technical hygiene result.reusedSymbols'),\n    extendedSymbols: evidence(value.extendedSymbols ?? [], 'technical hygiene result.extendedSymbols'),\n    createdSymbols: evidence(value.createdSymbols ?? [], 'technical hygiene result.createdSymbols'),\n    createdFiles: evidence(value.createdFiles ?? [], 'technical hygiene result.createdFiles'),\n    structuralFindings: Object.freeze((value.structuralFindings ?? []).map((entry, index) => normalizeFinding(entry, index, 'technical hygiene result.structuralFindings'))),\n    missingEvidence: Object.freeze((value.missingEvidence ?? []).map((entry, index) => {")
-          p.write_text(s)
-
-          replace_once('src/v2/gh-aw-hygiene-artifact.mjs',
-            "      reuseDiscovery: summary.reuseDiscovery ?? [],\n      structuralFindings: summary.structuralFindings ?? [],",
-            "      reuseDiscovery: summary.reuseDiscovery ?? [],\n      createdFiles: summary.createdFiles ?? [],\n      structuralFindings: summary.structuralFindings ?? [],")
-
-          replace_once('.github/workflows/shared/delivery-v2-worker-scope-guard.md',
-            "The JSON payload must contain `reuseDiscovery`, `structuralFindings`, `semanticJudgments`, `deterministicReferences`, `missingEvidence`, and `semanticCalls`; every material semantic decision must carry reproducible evidence.",
-            "The JSON payload must contain `reuseDiscovery`, `createdFiles`, `structuralFindings`, `semanticJudgments`, `deterministicReferences`, `missingEvidence`, and `semanticCalls`; `createdFiles` must list repository-relative files created by the current worker, and every material semantic decision must carry reproducible evidence.")
-
-          # Add an explicit risk-promotion event to the operational state without weakening budgets.
-          p = Path('src/v2/operational-controller.mjs')
-          s = p.read_text()
-          s = s.replace("const SHA_RE = /^[0-9a-f]{40}$/i;\nconst AI_POLICY_ENV_KEYS", "const SHA_RE = /^[0-9a-f]{40}$/i;\nconst RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });\nconst AI_POLICY_ENV_KEYS")
-          anchor = "function bindPlanAiIdentity(state, plan) {\n  const implementation = requiredObject(plan.implementation, 'plan.implementation');\n  const audit = requiredObject(plan.audit, 'plan.audit');\n  return Object.freeze({\n    ...state,\n    implementerProvider: requiredString(implementation.provider, 'plan.implementation.provider'),\n    implementerModel: requiredString(implementation.model, 'plan.implementation.model'),\n    auditorProvider: requiredString(audit.provider, 'plan.audit.provider'),\n    auditorModel: requiredString(audit.model, 'plan.audit.model')\n  });\n}\n"
-          addition = anchor + "\nfunction promoteOperationalRisk(state, plan) {\n  const value = requiredObject(plan, 'plan');\n  const profile = requiredString(value.risk?.profile, 'plan.risk.profile');\n  if (!(profile in RISK_RANK)) throw new Error(`unsupported promoted risk profile: ${profile}`);\n  if (RISK_RANK[profile] < RISK_RANK[state.riskProfile]) throw new Error('technical hygiene promotion cannot downgrade risk');\n  if (RISK_RANK[profile] === RISK_RANK[state.riskProfile]) return state;\n  const policy = executionPolicyFor(profile);\n  let next = Object.freeze({\n    ...state,\n    riskProfile: profile,\n    limits: Object.freeze({\n      maxImplementationAttempts: policy.maxImplementationAttempts,\n      maxAuditRemediationAttempts: policy.maxAuditAttempts\n    })\n  });\n  next = applyAuditPolicy(next, { repository: value.repository, audit: requiredObject(value.audit, 'plan.audit') });\n  return bindPlanAiIdentity(next, value);\n}\n"
-          if s.count(anchor) != 1: raise SystemExit('operational-controller: bindPlanAiIdentity anchor mismatch')
-          s = s.replace(anchor, addition, 1)
-          s = s.replace("    case 'classify': return classifyDelivery(state, { riskProfile: value.riskProfile ?? state.riskProfile });\n    case 'start-implementation':", "    case 'classify': return classifyDelivery(state, { riskProfile: value.riskProfile ?? state.riskProfile });\n    case 'promote-risk': return promoteOperationalRisk(state, requiredObject(value.plan, 'event.plan'));\n    case 'start-implementation':")
-          p.write_text(s)
-
-          # Add evidence-only STANDARD re-evaluation for FAST UNKNOWN. It must not mutate the material SHA.
-          helper = r'''async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber, materialHeadSha, baselineSha, actionsToken, targetReadToken }) {
-  if (!hygiene?.promotionRequired) return { hygiene, state, plan, promotionRun: null };
-  const promotedPlan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk: 'standard', changedPaths, repositoryPolicy });
-  let promotedState = applyOperationalEvent(state, { type: 'promote-risk', plan: promotedPlan });
-  const dispatchNonce = createDispatchNonce();
-  let promotionRun = await dispatchWorker({
-    orchestratorRepository,
-    orchestratorRef,
-    plan: promotedPlan,
-    controllerRunId,
-    targetRepository,
-    issueNumber,
-    baseBranch,
-    targetRef: materialHeadSha,
-    targetPr: pullRequestNumber,
-    remediationContext: JSON.stringify({
-      kind: 'technical-hygiene-evidence-promotion',
-      evidenceOnly: true,
-      materialSha: materialHeadSha,
-      missingEvidence: hygiene.missingEvidence
-    }),
-    token: actionsToken,
-    dispatchNonce
-  });
-  promotionRun = await waitWorkflowRun(orchestratorRepository, promotionRun.id, actionsToken);
-  if (promotionRun.conclusion !== 'success') throw new Error(`technical hygiene STANDARD promotion worker failed: ${promotionRun.html_url}`);
-  const currentPr = await fetchPullRequest(targetRepository, pullRequestNumber, targetReadToken);
-  if (String(currentPr.head.sha).toLowerCase() !== materialHeadSha.toLowerCase()) throw new Error('technical hygiene evidence-only promotion mutated the material head');
-  const reevaluated = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: promotionRun.id, token: actionsToken, baselineSha, materialSha: materialHeadSha, previousMaterialSha: null, profile: promotedState.riskProfile });
-  promotedState = applyOperationalEvent(promotedState, { type: 'technical-hygiene-result', result: reevaluated });
-  if (!['PASS', 'PASS_WITH_DEBT'].includes(reevaluated.result)) throw new Error(`technical hygiene remained ${reevaluated.result} after ${promotedState.riskProfile.toUpperCase()} re-evaluation`);
-  return { hygiene: reevaluated, state: promotedState, plan: promotedPlan, promotionRun };
-}
-'''
-          for script in ['scripts/run-delivery-v2-controller.mjs', 'scripts/resume-delivery-v2-controller.mjs']:
-              p = Path(script)
-              s = p.read_text()
-              marker = "function higherRisk(next, current) {\n  return RISK_RANK[next] > RISK_RANK[current];\n}\n"
-              if s.count(marker) != 1: raise SystemExit(f'{script}: higherRisk anchor mismatch')
-              s = s.replace(marker, marker + "\n" + helper, 1)
-              p.write_text(s)
-
-          # Initial controller: promote UNKNOWN before CI and account for the extra worker call.
-          p = Path('scripts/run-delivery-v2-controller.mjs')
-          s = p.read_text()
-          old = "  const initialTechnicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: null, profile: state.riskProfile });\n  state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: initialTechnicalHygiene });\n  evidenceRefs.push(initialTechnicalHygiene.evidenceRef);\n"
-          new = "  let initialTechnicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: null, profile: state.riskProfile });\n  state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: initialTechnicalHygiene });\n  evidenceRefs.push(initialTechnicalHygiene.evidenceRef);\n  const initialPromotion = await ensurePromotedTechnicalHygiene({ hygiene: initialTechnicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: pullRequest.number, materialHeadSha, baselineSha: expectedBaseSha, actionsToken, targetReadToken });\n  if (initialPromotion.promotionRun) {\n    state = initialPromotion.state;\n    plan = initialPromotion.plan;\n    initialTechnicalHygiene = initialPromotion.hygiene;\n    workerRuns.push(initialPromotion.promotionRun);\n    const promotionUsage = await downloadWorkerUsage(orchestratorRepository, initialPromotion.promotionRun.id, actionsToken);\n    observability = recordControllerProviderObservation(observability, { runId: initialPromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, evidenceRef: promotionUsage.evidenceRef ?? initialPromotion.promotionRun.html_url });\n    if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);\n    evidenceRefs.push(initialTechnicalHygiene.evidenceRef);\n  }\n"
-          if s.count(old) != 1: raise SystemExit('run controller: initial hygiene anchor mismatch')
-          s = s.replace(old, new, 1)
-
-          # CI remediation: re-evaluate promotion if a previously FAST delivery becomes UNKNOWN.
-          old = "      const remediationTechnicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });\n      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: remediationTechnicalHygiene });\n      evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);\n"
-          new = "      let remediationTechnicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });\n      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: remediationTechnicalHygiene });\n      evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);\n      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: remediationTechnicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: pullRequest.number, materialHeadSha, baselineSha: expectedBaseSha, actionsToken, targetReadToken });\n      if (hygienePromotion.promotionRun) {\n        state = hygienePromotion.state;\n        plan = hygienePromotion.plan;\n        remediationTechnicalHygiene = hygienePromotion.hygiene;\n        workerRuns.push(hygienePromotion.promotionRun);\n        const promotionUsage = await downloadWorkerUsage(orchestratorRepository, hygienePromotion.promotionRun.id, actionsToken);\n        observability = recordControllerProviderObservation(observability, { runId: hygienePromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, evidenceRef: promotionUsage.evidenceRef ?? hygienePromotion.promotionRun.html_url });\n        if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);\n        evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);\n      }\n"
-          if s.count(old) != 1: raise SystemExit('run controller: CI remediation hygiene anchor mismatch')
-          s = s.replace(old, new, 1)
-
-          # Audit remediation also creates new material and must collect hygiene before another CI cycle.
-          old = "        state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });\n        latestCheck = null;\n        latestSourceRun = null;\n        lastAudit = null;\n        await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: null, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider, auditRunId: null, auditDispatchNonce: null, auditRequestFingerprint: null, priorFindings: (controller.priorFindings ?? []).map((finding) => ({ ...finding, status: 'remediated-pending-verification' })) });"
-          new = "        state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });\n        let remediationTechnicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });\n        state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: remediationTechnicalHygiene });\n        evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);\n        const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: remediationTechnicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: pullRequest.number, materialHeadSha, baselineSha: expectedBaseSha, actionsToken, targetReadToken });\n        if (hygienePromotion.promotionRun) {\n          state = hygienePromotion.state;\n          plan = hygienePromotion.plan;\n          remediationTechnicalHygiene = hygienePromotion.hygiene;\n          workerRuns.push(hygienePromotion.promotionRun);\n          const promotionUsage = await downloadWorkerUsage(orchestratorRepository, hygienePromotion.promotionRun.id, actionsToken);\n          observability = recordControllerProviderObservation(observability, { runId: hygienePromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, evidenceRef: promotionUsage.evidenceRef ?? hygienePromotion.promotionRun.html_url });\n          if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);\n          evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);\n        }\n        latestCheck = null;\n        latestSourceRun = null;\n        lastAudit = null;\n        await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: null, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider, technicalHygiene: state.technicalHygiene, auditRunId: null, auditDispatchNonce: null, auditRequestFingerprint: null, priorFindings: (controller.priorFindings ?? []).map((finding) => ({ ...finding, status: 'remediated-pending-verification' })) });"
-          if s.count(old) != 1: raise SystemExit('run controller: audit remediation anchor mismatch')
-          s = s.replace(old, new, 1)
-          p.write_text(s)
-
-          # Resume: every completed remediation must recollect hygiene, and FAST UNKNOWN is promoted.
-          p = Path('scripts/resume-delivery-v2-controller.mjs')
-          s = p.read_text()
-          old = "      const technicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: run.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });\n      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: technicalHygiene });\n      latestCheck = null;"
-          new = "      let technicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: run.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });\n      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: technicalHygiene });\n      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, actionsToken, targetReadToken });\n      if (hygienePromotion.promotionRun) {\n        await recordWorkerUsage(hygienePromotion.promotionRun);\n        state = hygienePromotion.state;\n        plan = hygienePromotion.plan;\n        technicalHygiene = hygienePromotion.hygiene;\n      }\n      latestCheck = null;"
-          if s.count(old) != 1: raise SystemExit(f'resume controller: implementing hygiene anchor mismatch {s.count(old)}')
-          s = s.replace(old, new, 1)
-
-          old = "      state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });\n      latestCheck = null;\n      latestSourceRun = null;\n      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: worker.id, plan }) });"
-          new = "      state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });\n      let technicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });\n      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: technicalHygiene });\n      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, actionsToken, targetReadToken });\n      if (hygienePromotion.promotionRun) {\n        await recordWorkerUsage(hygienePromotion.promotionRun);\n        state = hygienePromotion.state;\n        plan = hygienePromotion.plan;\n        technicalHygiene = hygienePromotion.hygiene;\n      }\n      latestCheck = null;\n      latestSourceRun = null;\n      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: worker.id, plan }), technicalHygiene: state.technicalHygiene });"
-          if s.count(old) != 1: raise SystemExit(f'resume controller: generic remediation anchor mismatch {s.count(old)}')
-          s = s.replace(old, new, 1)
-          p.write_text(s)
-
-          # Fix the two invalid state-machine tests and add explicit promotion/register coverage.
-          p = Path('test/v2-operational-controller.test.mjs')
-          s = p.read_text()
-          helper_anchor = "function identity(provider = 'codex') {\n  return { issueNumber: 63, pullRequestNumber: 77, baseRef: 'main', baseSha: B, headRef: 'feat/63', provider };\n}\n"
-          fast_helper = helper_anchor + "\nfunction fastPlanFor() {\n  return createDeliveryPlan({\n    requestedRisk: 'fast',\n    changedPaths: ['apps/web/src/components/Filter.tsx'],\n    repositoryPolicy: { fastSafeRoots: ['apps/web/src/components'] },\n    repository: 'owner/repo',\n    issueNumber: 63,\n    aiPolicy: { implementerProvider: 'codex', implementerModel: 'gpt-5.4', auditorProvider: 'claude', auditorModel: 'claude-opus-5' }\n  });\n}\n"
-          if s.count(helper_anchor) != 1: raise SystemExit('operational test identity anchor mismatch')
-          s = s.replace(helper_anchor, fast_helper, 1)
-          s = s.replace("createOperationalDelivery({ plan: planFor('fast'), materialHeadSha: A })", "createOperationalDelivery({ plan: fastPlanFor(), materialHeadSha: A })")
-          old = "  state = applyOperationalEvent(state, { type: 'start-implementation' });\n  state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha: B });"
-          new = "  state = applyOperationalEvent(state, { type: 'ci-result', result: { candidateSha: A, conclusion: 'failure', failureClass: 'actionable', cause: 'test-remediation', evidenceRef: 'run:failed' } });\n  state = applyOperationalEvent(state, { type: 'start-implementation' });\n  state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha: B });"
-          if s.count(old) != 1: raise SystemExit('operational test remediation anchor mismatch')
-          s = s.replace(old, new, 1)
-          s += "\n\ntest('technical hygiene promotion upgrades FAST operational risk to STANDARD', () => {\n  let state = createOperationalDelivery({ plan: fastPlanFor(), materialHeadSha: A });\n  const promotedPlan = createDeliveryPlan({ requestedRisk: 'standard', changedPaths: ['apps/web/src/components/Filter.tsx'], repositoryPolicy: { fastSafeRoots: ['apps/web/src/components'] }, repository: 'owner/repo', issueNumber: 63, aiPolicy: { implementerProvider: 'codex', implementerModel: 'gpt-5.4', auditorProvider: 'claude', auditorModel: 'claude-opus-5' } });\n  state = applyOperationalEvent(state, { type: 'promote-risk', plan: promotedPlan });\n  assert.equal(state.riskProfile, 'standard');\n  assert.equal(state.auditRequired, true);\n});\n"
-          p.write_text(s)
-
-          p = Path('test/v2-technical-hygiene.test.mjs')
-          s = p.read_text()
-          s += "\n\ntest('compact structural register preserves created files and symbols',()=>{const r=evaluateTechnicalHygiene(base({createdFiles:['src/new-helper.mjs'],reuseDiscovery:[{symbol:'NewHelper',decision:'CREATE_NEW',material:true,evidence:ev('new'),justificationEvidence:ev('owner')}]}));assert.deepEqual(r.createdFiles,['src/new-helper.mjs']);assert.deepEqual(r.createdSymbols,['NewHelper'])});\n"
-          p.write_text(s)
-          PY
+        run: python3 .github/scripts/issue86-final-remediation.py
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
-      - name: Focused tests before generated workflow compile
+      - name: Focused tests
         run: node --test test/v2-operational-controller.test.mjs test/v2-technical-hygiene.test.mjs test/v2-technical-hygiene-release.test.mjs test/v2-gh-aw-hygiene-artifact.test.mjs
       - name: Install pinned gh-aw
         run: npm install --no-save @github/gh-aw@0.88.7
@@ -172,6 +35,7 @@ jobs:
         shell: bash
         run: |
           rm .github/workflows/issue-86-final-remediation.yml
+          rm .github/scripts/issue86-final-remediation.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
