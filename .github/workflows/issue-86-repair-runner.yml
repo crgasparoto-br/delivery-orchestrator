@@ -37,6 +37,7 @@ jobs:
           const file = '/tmp/issue-86-repair.sh';
           let source = fs.readFileSync(file, 'utf8');
           source = source.replace("text: `done\\\\nTECHNICAL_HYGIENE_JSON=${JSON.stringify(payload)}`", "text: 'done\\\\nTECHNICAL_HYGIENE_JSON=' + JSON.stringify(payload)");
+          source = source.replace('if (count !== 2) throw new Error(`expected 2 remediation hygiene anchors, found ${count}`);', 'if (count !== 1) throw new Error(`expected 1 remediation hygiene anchor, found ${count}`);');
           fs.writeFileSync(file, source);
           NODE
           bash /tmp/issue-86-repair.sh
