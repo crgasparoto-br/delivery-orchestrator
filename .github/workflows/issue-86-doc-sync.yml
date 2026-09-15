@@ -1,0 +1,49 @@
+name: Issue 86 canonical register sync
+on:
+  push:
+    branches:
+      - feat/86-technical-hygiene-gate
+    paths:
+      - .github/workflows/issue-86-doc-sync.yml
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/86-technical-hygiene-gate
+          fetch-depth: 2
+      - name: Align canonical compact register
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('docs/delivery-v2/MASTER_SPEC.md')
+          s = p.read_text()
+          old = '  "createdSymbols": [],\n  "structuralFindings": [],'
+          new = '  "createdSymbols": [],\n  "createdFiles": [],\n  "structuralFindings": [],'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one compact-register anchor, got {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Validate canonical contract
+        run: |
+          npm ci --no-audit --no-fund
+          npm run verify:v2
+      - name: Build exact synchronized commit
+        shell: bash
+        run: |
+          rm .github/workflows/issue-86-doc-sync.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs: align DV2-017 structural register (#86)'
+          git rev-parse HEAD | tee /tmp/candidate-sha.txt
+          git push origin HEAD:refs/heads/feat/86-technical-hygiene-gate || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue86-doc-sync-candidate
+          path: /tmp/candidate-sha.txt
+          retention-days: 1
