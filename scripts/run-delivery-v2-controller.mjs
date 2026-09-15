@@ -16,6 +16,7 @@ import {
   persistentStateFromOperational
 } from '../src/v2/operational-controller.mjs';
 import { normalizeGhAwUsage, parseGhAwUsageJsonl } from '../src/v2/usage-telemetry.mjs';
+import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
 import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
 import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
@@ -386,6 +387,9 @@ export async function main() {
   let latestCheck = null;
   let latestSourceRun = null;
   let lastAudit = null;
+  const initialTechnicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: null, profile: state.riskProfile });
+  state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: initialTechnicalHygiene });
+  evidenceRefs.push(initialTechnicalHygiene.evidenceRef);
 
   let controller = { controllerRunId, controllerRepository: orchestratorRepository, controllerRef: orchestratorRef, controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml', observability };
   const identity = () => ({
@@ -402,7 +406,7 @@ export async function main() {
   };
 
   await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
-  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce, materialWorkerRunId: worker.id, materialWorkerIdentity: initialWorkerIdentity, materialWorkerProvider: initialWorkerProvider });
+  await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce, materialWorkerRunId: worker.id, materialWorkerIdentity: initialWorkerIdentity, materialWorkerProvider: initialWorkerProvider, technicalHygiene: state.technicalHygiene });
 
   for (let cycle = 0; cycle < 8; cycle += 1) {
     const observed = await waitRequiredCheck({
@@ -424,7 +428,7 @@ export async function main() {
       classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
       latestCheck = null;
       latestSourceRun = null;
-      await persist({ nextAction: 'external-head-drift-requires-controller-resume' });
+      await persist({ nextAction: 'external-head-drift-requires-controller-resume', technicalHygiene: null });
       throw new Error('material head changed outside the bounded controller remediation step');
     }
 
@@ -493,9 +497,12 @@ export async function main() {
       plan = nextPlan;
       classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
+      const remediationTechnicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });
+      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: remediationTechnicalHygiene });
+      evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);
       latestCheck = null;
       latestSourceRun = null;
-      await persist({ nextAction: 'observe-ci', workerRunId: worker.id, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider });
+      await persist({ nextAction: 'observe-ci', workerRunId: worker.id, materialWorkerRunId: worker.id, materialWorkerIdentity: plan.implementation.workflow, materialWorkerProvider: plan.implementation.provider, technicalHygiene: state.technicalHygiene });
       continue;
     }
 

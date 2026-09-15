@@ -16,6 +16,7 @@ import { resolveOperationalAuditPolicy } from './audit-policy.mjs';
 import { executionPolicyFor } from './execution-policy.mjs';
 import { resolveProviderSelectionForRisk } from './provider-policy.mjs';
 import { evaluateReleaseGate } from './release-gate.mjs';
+import { normalizeTechnicalHygieneResult } from './technical-hygiene.mjs';
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const AI_POLICY_ENV_KEYS = Object.freeze([
@@ -131,9 +132,10 @@ export function createOperationalDelivery({ plan, materialHeadSha } = {}) {
   state = classifyDelivery(state, { riskProfile: value.risk.profile });
   state = applyAuditPolicy(state, { repository: value.repository, audit: requiredObject(value.audit, 'plan.audit') });
   state = bindPlanAiIdentity(state, value);
-  if (materialHeadSha == null) return state;
+  if (materialHeadSha == null) return Object.freeze({ ...state, technicalHygiene: null });
   state = startImplementation(state);
-  return publishMaterial(state, { materialHeadSha: requiredSha(materialHeadSha, 'materialHeadSha') });
+  state = publishMaterial(state, { materialHeadSha: requiredSha(materialHeadSha, 'materialHeadSha') });
+  return Object.freeze({ ...state, technicalHygiene: null });
 }
 
 export function nextOperationalAction(state) {
@@ -157,14 +159,19 @@ export function applyOperationalEvent(state, event) {
   switch (requiredString(value.type, 'event.type')) {
     case 'classify': return classifyDelivery(state, { riskProfile: value.riskProfile ?? state.riskProfile });
     case 'start-implementation': return startImplementation(state);
-    case 'publish-material': return publishMaterial(state, { materialHeadSha: value.materialHeadSha });
+    case 'publish-material': return Object.freeze({ ...publishMaterial(state, { materialHeadSha: value.materialHeadSha }), technicalHygiene: null });
+    case 'technical-hygiene-result': {
+      const technicalHygiene = normalizeTechnicalHygieneResult(value.result);
+      if (technicalHygiene.materialSha !== state.materialHeadSha) throw new Error('technical hygiene result is stale for material head');
+      return Object.freeze({ ...state, technicalHygiene });
+    }
     case 'ci-result': return recordCiResult(state, value.result);
     case 'start-audit': return startAudit(state);
     case 'audit-result': {
       const inFlight = state.auditInFlight ? state : startAudit(state);
       return recordAuditResult(inFlight, value.result);
     }
-    case 'head-drift': return recordHeadDrift(state, { materialHeadSha: value.materialHeadSha });
+    case 'head-drift': return Object.freeze({ ...recordHeadDrift(state, { materialHeadSha: value.materialHeadSha }), technicalHygiene: null });
     case 'escalate': return escalateDelivery(state, { reason: value.reason, evidenceRef: value.evidenceRef ?? null });
     case 'terminal': return markTerminal(state, { reason: value.reason });
     default: throw new Error(`unsupported operational event: ${value.type}`);
@@ -253,6 +260,7 @@ export function operationalStateFromPersistent(rawPersistentState) {
     auditMode: auditPolicy.mode,
     ciEvidence: successfulCheck ? Object.freeze({ candidateSha: persistent.materialHeadSha, conclusion: 'success', evidenceRef: successfulCheck.evidenceRef }) : null,
     auditEvidence: persistent.auditEvidence,
+    technicalHygiene: null,
     ciFailure: persistent.ciFailure,
     blockingFindings: Object.freeze(persistent.blockingFindings.map((finding) => Object.freeze({
       id: finding.id,
@@ -283,7 +291,7 @@ export function evaluateOperationalRelease({ state, releaseInput } = {}) {
       release: null
     });
   }
-  const release = evaluateReleaseGate(releaseInput);
+  const release = evaluateReleaseGate({ ...releaseInput, technicalHygieneRequired: true, technicalHygiene: current.technicalHygiene ?? null });
   if (release.candidateSha !== current.materialHeadSha) {
     throw new Error('release gate candidate does not match operational material head');
   }

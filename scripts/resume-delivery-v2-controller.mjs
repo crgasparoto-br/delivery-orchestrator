@@ -30,6 +30,7 @@ import {
   runDurationMs
 } from '../src/v2/controller-observability.mjs';
 import { downloadGhAwUsageArtifact } from '../src/v2/gh-aw-usage-artifact.mjs';
+import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
@@ -390,6 +391,9 @@ export async function main() {
       remoteHeadSha: materialHeadSha
     });
     state = operationalStateFromPersistent(reconciled.state);
+    if (!reconciled.staleStateDetected && stateEnvelope.controller?.technicalHygiene) {
+      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: stateEnvelope.controller.technicalHygiene });
+    }
     if (reconciled.staleStateDetected || ['queued', 'classified', 'ci-failed-remediable'].includes(state.status)) {
       state = rebuildCiPendingState({ plan, materialHeadSha, previousState: state });
       const materialIdentityStale = String(stateEnvelope.persistent.materialHeadSha).toLowerCase() !== materialHeadSha;
@@ -400,6 +404,7 @@ export async function main() {
         auditRunId: null,
         auditDispatchNonce: null,
         auditRequestFingerprint: null,
+        technicalHygiene: materialIdentityStale ? null : controller.technicalHygiene ?? null,
         ...(materialIdentityStale ? { materialWorkerRunId: null, materialWorkerIdentity: null, materialWorkerProvider: null } : {})
       };
     }
@@ -484,9 +489,11 @@ export async function main() {
       plan = nextPlan;
       classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
+      const technicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: run.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });
+      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: technicalHygiene });
       latestCheck = null;
       latestSourceRun = null;
-      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: run.id, plan }) });
+      await persist({ nextAction: 'observe-ci', ...controllerMetadataForNewMaterial({ controller, workerRunId: run.id, plan }), technicalHygiene: state.technicalHygiene });
       continue;
     }
 
@@ -508,7 +515,7 @@ export async function main() {
         state = rebuildCiPendingState({ plan, materialHeadSha, previousState: state });
         latestCheck = null;
         latestSourceRun = null;
-        await persist({ nextAction: 'observe-ci', reason: 'reconciled-head-drift' });
+        await persist({ nextAction: 'observe-ci', reason: 'reconciled-head-drift', technicalHygiene: null });
         continue;
       }
 
