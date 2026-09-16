@@ -1,0 +1,76 @@
+name: Delivery V2 - Chat ingress
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: delivery-v2-chat-ingress-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: startsWith(github.event.issue.title, '[delivery-v2-dispatch]') && github.event.issue.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout deterministic control plane
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Parse trusted ingress payload
+        id: ingress
+        env:
+          DELIVERY_V2_CHAT_INGRESS_BODY: ${{ github.event.issue.body }}
+        run: node scripts/parse-delivery-v2-chat-ingress.mjs
+
+      - name: Dispatch Delivery V2 controller
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORCHESTRATOR_REF: ${{ github.event.repository.default_branch }}
+          TARGET_REPOSITORY: ${{ steps.ingress.outputs.target_repository }}
+          TARGET_ISSUE: ${{ steps.ingress.outputs.target_issue }}
+          RISK_PROFILE: ${{ steps.ingress.outputs.risk_profile }}
+          BASE_BRANCH: ${{ steps.ingress.outputs.base_branch }}
+          CHANGED_PATHS: ${{ steps.ingress.outputs.changed_paths }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run delivery-v2-dispatch.yml \
+            --ref "$ORCHESTRATOR_REF" \
+            -f "target_repository=$TARGET_REPOSITORY" \
+            -f "target_issue=$TARGET_ISSUE" \
+            -f "risk_profile=$RISK_PROFILE" \
+            -f "base_branch=$BASE_BRANCH" \
+            -f "changed_paths=$CHANGED_PATHS"
+
+      - name: Close accepted ingress request
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INGRESS_ISSUE: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue comment "$INGRESS_ISSUE" --body 'Delivery V2 controller dispatch accepted. The durable state and independent audit now belong to the controller.'
+          gh issue close "$INGRESS_ISSUE" --reason completed
+
+      - name: Mark rejected ingress request
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INGRESS_ISSUE: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue comment "$INGRESS_ISSUE" --body 'Delivery V2 chat ingress was rejected before controller dispatch. Inspect this workflow run; no fallback implementation path was used.'
