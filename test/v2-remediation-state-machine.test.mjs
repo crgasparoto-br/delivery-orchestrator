@@ -87,6 +87,24 @@ test('audit rejection exposes only blocking findings plus explicitly new risk su
   assert.deepEqual(input.newRiskSurfaces, ['src/new-boundary.mjs']);
 });
 
+test('audit remediation uses its own budget when the initial implementation budget is exhausted', () => {
+  let state = publish(begin('critical'), A);
+  state = recordCiResult(state, { candidateSha: A, conclusion: 'failure', failureClass: 'actionable', cause: 'test failure', evidenceRef: 'run:1' });
+  state = publish(startImplementation(state), B);
+  state = recordCiResult(state, { candidateSha: B, conclusion: 'failure', failureClass: 'actionable', cause: 'test failure', evidenceRef: 'run:2' });
+  state = startAudit(ciSuccess(publish(startImplementation(state), C)));
+
+  assert.equal(state.implementationAttempts, state.limits.maxImplementationAttempts);
+  assert.equal(state.auditRemediationAttempts, 0);
+  state = recordAuditResult(state, { candidateSha: C, decision: 'rejected', evidenceRef: 'audit:1', findings: [blockingFinding(C)] });
+  assert.equal(state.status, 'audit-failed-remediable');
+
+  state = startImplementation(state);
+  assert.equal(state.status, 'implementing');
+  assert.equal(state.implementationAttempts, state.limits.maxImplementationAttempts);
+  assert.equal(state.auditRemediationAttempts, 1);
+});
+
 test('audit context insufficiency escalates deterministically without authorizing implementation remediation', () => {
   let state = startAudit(ciSuccess(publish(begin('critical'))));
   state = recordAuditResult(state, {
@@ -128,6 +146,7 @@ test('STANDARD permits one audit-remediation cycle and escalates after the next 
   assert.equal(state.status, 'audit-failed-remediable');
   state = startImplementation(state);
   assert.equal(state.auditRemediationAttempts, 1);
+  assert.equal(state.implementationAttempts, 1);
   state = ciSuccess(publish(state, B));
   state = startAudit(state);
   state = recordAuditResult(state, { candidateSha: B, decision: 'rejected', evidenceRef: 'audit:2', findings: [blockingFinding(B, 'DV2-TEST-002')] });

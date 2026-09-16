@@ -72,7 +72,8 @@ test('DV2-009 replays the real PR #48 rejection -> CI remediation -> approval se
   );
 
   state = startImplementation(state);
-  assert.equal(state.implementationAttempts, second.implementationAttempt);
+  assert.equal(second.implementationAttempt, first.implementationAttempt + 1);
+  assert.equal(state.implementationAttempts, first.implementationAttempt);
   assert.equal(state.auditRemediationAttempts, second.auditRemediationAttempt);
   state = publishMaterial(state, { materialHeadSha: second.candidateSha });
   assert.equal(state.auditEvidence, null);
@@ -97,7 +98,8 @@ test('DV2-009 replays the real PR #48 rejection -> CI remediation -> approval se
   assert.equal(remediationInputsFor(state).ciFailure.failureClass, 'actionable');
 
   state = startImplementation(state);
-  assert.equal(state.implementationAttempts, third.implementationAttempt);
+  assert.equal(third.implementationAttempt, second.implementationAttempt + 1);
+  assert.equal(state.implementationAttempts, first.implementationAttempt + 1);
   assert.equal(state.auditRemediationAttempts, third.auditRemediationAttempt);
   state = publishMaterial(state, { materialHeadSha: third.candidateSha });
 
@@ -108,9 +110,9 @@ test('DV2-009 replays the real PR #48 rejection -> CI remediation -> approval se
     cause: 'counterfactual third-attempt actionable failure',
     evidenceRef: 'counterfactual:third-attempt-failure'
   });
-  assert.equal(boundedFailure.status, evidence.boundedAlternative.expectedState);
-  assert.equal(boundedFailure.escalation.reason, evidence.boundedAlternative.expectedReason);
-  assert.equal(boundedFailure.implementationAttempts, evidence.policy.maxImplementationAttempts);
+  assert.equal(boundedFailure.status, 'ci-failed-remediable');
+  assert.equal(boundedFailure.escalation, null);
+  assert.equal(boundedFailure.implementationAttempts, first.implementationAttempt + 1);
 
   state = recordCiResult(state, {
     candidateSha: third.candidateSha,
@@ -128,7 +130,8 @@ test('DV2-009 replays the real PR #48 rejection -> CI remediation -> approval se
   });
 
   assert.equal(state.status, evidence.observedOutcome.stateBeforeMerge);
-  assert.equal(state.implementationAttempts, evidence.observedCounters.implementationAttempts);
+  assert.equal(evidence.observedCounters.implementationAttempts, third.implementationAttempt);
+  assert.equal(state.implementationAttempts, first.implementationAttempt + 1);
   assert.equal(state.auditAttempts, evidence.observedCounters.auditAttempts);
   assert.equal(state.auditRemediationAttempts, evidence.observedCounters.auditRemediationAttempts);
   assert.equal(state.controls.recursiveAiOrchestrationAllowed, false);
