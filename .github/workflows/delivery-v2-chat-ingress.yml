@@ -1,0 +1,65 @@
+name: Delivery V2 - Chat ingress
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: delivery-v2-chat-ingress-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: contains(github.event.issue.labels.*.name, 'delivery-v2-dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout deterministic control plane
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Parse trusted ingress payload
+        id: ingress
+        env:
+          DELIVERY_V2_CHAT_INGRESS_BODY: ${{ github.event.issue.body }}
+        run: node scripts/parse-delivery-v2-chat-ingress.mjs
+
+      - name: Dispatch Delivery V2 controller
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh workflow run delivery-v2-dispatch.yml \
+            --ref "${{ github.event.repository.default_branch }}" \
+            -f target_repository='${{ steps.ingress.outputs.target_repository }}' \
+            -f target_issue='${{ steps.ingress.outputs.target_issue }}' \
+            -f risk_profile='${{ steps.ingress.outputs.risk_profile }}' \
+            -f base_branch='${{ steps.ingress.outputs.base_branch }}' \
+            -f changed_paths='${{ steps.ingress.outputs.changed_paths }}'
+
+      - name: Close accepted ingress request
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" --body 'Delivery V2 controller dispatch accepted. The durable state and independent audit now belong to the controller.'
+          gh issue close "${{ github.event.issue.number }}" --reason completed
+
+      - name: Mark rejected ingress request
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" --body 'Delivery V2 chat ingress was rejected before controller dispatch. Inspect this workflow run; no fallback implementation path was used.'
