@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   dispatch:
-    if: contains(github.event.issue.labels.*.name, 'delivery-v2-dispatch')
+    if: startsWith(github.event.issue.title, '[delivery-v2-dispatch]') && github.event.issue.user.login == github.repository_owner
     runs-on: ubuntu-latest
     steps:
       - name: Checkout deterministic control plane
