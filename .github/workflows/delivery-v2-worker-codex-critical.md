@@ -50,6 +50,14 @@ pre-steps:
       set -euo pipefail
       trap 'rm -rf .delivery-v2-control-plane' EXIT
       node .delivery-v2-control-plane/.github/scripts/validate-delivery-v2-worker-authorization.mjs
+  - name: Ensure git is available to agent sandbox
+    shell: bash
+    run: |
+      set -euo pipefail
+      sudo apt-get update
+      sudo apt-get install -y git
+      command -v git
+      git --version
 engine:
   id: codex
   model: ${{ vars.DELIVERY_CRITICAL_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.4' }}
