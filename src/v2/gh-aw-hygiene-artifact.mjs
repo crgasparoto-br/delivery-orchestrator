@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { evaluateTechnicalHygiene } from './technical-hygiene.mjs';
 
+const REUSE_DECISIONS = new Set(['REUSE_EXISTING', 'EXTEND_EXISTING', 'LOCAL_REFACTOR', 'CREATE_NEW', 'KEEP_SEPARATE', 'UNKNOWN']);
+
 function headers(token) {
   return { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'delivery-v2-hygiene-artifact' };
 }
@@ -28,6 +30,59 @@ function summaryFromAgentLog(rawLog) {
     return parsed;
   }
   throw new Error('worker artifact is missing TECHNICAL_HYGIENE_JSON summary');
+}
+
+function nonEmptyStrings(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim());
+}
+
+function normalizeWorkerSummary(rawSummary) {
+  const summary = rawSummary && !Array.isArray(rawSummary) && typeof rawSummary === 'object' ? rawSummary : null;
+  if (!summary) throw new Error('technical hygiene worker summary must be an object');
+
+  const shorthandEvidence = nonEmptyStrings(summary.deterministicReferences);
+  let reuseDiscovery = summary.reuseDiscovery ?? [];
+  if (typeof reuseDiscovery === 'string') {
+    const decision = reuseDiscovery.trim().toUpperCase();
+    if (!REUSE_DECISIONS.has(decision)) throw new Error(`unsupported shorthand reuse decision: ${decision}`);
+    if (shorthandEvidence.length === 0) throw new Error('shorthand reuseDiscovery requires deterministicReferences evidence');
+    reuseDiscovery = [{ symbol: 'worker-scope', decision, evidence: shorthandEvidence }];
+  }
+  if (!Array.isArray(reuseDiscovery)) throw new Error('reuseDiscovery must be an array or a supported shorthand decision');
+
+  let semanticJudgments = summary.semanticJudgments ?? [];
+  if (!Array.isArray(semanticJudgments)) throw new Error('semanticJudgments must be an array');
+  semanticJudgments = semanticJudgments.map((entry, index) => {
+    if (!entry || Array.isArray(entry) || typeof entry !== 'object') throw new Error(`semanticJudgments[${index}] must be an object`);
+    if (String(entry.claim ?? '').trim()) return entry;
+    const decision = String(entry.decision ?? '').trim();
+    if (!decision) throw new Error(`semanticJudgments[${index}] requires claim or decision`);
+    return { ...entry, claim: decision };
+  });
+
+  let deterministicReferences = summary.deterministicReferences ?? [];
+  if (!Array.isArray(deterministicReferences)) throw new Error('deterministicReferences must be an array');
+  deterministicReferences = deterministicReferences.map((entry, index) => {
+    if (typeof entry === 'string' && entry.trim()) {
+      const evidenceRef = entry.trim();
+      return { symbol: evidenceRef, referenced: true, evidence: [evidenceRef] };
+    }
+    if (!entry || Array.isArray(entry) || typeof entry !== 'object') throw new Error(`deterministicReferences[${index}] must be an object or evidence string`);
+    return entry;
+  });
+
+  let semanticCalls = summary.semanticCalls ?? 0;
+  if (Array.isArray(semanticCalls)) semanticCalls = semanticCalls.length;
+  if (!Number.isInteger(semanticCalls) || semanticCalls < 0) throw new Error('semanticCalls must be a non-negative integer or an array of semantic-call descriptions');
+
+  return {
+    ...summary,
+    reuseDiscovery,
+    semanticJudgments,
+    deterministicReferences,
+    semanticCalls
+  };
 }
 
 async function findFile(root, expected) {
@@ -58,7 +113,7 @@ export async function downloadGhAwTechnicalHygieneArtifact({ repository, runId, 
     execFileSync('unzip', ['-q', zip, '-d', root]);
     const log = await findFile(root, 'agent-stdio.log');
     if (!log) throw new Error('worker agent artifact is missing agent-stdio.log');
-    const summary = summaryFromAgentLog(await readFile(log, 'utf8'));
+    const summary = normalizeWorkerSummary(summaryFromAgentLog(await readFile(log, 'utf8')));
     return evaluateTechnicalHygiene({
       schemaVersion: 1,
       profile,
@@ -79,4 +134,4 @@ export async function downloadGhAwTechnicalHygieneArtifact({ repository, runId, 
   }
 }
 
-export const __test = Object.freeze({ summaryFromAgentLog });
+export const __test = Object.freeze({ summaryFromAgentLog, normalizeWorkerSummary });
