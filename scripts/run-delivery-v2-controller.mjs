@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { loadV2Config } from '../src/v2/config.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
@@ -43,8 +44,14 @@ function requiredEnv(name) {
   return value;
 }
 function positiveInteger(value, label) {
-  const result = Number.parseInt(String(value ?? ''), 10);
+  const result = Number(String(value ?? '').trim());
   if (!Number.isInteger(result) || result < 1) throw new Error(`${label} must be a positive integer`);
+  return result;
+}
+export function nonNegativeInteger(value, label) {
+  const normalized = String(value ?? '').trim();
+  const result = Number(normalized);
+  if (!normalized || !Number.isInteger(result) || result < 0) throw new Error(`${label} must be a non-negative integer`);
   return result;
 }
 function splitPaths(value) {
@@ -361,7 +368,7 @@ export async function main() {
   const actionsToken = requiredEnv('GITHUB_TOKEN');
   const controllerRunId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
   const resultPath = process.env.CONTROLLER_RESULT_PATH || path.join(process.env.RUNNER_TEMP || tmpdir(), 'delivery-v2-controller-result.json');
-  const initialAttempts = positiveInteger(process.env.DELIVERY_V2_INITIAL_ATTEMPTS || '1', 'DELIVERY_V2_INITIAL_ATTEMPTS');
+  const initialAttempts = nonNegativeInteger(process.env.DELIVERY_V2_INITIAL_ATTEMPTS || '1', 'DELIVERY_V2_INITIAL_ATTEMPTS');
   const recoverWorkerRunId = String(process.env.DELIVERY_V2_RECOVER_WORKER_RUN_ID ?? '').trim() ? positiveInteger(process.env.DELIVERY_V2_RECOVER_WORKER_RUN_ID, 'DELIVERY_V2_RECOVER_WORKER_RUN_ID') : null;
   const initialDispatchNonce = String(process.env.DELIVERY_V2_INITIAL_DISPATCH_NONCE ?? '').trim() || createDispatchNonce();
   const targetPolicy = await loadControllerTarget(targetRepository, baseBranch);
@@ -594,29 +601,23 @@ export async function main() {
       auditRun = await waitWorkflowRun(orchestratorRepository, auditRun.id, actionsToken);
       auditRuns.push(auditRun);
       if (auditRun.conclusion !== 'success') {
-        const terminalReason =
-          `independent-audit-workflow-${auditRun.conclusion ?? 'failed'}`;
-
+        const terminalReason = `independent-audit-workflow-${auditRun.conclusion ?? 'failed'}`;
         observability = recordControllerAuditWorkflowFailure(observability, {
           runId: auditRun.id,
           durationMs: runDurationMs(auditRun),
           evidenceRef: auditRun.html_url
         });
-
         const partialMetrics = createControllerPartialMetrics({
           observability,
           terminalReason
         });
-
         await persist({
           nextAction: 'audit-workflow-failed',
           auditRunId: auditRun.id,
           auditDispatchNonce,
           terminalReason,
-          providerAccountingComplete:
-            observability.providerAccountingComplete
+          providerAccountingComplete: observability.providerAccountingComplete
         });
-
         const failurePayload = {
           schemaVersion: 1,
           status: 'audit-workflow-failed',
@@ -639,16 +640,8 @@ export async function main() {
             auditRemediation: state.auditRemediationAttempts
           }
         };
-
-        await writeFile(
-          resultPath,
-          `${JSON.stringify(failurePayload, null, 2)}\n`,
-          'utf8'
-        );
-
-        throw new Error(
-          `independent audit workflow failed: ${auditRun.html_url}`
-        );
+        await writeFile(resultPath, `${JSON.stringify(failurePayload, null, 2)}\n`, 'utf8');
+        throw new Error(`independent audit workflow failed: ${auditRun.html_url}`);
       }
       lastAudit = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: pullRequest.number, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });
       observability = recordControllerProviderObservation(observability, {
@@ -807,7 +800,9 @@ export async function main() {
   if (!['ready-for-human-merge', 'escalated'].includes(state.status)) throw new Error(`controller stopped in non-terminal state ${state.status}`);
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error.stack || error.message}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    process.stderr.write(`${error.stack || error.message}\n`);
+    process.exitCode = 1;
+  });
+}
