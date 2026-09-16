@@ -25,7 +25,7 @@ function bootstrapLease(overrides = {}) {
     issueNumber: 105,
     baseBranch: 'main',
     provider: 'codex',
-    model: 'gpt-5.6-sol',
+    model: null,
     requestedRisk: 'auto',
     effectiveRisk: 'critical',
     implementationAttempts: 3,
@@ -42,7 +42,7 @@ function successfulWorker(overrides = {}) {
   return { id: 35117775004, status: 'completed', conclusion: 'success', ...overrides };
 }
 
-test('managed PR without persistent state recovers the correlated successful bootstrap worker without reserving a new attempt', () => {
+test('managed PR without persistent state recovers the correlated successful model-less bootstrap worker without reserving a new attempt', () => {
   const decision = evaluateReentry({
     pullRequest: managedPr(),
     stateEnvelope: null,
@@ -85,7 +85,7 @@ test('managed PR without persistent state remains fail closed when the correlate
   assert.equal(decision.attempts.implementation, 3);
 });
 
-test('bootstrap PR recovery rejects identity mismatches instead of adopting them', () => {
+test('bootstrap PR recovery rejects an explicitly persisted model mismatch instead of adopting it', () => {
   assert.throws(() => evaluateReentry({
     pullRequest: managedPr(),
     stateEnvelope: null,
