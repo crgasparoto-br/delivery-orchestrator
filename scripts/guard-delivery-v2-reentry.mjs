@@ -116,7 +116,6 @@ function assertBootstrapRecoveryLease(bootstrapLease, { targetRepository, issueN
   if (!String(bootstrapLease.workerWorkflow ?? '').trim()) throw new Error('bootstrap recovery requires worker workflow identity');
   if (!String(bootstrapLease.dispatchNonce ?? '').trim()) throw new Error('bootstrap recovery requires dispatch nonce');
   assertAiPolicyMatch({ persistedProvider: bootstrapLease.provider, persistedModel: bootstrapLease.model, expectedProvider: provider, expectedModel: model, label: 'bootstrap lease' });
-  if (model != null && bootstrapLease.model == null) throw new Error('bootstrap lease model does not match resolved delivery policy');
 }
 
 function bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease, recoveredWorkerRun, targetRepository, issueNumber, baseBranch, provider, model }) {
