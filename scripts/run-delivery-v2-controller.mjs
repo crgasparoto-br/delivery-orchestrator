@@ -601,23 +601,29 @@ export async function main() {
       auditRun = await waitWorkflowRun(orchestratorRepository, auditRun.id, actionsToken);
       auditRuns.push(auditRun);
       if (auditRun.conclusion !== 'success') {
-        const terminalReason = `independent-audit-workflow-${auditRun.conclusion ?? 'failed'}`;
+        const terminalReason =
+          `independent-audit-workflow-${auditRun.conclusion ?? 'failed'}`;
+
         observability = recordControllerAuditWorkflowFailure(observability, {
           runId: auditRun.id,
           durationMs: runDurationMs(auditRun),
           evidenceRef: auditRun.html_url
         });
+
         const partialMetrics = createControllerPartialMetrics({
           observability,
           terminalReason
         });
+
         await persist({
           nextAction: 'audit-workflow-failed',
           auditRunId: auditRun.id,
           auditDispatchNonce,
           terminalReason,
-          providerAccountingComplete: observability.providerAccountingComplete
+          providerAccountingComplete:
+            observability.providerAccountingComplete
         });
+
         const failurePayload = {
           schemaVersion: 1,
           status: 'audit-workflow-failed',
@@ -640,8 +646,16 @@ export async function main() {
             auditRemediation: state.auditRemediationAttempts
           }
         };
-        await writeFile(resultPath, `${JSON.stringify(failurePayload, null, 2)}\n`, 'utf8');
-        throw new Error(`independent audit workflow failed: ${auditRun.html_url}`);
+
+        await writeFile(
+          resultPath,
+          `${JSON.stringify(failurePayload, null, 2)}\n`,
+          'utf8'
+        );
+
+        throw new Error(
+          `independent audit workflow failed: ${auditRun.html_url}`
+        );
       }
       lastAudit = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: pullRequest.number, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });
       observability = recordControllerProviderObservation(observability, {
