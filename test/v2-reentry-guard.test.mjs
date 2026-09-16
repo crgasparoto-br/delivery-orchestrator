@@ -4,9 +4,11 @@ import test from 'node:test';
 import { createPersistentDeliveryState } from '../src/v2/persistent-state.mjs';
 import {
   evaluateReentry,
+  createLegacyAdoptionEnvelope,
   parseBootstrapLease,
   parsePersistentStateEnvelope,
-  selectManagedPullRequest
+  selectManagedPullRequest,
+  terminalizeBootstrapLease
 } from '../scripts/guard-delivery-v2-reentry.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
 import { controllerMetadataForNewMaterial, markExistingAuditInFlight, rebuildCiPendingState } from '../scripts/resume-delivery-v2-controller.mjs';
@@ -24,8 +26,11 @@ function pr(overrides = {}) {
     number: 77,
     title: '[delivery-v2] fix issue 63',
     body: 'Closes #63',
-    base: { ref: 'main', sha: BASE },
-    head: { ref: 'delivery/63', sha: HEAD_A },
+    state: 'open',
+    user: { login: 'owner' },
+    author_association: 'OWNER',
+    base: { ref: 'main', sha: BASE, repo: { full_name: 'owner/repo' } },
+    head: { ref: 'delivery/63', sha: HEAD_A, repo: { full_name: 'owner/repo' } },
     ...overrides
   };
 }
@@ -124,6 +129,25 @@ test('existing managed PR resumes persisted state through the controller instead
   assert.equal(decision.attempts.implementation, 1);
 });
 
+test('trusted same-repository legacy PR is adopted without requiring the managed title prefix', () => {
+  const selected = selectManagedPullRequest([pr({ title: 'Existing implementation' })], { issueNumber: 63, baseBranch: 'main', trustedLogin: 'owner' });
+  const adopted = createLegacyAdoptionEnvelope({ pullRequest: selected, repository: 'owner/repo', issueNumber: 63, provider: 'codex', controllerRunId: 123 });
+  const decision = evaluateReentry({ pullRequest: selected, stateEnvelope: adopted, targetRepository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex' });
+  assert.equal(decision.resumePr, 77);
+  assert.equal(decision.status, 'legacy-adopted');
+  assert.equal(decision.nextAction, 'observe-ci');
+  assert.equal(adopted.persistent.materialHeadSha, HEAD_A);
+  assert.equal(adopted.persistent.lastReason, 'legacy-adopted');
+});
+
+test('legacy adoption fails closed for forks, untrusted authors, and ambiguous candidates', () => {
+  const fork = pr({ title: 'Legacy', head: { ref: 'fork', sha: HEAD_A, repo: { full_name: 'attacker/repo' } } });
+  assert.equal(selectManagedPullRequest([fork], { issueNumber: 63, baseBranch: 'main', trustedLogin: 'owner' }), null);
+  const untrusted = pr({ title: 'Legacy', user: { login: 'attacker' }, author_association: 'NONE' });
+  assert.equal(selectManagedPullRequest([untrusted], { issueNumber: 63, baseBranch: 'main', trustedLogin: 'owner' }), null);
+  assert.throws(() => selectManagedPullRequest([pr({ title: 'Legacy A' }), pr({ number: 78, title: 'Legacy B' })], { issueNumber: 63, baseBranch: 'main', trustedLogin: 'owner' }), /multiple open adoptable PRs/);
+});
+
 test('head drift resumes deterministic classification without resetting attempt counters', () => {
   const decision = evaluateReentry({
     pullRequest: pr({ head: { ref: 'delivery/63', sha: HEAD_B } }),
@@ -179,11 +203,18 @@ test('a failed pre-PR bootstrap attempt retries within the existing bounded budg
   assert.equal(decision.attempts.implementation, 1);
 });
 
+test('exhausted initial budget produces a terminal bootstrap state without persisting comment metadata', () => {
+  const terminal = terminalizeBootstrapLease({ commentId: 9, status: 'reserved-initial-attempt', implementationAttempts: 3 }, 'escalated-initial-budget-exhausted');
+  assert.equal(terminal.status, 'escalated-initial-budget-exhausted');
+  assert.equal(terminal.implementationAttempts, 3);
+  assert.equal('commentId' in terminal, false);
+});
+
 test('duplicate managed PRs fail closed rather than selecting one nondeterministically', () => {
   assert.throws(() => selectManagedPullRequest([
     pr(),
-    pr({ number: 78, head: { ref: 'delivery/63-b', sha: HEAD_B } })
-  ], { issueNumber: 63, baseBranch: 'main' }), /multiple open Delivery V2 PRs/);
+    pr({ number: 78, head: { ref: 'delivery/63-b', sha: HEAD_B, repo: { full_name: 'owner/repo' } } })
+  ], { issueNumber: 63, baseBranch: 'main' }), /multiple open adoptable PRs/);
 });
 
 test('state and bootstrap parsers reject ambiguity and preserve one canonical envelope', () => {

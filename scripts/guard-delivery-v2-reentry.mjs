@@ -3,7 +3,7 @@ import { appendFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 import { loadV2Config } from '../src/v2/config.mjs';
-import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
+import { createPersistentDeliveryState, reconcilePersistentState } from '../src/v2/persistent-state.mjs';
 import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { resolveProviderSelectionForRisk } from '../src/v2/provider-policy.mjs';
 import { expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
@@ -34,8 +34,8 @@ function headers(token) {
   };
 }
 
-async function api(url, token) {
-  const response = await fetch(url, { headers: headers(token) });
+async function api(url, token, options = {}) {
+  const response = await fetch(url, { ...options, headers: { ...headers(token), ...(options.headers ?? {}) } });
   if (!response.ok) throw new Error(`GitHub API ${response.status} GET ${url}: ${await response.text()}`);
   return response.json();
 }
@@ -51,13 +51,41 @@ export function selectManagedPullRequest(pulls, { issueNumber, baseBranch } = {}
   if (!base) throw new Error('baseBranch is required');
   const trustedLogin = arguments[1]?.trustedLogin == null ? null : String(arguments[1].trustedLogin).toLowerCase();
   const candidates = pulls.filter((pr) =>
-    String(pr?.base?.ref ?? '') === base
-    && String(pr?.title ?? '').startsWith('[delivery-v2] ')
+    String(pr?.state ?? 'open') === 'open'
+    && String(pr?.base?.ref ?? '') === base
     && closing.test(String(pr?.body ?? ''))
-    && (!trustedLogin || String(pr?.user?.login ?? '').toLowerCase() === trustedLogin)
+    && String(pr?.head?.repo?.full_name ?? '').toLowerCase() !== ''
+    && String(pr?.head?.repo?.full_name ?? '').toLowerCase() === String(pr?.base?.repo?.full_name ?? '').toLowerCase()
+    && (!trustedLogin || String(pr?.user?.login ?? '').toLowerCase() === trustedLogin || ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(String(pr?.author_association ?? '').toUpperCase()))
   );
-  if (candidates.length > 1) throw new Error(`multiple open Delivery V2 PRs found for issue #${issueNumber}`);
+  if (candidates.length > 1) throw new Error(`multiple open adoptable PRs found for issue #${issueNumber}`);
   return candidates[0] ?? null;
+}
+
+export function createLegacyAdoptionEnvelope({ pullRequest, repository, issueNumber, provider, model = null, effectiveRisk = 'critical', controllerRunId } = {}) {
+  const headSha = String(pullRequest?.head?.sha ?? '').toLowerCase();
+  const baseSha = String(pullRequest?.base?.sha ?? '').toLowerCase();
+  if (!SHA_RE.test(headSha) || !SHA_RE.test(baseSha)) throw new Error('legacy adoption requires exact head and base SHAs');
+  return Object.freeze({
+    persistent: createPersistentDeliveryState({
+      repository, issueNumber, pullRequestNumber: positiveInteger(pullRequest.number, 'pullRequest.number'),
+      baseRef: pullRequest.base.ref, baseSha, headRef: pullRequest.head.ref, materialHeadSha: headSha,
+      effectiveRisk, classifier: { subjectSha: headSha, version: 'legacy-adoption-v1', fingerprint: headSha },
+      provider, model, status: 'ci-pending', attempts: { implementation: 0, audit: 0, auditRemediation: 0 },
+      evidenceRefs: [`github:pull/${pullRequest.number}@${headSha}`], lastReason: 'legacy-adopted'
+    }),
+    controller: Object.freeze({
+      controllerRunId: positiveInteger(controllerRunId, 'controllerRunId'), nextAction: 'observe-ci',
+      adoption: { type: 'legacy-adopted', source: 'github-open-pull-request', adoptedHeadSha: headSha }
+    })
+  });
+}
+
+export function terminalizeBootstrapLease(bootstrapLease, status) {
+  if (!bootstrapLease || typeof bootstrapLease !== 'object') throw new Error('bootstrapLease is required');
+  const terminal = { ...bootstrapLease, status: String(status) };
+  delete terminal.commentId;
+  return Object.freeze(terminal);
 }
 
 function parseJsonEnvelope(comments, marker, label, trustedLogin) {
@@ -142,7 +170,7 @@ export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, ta
     return Object.freeze({
       runController: true,
       resumePr: prNumber,
-      status: 'resume-existing-delivery',
+      status: stateEnvelope.controller?.adoption?.type === 'legacy-adopted' ? 'legacy-adopted' : 'resume-existing-delivery',
       pullRequestNumber: prNumber,
       materialHeadSha: resumed.state.materialHeadSha,
       staleStateDetected: resumed.staleStateDetected,
@@ -234,6 +262,7 @@ async function main() {
   const baseBranch = requiredEnv('BASE_BRANCH');
   requiredEnv('DELIVERY_AI_PROVIDER');
   const readToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
+  const writeToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
   const actionsToken = requiredEnv('GITHUB_TOKEN');
   const orchestratorRepository = requiredEnv('GITHUB_REPOSITORY');
   const orchestratorRef = requiredEnv('ORCHESTRATOR_WORKER_REF');
@@ -244,7 +273,17 @@ async function main() {
   const pullRequest = selectManagedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin });
   let stateEnvelope = null;
   let bootstrapLease = null;
-  if (pullRequest) stateEnvelope = parsePersistentStateEnvelope(await listIssueComments(targetRepository, pullRequest.number, readToken), { trustedLogin });
+  if (pullRequest) {
+    stateEnvelope = parsePersistentStateEnvelope(await listIssueComments(targetRepository, pullRequest.number, readToken), { trustedLogin });
+    if (!stateEnvelope && !String(pullRequest.title ?? '').startsWith('[delivery-v2] ')) {
+      const effectiveRisk = 'critical';
+      const aiPolicy = loadV2Config({}, process.env).aiPolicy;
+      const expected = resolveProviderSelectionForRisk(aiPolicy, effectiveRisk).implementer;
+      stateEnvelope = createLegacyAdoptionEnvelope({ pullRequest, repository: targetRepository, issueNumber, provider: expected.provider, model: expected.model, effectiveRisk, controllerRunId: requiredEnv('GITHUB_RUN_ID') });
+      const body = `${STATE_MARKER}\n## Delivery V2 controller state\n\n\`\`\`json\n${JSON.stringify(stateEnvelope, null, 2)}\n\`\`\``;
+      await api(`https://api.github.com/repos/${targetRepository}/issues/${pullRequest.number}/comments`, writeToken, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
+    }
+  }
   else bootstrapLease = parseBootstrapLease(await listIssueComments(targetRepository, issueNumber, readToken), { trustedLogin });
 
   const provenance = stateEnvelope?.controller ?? bootstrapLease;
@@ -268,6 +307,11 @@ async function main() {
     model: expectedImplementer.model,
     recoveredWorkerRun
   });
+  if (decision.status === 'escalated-initial-budget-exhausted' && bootstrapLease?.commentId) {
+    const terminalLease = terminalizeBootstrapLease(bootstrapLease, decision.status);
+    const body = `${BOOTSTRAP_MARKER}\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify(terminalLease, null, 2)}\n\`\`\``;
+    await api(`https://api.github.com/repos/${targetRepository}/issues/comments/${bootstrapLease.commentId}`, writeToken, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
+  }
   await writeGithubOutput(decision);
 
   if (!decision.runController && resultPath) {

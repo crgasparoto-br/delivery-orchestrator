@@ -380,7 +380,6 @@ export async function main() {
   let pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
   if (pullRequest.state !== 'open') throw new Error(`managed PR #${resumePr} is not open`);
   if (String(pullRequest.base.ref) !== baseBranch) throw new Error('managed PR base branch does not match requested base');
-  if (!String(pullRequest.title ?? '').startsWith('[delivery-v2] ')) throw new Error('managed PR is missing Delivery V2 title prefix');
   const closing = new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
   if (!closing.test(String(pullRequest.body ?? ''))) throw new Error('managed PR is not bound to requested issue');
 
@@ -395,6 +394,9 @@ export async function main() {
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
   const stateEnvelope = parseStateComment(await listComments(targetRepository, resumePr, targetReadToken), trustedLogin);
   if (!stateEnvelope) throw new Error('managed PR is missing authoritative Delivery V2 persistent state');
+  if (!String(pullRequest.title ?? '').startsWith('[delivery-v2] ') && stateEnvelope.controller?.adoption?.type !== 'legacy-adopted') {
+    throw new Error('non-managed PR is missing authoritative legacy adoption provenance');
+  }
   const resumeObservability = initializeResumeObservability(stateEnvelope.controller, { startedAtMs: resumeStartedAtMs });
   let observability = resumeObservability.observability;
   const observabilityHistoryComplete = resumeObservability.historyComplete;
