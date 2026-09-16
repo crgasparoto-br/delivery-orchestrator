@@ -37,29 +37,40 @@ jobs:
       - name: Dispatch Delivery V2 controller
         env:
           GH_TOKEN: ${{ github.token }}
+          ORCHESTRATOR_REF: ${{ github.event.repository.default_branch }}
+          TARGET_REPOSITORY: ${{ steps.ingress.outputs.target_repository }}
+          TARGET_ISSUE: ${{ steps.ingress.outputs.target_issue }}
+          RISK_PROFILE: ${{ steps.ingress.outputs.risk_profile }}
+          BASE_BRANCH: ${{ steps.ingress.outputs.base_branch }}
+          CHANGED_PATHS: ${{ steps.ingress.outputs.changed_paths }}
         shell: bash
         run: |
+          set -euo pipefail
           gh workflow run delivery-v2-dispatch.yml \
-            --ref "${{ github.event.repository.default_branch }}" \
-            -f target_repository='${{ steps.ingress.outputs.target_repository }}' \
-            -f target_issue='${{ steps.ingress.outputs.target_issue }}' \
-            -f risk_profile='${{ steps.ingress.outputs.risk_profile }}' \
-            -f base_branch='${{ steps.ingress.outputs.base_branch }}' \
-            -f changed_paths='${{ steps.ingress.outputs.changed_paths }}'
+            --ref "$ORCHESTRATOR_REF" \
+            -f "target_repository=$TARGET_REPOSITORY" \
+            -f "target_issue=$TARGET_ISSUE" \
+            -f "risk_profile=$RISK_PROFILE" \
+            -f "base_branch=$BASE_BRANCH" \
+            -f "changed_paths=$CHANGED_PATHS"
 
       - name: Close accepted ingress request
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
+          INGRESS_ISSUE: ${{ github.event.issue.number }}
         shell: bash
         run: |
-          gh issue comment "${{ github.event.issue.number }}" --body 'Delivery V2 controller dispatch accepted. The durable state and independent audit now belong to the controller.'
-          gh issue close "${{ github.event.issue.number }}" --reason completed
+          set -euo pipefail
+          gh issue comment "$INGRESS_ISSUE" --body 'Delivery V2 controller dispatch accepted. The durable state and independent audit now belong to the controller.'
+          gh issue close "$INGRESS_ISSUE" --reason completed
 
       - name: Mark rejected ingress request
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+          INGRESS_ISSUE: ${{ github.event.issue.number }}
         shell: bash
         run: |
-          gh issue comment "${{ github.event.issue.number }}" --body 'Delivery V2 chat ingress was rejected before controller dispatch. Inspect this workflow run; no fallback implementation path was used.'
+          set -euo pipefail
+          gh issue comment "$INGRESS_ISSUE" --body 'Delivery V2 chat ingress was rejected before controller dispatch. Inspect this workflow run; no fallback implementation path was used.'
