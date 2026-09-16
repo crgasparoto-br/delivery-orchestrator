@@ -31,8 +31,11 @@ test('chat ingress fails closed for malformed or out-of-scope targets', () => {
 
 test('chat ingress workflow delegates to the durable V2 dispatch and never implements directly', async () => {
   const source = await readFile(new URL('../.github/workflows/delivery-v2-chat-ingress.yml', import.meta.url), 'utf8');
+  assert.match(source, /startsWith\(github\.event\.issue\.title, '\[delivery-v2-dispatch\]'\)/);
+  assert.match(source, /github\.event\.issue\.user\.login == github\.repository_owner/);
   assert.match(source, /gh workflow run delivery-v2-dispatch\.yml/);
-  assert.match(source, /delivery-v2-dispatch/);
+  assert.match(source, /TARGET_REPOSITORY: \$\{\{ steps\.ingress\.outputs\.target_repository \}\}/);
+  assert.match(source, /-f "target_repository=\$TARGET_REPOSITORY"/);
   assert.doesNotMatch(source, /run-delivery-v2-controller\.mjs/);
   assert.doesNotMatch(source, /delivery-v2-worker-/);
 });
