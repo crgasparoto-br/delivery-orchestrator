@@ -1,15 +1,15 @@
 [Unit]
-Description=Delivery Orchestrator branch hygiene
+Description=Delivery Orchestrator branch hygiene with validated release promotion
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/delivery-orchestrator
+WorkingDirectory=/opt/delivery-orchestrator-runtime/current
 EnvironmentFile=/etc/delivery-orchestrator/hygiene.env
-ExecStart=/usr/bin/flock -n /run/lock/delivery-orchestrator-branch-hygiene.lock /usr/bin/node /opt/delivery-orchestrator/src/cli.mjs hygiene --older-than 7d --apply --lock-file /run/lock/delivery-orchestrator-branch-hygiene-process.lock
+ExecStart=/usr/bin/flock -n /run/lock/delivery-orchestrator-release-hygiene.lock /usr/bin/node /opt/delivery-orchestrator-runtime/current/scripts/vps-release-hygiene.mjs
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/delivery-orchestrator /run/lock
+ReadWritePaths=/opt/delivery-orchestrator /opt/delivery-orchestrator-runtime /var/lib/delivery-orchestrator /var/log/delivery-orchestrator /run/lock
