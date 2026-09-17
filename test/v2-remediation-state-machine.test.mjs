@@ -87,6 +87,35 @@ test('audit rejection exposes only blocking findings plus explicitly new risk su
   assert.deepEqual(input.newRiskSurfaces, ['src/new-boundary.mjs']);
 });
 
+test('exhausted implementation budget still permits audit remediation on the existing material candidate', () => {
+  let state = startAudit(ciSuccess(publish(begin('critical'))));
+  state = Object.freeze({
+    ...state,
+    implementationAttempts: state.limits.maxImplementationAttempts
+  });
+  state = recordAuditResult(state, {
+    candidateSha: A,
+    decision: 'rejected',
+    evidenceRef: 'audit:existing-pr',
+    findings: [blockingFinding(A)]
+  });
+
+  assert.equal(state.status, 'audit-failed-remediable');
+  assert.equal(state.materialHeadSha, A);
+  assert.equal(state.implementationAttempts, state.limits.maxImplementationAttempts);
+  assert.equal(state.auditRemediationAttempts, 0);
+
+  state = startImplementation(state);
+  assert.equal(state.status, 'implementing');
+  assert.equal(state.implementationAttempts, state.limits.maxImplementationAttempts);
+  assert.equal(state.auditRemediationAttempts, 1);
+
+  state = ciSuccess(publish(state, B));
+  assert.equal(state.status, 'audit-pending');
+  state = startAudit(state);
+  assert.equal(state.auditAttempts, 2);
+});
+
 test('audit context insufficiency escalates deterministically without authorizing implementation remediation', () => {
   let state = startAudit(ciSuccess(publish(begin('critical'))));
   state = recordAuditResult(state, {
@@ -127,6 +156,7 @@ test('STANDARD permits one audit-remediation cycle and escalates after the next 
   state = recordAuditResult(state, { candidateSha: A, decision: 'rejected', evidenceRef: 'audit:1', findings: [blockingFinding(A)] });
   assert.equal(state.status, 'audit-failed-remediable');
   state = startImplementation(state);
+  assert.equal(state.implementationAttempts, 1);
   assert.equal(state.auditRemediationAttempts, 1);
   state = ciSuccess(publish(state, B));
   state = startAudit(state);

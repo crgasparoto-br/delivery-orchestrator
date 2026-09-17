@@ -72,7 +72,7 @@ test('DV2-009 replays the real PR #48 rejection -> CI remediation -> approval se
   );
 
   state = startImplementation(state);
-  assert.equal(state.implementationAttempts, second.implementationAttempt);
+  assert.equal(state.implementationAttempts, first.implementationAttempt);
   assert.equal(state.auditRemediationAttempts, second.auditRemediationAttempt);
   state = publishMaterial(state, { materialHeadSha: second.candidateSha });
   assert.equal(state.auditEvidence, null);
@@ -97,11 +97,14 @@ test('DV2-009 replays the real PR #48 rejection -> CI remediation -> approval se
   assert.equal(remediationInputsFor(state).ciFailure.failureClass, 'actionable');
 
   state = startImplementation(state);
-  assert.equal(state.implementationAttempts, third.implementationAttempt);
+  assert.equal(state.implementationAttempts, second.implementationAttempt);
   assert.equal(state.auditRemediationAttempts, third.auditRemediationAttempt);
   state = publishMaterial(state, { materialHeadSha: third.candidateSha });
 
-  const boundedFailure = recordCiResult(state, {
+  const boundedFailure = recordCiResult(Object.freeze({
+    ...state,
+    implementationAttempts: state.limits.maxImplementationAttempts
+  }), {
     candidateSha: third.candidateSha,
     conclusion: 'failure',
     failureClass: 'actionable',
@@ -128,7 +131,7 @@ test('DV2-009 replays the real PR #48 rejection -> CI remediation -> approval se
   });
 
   assert.equal(state.status, evidence.observedOutcome.stateBeforeMerge);
-  assert.equal(state.implementationAttempts, evidence.observedCounters.implementationAttempts);
+  assert.equal(state.implementationAttempts, second.implementationAttempt);
   assert.equal(state.auditAttempts, evidence.observedCounters.auditAttempts);
   assert.equal(state.auditRemediationAttempts, evidence.observedCounters.auditRemediationAttempts);
   assert.equal(state.controls.recursiveAiOrchestrationAllowed, false);

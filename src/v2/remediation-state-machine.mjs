@@ -131,13 +131,23 @@ export function startImplementation(state) {
   if (!['classified', 'ci-failed-remediable', 'audit-failed-remediable'].includes(state.status)) {
     throw new Error(`cannot start implementation from ${state.status}`);
   }
+  if (state.status === 'audit-failed-remediable') {
+    if (state.auditRemediationAttempts >= state.limits.maxAuditRemediationAttempts) {
+      return escalate(state, 'audit-remediation-budget-exhausted');
+    }
+    return transition(state, {
+      status: 'implementing',
+      auditRemediationAttempts: state.auditRemediationAttempts + 1,
+      ciFailure: null,
+      auditInFlight: false
+    });
+  }
   if (state.implementationAttempts >= state.limits.maxImplementationAttempts) {
     return escalate(state, 'implementation-budget-exhausted');
   }
   return transition(state, {
     status: 'implementing',
     implementationAttempts: state.implementationAttempts + 1,
-    auditRemediationAttempts: state.auditRemediationAttempts + (state.status === 'audit-failed-remediable' ? 1 : 0),
     ciFailure: null,
     auditInFlight: false
   });
@@ -234,7 +244,6 @@ export function recordAuditResult(state, result = {}) {
     return escalate(failed, 'audit-context-insufficient', { findingIds: Object.freeze(nonRemediable.map((finding) => finding.id)) });
   }
   if (failed.auditRemediationAttempts >= failed.limits.maxAuditRemediationAttempts) return escalate(failed, 'audit-remediation-budget-exhausted');
-  if (failed.implementationAttempts >= failed.limits.maxImplementationAttempts) return escalate(failed, 'implementation-budget-exhausted-after-audit');
   return transition(failed, { status: 'audit-failed-remediable' });
 }
 
