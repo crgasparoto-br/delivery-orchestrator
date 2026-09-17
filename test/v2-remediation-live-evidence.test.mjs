@@ -101,16 +101,30 @@ test('DV2-009 replays the real PR #48 rejection -> CI remediation -> approval se
   assert.equal(state.auditRemediationAttempts, third.auditRemediationAttempt);
   state = publishMaterial(state, { materialHeadSha: third.candidateSha });
 
-  const boundedFailure = recordCiResult(state, {
+  const secondFailure = recordCiResult(state, {
     candidateSha: third.candidateSha,
     conclusion: 'failure',
     failureClass: 'actionable',
-    cause: 'counterfactual third-attempt actionable failure',
+    cause: 'counterfactual third-material-attempt actionable failure',
     evidenceRef: 'counterfactual:third-attempt-failure'
+  });
+  assert.equal(
+    secondFailure.status,
+    'ci-failed-remediable',
+    'the audit-triggered remediation consumed only auditRemediation budget, so one more material implementation attempt remains'
+  );
+  const fourthAttempt = startImplementation(secondFailure);
+  assert.equal(fourthAttempt.implementationAttempts, evidence.policy.maxImplementationAttempts);
+  const boundedFailure = recordCiResult(publishMaterial(fourthAttempt, { materialHeadSha: 'f'.repeat(40) }), {
+    candidateSha: 'f'.repeat(40),
+    conclusion: 'failure',
+    failureClass: 'actionable',
+    cause: 'counterfactual fourth-material-attempt actionable failure',
+    evidenceRef: 'counterfactual:fourth-attempt-failure'
   });
   assert.equal(boundedFailure.status, evidence.boundedAlternative.expectedState);
   assert.equal(boundedFailure.escalation.reason, evidence.boundedAlternative.expectedReason);
-  assert.equal(boundedFailure.implementationAttempts, evidence.policy.maxImplementationAttempts);
+  assert.equal(boundedFailure.implementationAttempts, evidence.boundedAlternative.expectedImplementationAttemptsAtEscalation);
 
   state = recordCiResult(state, {
     candidateSha: third.candidateSha,

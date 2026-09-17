@@ -44,19 +44,21 @@ function closingPattern(issueNumber) {
   return new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
 }
 
-export function selectManagedPullRequest(pulls, { issueNumber, baseBranch } = {}) {
+export function selectManagedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin = null, repository = null } = {}) {
   if (!Array.isArray(pulls)) throw new Error('pulls must be an array');
   const closing = closingPattern(positiveInteger(issueNumber, 'issueNumber'));
   const base = String(baseBranch ?? '').trim();
   if (!base) throw new Error('baseBranch is required');
-  const trustedLogin = arguments[1]?.trustedLogin == null ? null : String(arguments[1].trustedLogin).toLowerCase();
+  const trusted = trustedLogin == null ? null : String(trustedLogin).toLowerCase();
+  const expectedRepository = repository == null ? null : String(repository).toLowerCase();
   const candidates = pulls.filter((pr) =>
     String(pr?.state ?? 'open') === 'open'
     && String(pr?.base?.ref ?? '') === base
     && closing.test(String(pr?.body ?? ''))
     && String(pr?.head?.repo?.full_name ?? '').toLowerCase() !== ''
     && String(pr?.head?.repo?.full_name ?? '').toLowerCase() === String(pr?.base?.repo?.full_name ?? '').toLowerCase()
-    && (!trustedLogin || String(pr?.user?.login ?? '').toLowerCase() === trustedLogin || ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(String(pr?.author_association ?? '').toUpperCase()))
+    && (!trusted || (String(pr?.user?.login ?? '').toLowerCase() === trusted && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(String(pr?.author_association ?? '').toUpperCase())))
+    && (!expectedRepository || String(pr?.head?.repo?.full_name ?? '').toLowerCase() === expectedRepository)
   );
   if (candidates.length > 1) throw new Error(`multiple open adoptable PRs found for issue #${issueNumber}`);
   return candidates[0] ?? null;
@@ -133,6 +135,36 @@ function assertAiPolicyMatch({ persistedProvider, persistedModel = null, expecte
   }
 }
 
+function assertBootstrapRecoveryLease(bootstrapLease, { targetRepository, issueNumber, baseBranch, provider, model }) {
+  if (bootstrapLease.schemaVersion !== 1) throw new Error('bootstrap recovery lease schemaVersion must be 1');
+  if (bootstrapLease.repository !== targetRepository || bootstrapLease.issueNumber !== issueNumber) throw new Error('bootstrap lease target does not match requested delivery');
+  if (bootstrapLease.baseBranch !== String(baseBranch ?? '')) throw new Error('bootstrap lease base branch does not match requested delivery');
+  if (bootstrapLease.status !== 'reserved-initial-attempt') throw new Error('bootstrap recovery requires reserved-initial-attempt state');
+  positiveInteger(bootstrapLease.implementationAttempts, 'bootstrapLease.implementationAttempts');
+  if (!String(bootstrapLease.workerWorkflow ?? '').trim()) throw new Error('bootstrap recovery requires worker workflow identity');
+  if (!String(bootstrapLease.dispatchNonce ?? '').trim()) throw new Error('bootstrap recovery requires dispatch nonce');
+  assertAiPolicyMatch({ persistedProvider: bootstrapLease.provider, persistedModel: bootstrapLease.model, expectedProvider: provider, expectedModel: model, label: 'bootstrap lease' });
+}
+
+function bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease, recoveredWorkerRun, targetRepository, issueNumber, baseBranch, provider, model }) {
+  if (!bootstrapLease || recoveredWorkerRun?.status !== 'completed' || recoveredWorkerRun?.conclusion !== 'success') return null;
+  assertBootstrapRecoveryLease(bootstrapLease, { targetRepository, issueNumber, baseBranch, provider, model });
+  const workerRunId = positiveInteger(recoveredWorkerRun.id, 'recoveredWorkerRun.id');
+  return Object.freeze({
+    runController: true,
+    resumePr: null,
+    recoverWorkerRunId: workerRunId,
+    status: 'resume-initial-delivery',
+    pullRequestNumber: positiveInteger(pullRequest.number, 'pullRequest.number'),
+    materialHeadSha: remoteHeadSha,
+    staleStateDetected: true,
+    nextAction: 'recover-initial-attempt',
+    priorInitialAttempts: bootstrapLease.implementationAttempts,
+    dispatchNonce: bootstrapLease.dispatchNonce,
+    attempts: { implementation: bootstrapLease.implementationAttempts }
+  });
+}
+
 export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null } = {}) {
   const resolvedIssue = positiveInteger(issueNumber, 'issueNumber');
   const resolvedProvider = String(provider ?? '').toLowerCase();
@@ -143,6 +175,8 @@ export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, ta
     if (!SHA_RE.test(remoteHeadSha)) throw new Error('pullRequest.head.sha must be a 40-character Git commit SHA');
 
     if (!stateEnvelope) {
+      const recovery = bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease, recoveredWorkerRun, targetRepository, issueNumber: resolvedIssue, baseBranch, provider: resolvedProvider, model });
+      if (recovery) return recovery;
       return Object.freeze({
         runController: false,
         resumePr: null,
@@ -151,7 +185,7 @@ export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, ta
         materialHeadSha: remoteHeadSha,
         staleStateDetected: true,
         nextAction: 'human-escalation',
-        attempts: null
+        attempts: bootstrapLease ? { implementation: bootstrapLease.implementationAttempts } : null
       });
     }
 
@@ -229,15 +263,25 @@ async function listIssueComments(repository, issueNumber, token) {
   return comments;
 }
 
+function assertRecoveredWorkerIdentity(run, lease, orchestratorRef) {
+  const correlated = selectCorrelatedWorkflowRun([run], { kind: 'worker', nonce: lease.dispatchNonce, ref: orchestratorRef });
+  if (!correlated) throw new Error(`worker run is not correlated with ${expectedDispatchTitle('worker', lease.dispatchNonce)}`);
+  const expectedWorkflow = String(lease.workerWorkflow ?? '').trim();
+  const runPath = String(run?.path ?? '').split('@', 1)[0];
+  if (expectedWorkflow && runPath && !runPath.endsWith(`/${expectedWorkflow}`)) throw new Error('worker run workflow does not match bootstrap lease');
+  return correlated;
+}
+
 async function recoverBootstrapWorkerRun(lease, orchestratorRepository, orchestratorRef, token) {
   if (!lease) return null;
   if (lease.workerRunId) {
     const run = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${lease.workerRunId}`, token);
-    return run;
+    return assertRecoveredWorkerIdentity(run, lease, orchestratorRef);
   }
   if (!lease.workerWorkflow || !lease.dispatchNonce) return null;
   const payload = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/workflows/${encodeURIComponent(lease.workerWorkflow)}/runs?event=workflow_dispatch&per_page=100`, token);
-  return selectCorrelatedWorkflowRun(payload.workflow_runs ?? [], { kind: 'worker', nonce: lease.dispatchNonce, ref: orchestratorRef });
+  const run = selectCorrelatedWorkflowRun(payload.workflow_runs ?? [], { kind: 'worker', nonce: lease.dispatchNonce, ref: orchestratorRef });
+  return run ? assertRecoveredWorkerIdentity(run, lease, orchestratorRef) : null;
 }
 
 async function writeGithubOutput(decision) {
@@ -270,7 +314,7 @@ async function main() {
 
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
   const pulls = await listOpenPullRequests(targetRepository, baseBranch, readToken);
-  const pullRequest = selectManagedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin });
+  const pullRequest = selectManagedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin, repository: targetRepository });
   let stateEnvelope = null;
   let bootstrapLease = null;
   if (pullRequest) {
@@ -284,7 +328,7 @@ async function main() {
       await api(`https://api.github.com/repos/${targetRepository}/issues/${pullRequest.number}/comments`, writeToken, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
     }
   }
-  else bootstrapLease = parseBootstrapLease(await listIssueComments(targetRepository, issueNumber, readToken), { trustedLogin });
+  if (!stateEnvelope) bootstrapLease = parseBootstrapLease(await listIssueComments(targetRepository, issueNumber, readToken), { trustedLogin });
 
   const provenance = stateEnvelope?.controller ?? bootstrapLease;
   if (provenance) {

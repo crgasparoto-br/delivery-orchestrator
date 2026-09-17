@@ -77,4 +77,16 @@ Use deterministic facts before semantic judgment. Textual similarity, file size,
 
 For remediation, compare the proposed correction both with the delivery's initial baseline and with the immediately previous material head. Do not fix CI/audit by stacking a helper, service, adapter, fallback or workaround for the same responsibility. A second fallback/workaround for the same behavior requires reproducible root-cause justification; otherwise stop with a blocking structural finding.
 
-The final worker result must include exactly one single-line machine-readable marker `TECHNICAL_HYGIENE_JSON={...}`. The JSON payload must contain `reuseDiscovery`, `createdFiles`, `structuralFindings`, `semanticJudgments`, `deterministicReferences`, `missingEvidence`, and `semanticCalls`; `createdFiles` must list repository-relative files created by the current worker, and every material semantic decision must carry reproducible evidence. Do not include authoritative SHAs or a self-declared gate result in this payload: the deterministic controller binds `base_sha`, current `material_sha`, previous remediation SHA and risk profile, then computes `PASS`, `PASS_WITH_DEBT`, `BLOCK`, or `UNKNOWN`. Material `UNKNOWN` is never approval.
+The final worker result must include exactly one single-line machine-readable marker `TECHNICAL_HYGIENE_JSON={...}`. The canonical payload schema is:
+
+- `reuseDiscovery`: array of objects `{symbol, decision, evidence, existingOwnerEvidence?, justificationEvidence?}`. `decision` is one of `REUSE_EXISTING`, `EXTEND_EXISTING`, `LOCAL_REFACTOR`, `CREATE_NEW`, `KEEP_SEPARATE`, `UNKNOWN`.
+- `createdFiles`: array of repository-relative file paths created by the current worker.
+- `structuralFindings`: array of finding objects; use `[]` when none exist.
+- `semanticJudgments`: array of objects containing at least `claim`, `decision`, and evidence for every material judgment; use `[]` when none exist.
+- `deterministicReferences`: array of objects `{symbol, referenced, evidence}`; use `[]` when none exist.
+- `missingEvidence`: array of objects `{code, detail, material?}`; use `[]` when none exist.
+- `semanticCalls`: non-negative integer count, never a textual list.
+
+Minimal valid example: `TECHNICAL_HYGIENE_JSON={"reuseDiscovery":[],"createdFiles":[],"structuralFindings":[],"semanticJudgments":[],"deterministicReferences":[],"missingEvidence":[],"semanticCalls":0}`.
+
+For compatibility with already-produced worker artifacts, the controller may normalize only deterministic shorthand that preserves evidence; malformed or evidence-free shorthand must remain fail-closed. Do not include authoritative SHAs or a self-declared gate result in this payload: the deterministic controller binds `base_sha`, current `material_sha`, previous remediation SHA and risk profile, then computes `PASS`, `PASS_WITH_DEBT`, `BLOCK`, or `UNKNOWN`. Material `UNKNOWN` is never approval.
