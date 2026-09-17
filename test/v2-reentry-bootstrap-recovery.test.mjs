@@ -8,11 +8,11 @@ const BASE = 'b'.repeat(40);
 
 function managedPr(overrides = {}) {
   return {
-    number: 122,
+    number: 122, state: 'open', author_association: 'OWNER',
     title: '[delivery-v2] recover issue 105',
     body: 'Closes #105',
     user: { login: 'crgasparoto-br' },
-    base: { ref: 'main', sha: BASE },
+    base: { ref: 'main', sha: BASE, repo: { full_name: 'crgasparoto-br/delivery-orchestrator' } },
     head: { ref: 'delivery-v2/issue-105', sha: HEAD, repo: { full_name: 'crgasparoto-br/delivery-orchestrator' } },
     ...overrides
   };
@@ -21,6 +21,7 @@ function managedPr(overrides = {}) {
 function bootstrapLease(overrides = {}) {
   return {
     schemaVersion: 1,
+    commentId: 105001,
     repository: 'crgasparoto-br/delivery-orchestrator',
     issueNumber: 105,
     baseBranch: 'main',
@@ -66,7 +67,7 @@ test('managed PR without persistent state recovers the correlated successful mod
   assert.equal(decision.attempts.implementation, 3);
 });
 
-test('managed PR without persistent state remains fail closed when the correlated worker is not successful', () => {
+test('PR without canonical state or successful worker is adopted without claiming V2 production or resetting budgets', () => {
   const decision = evaluateReentry({
     pullRequest: managedPr(),
     stateEnvelope: null,
@@ -79,10 +80,12 @@ test('managed PR without persistent state remains fail closed when the correlate
     recoveredWorkerRun: successfulWorker({ conclusion: 'failure' })
   });
 
-  assert.equal(decision.runController, false);
-  assert.equal(decision.status, 'escalated-missing-persistent-state');
-  assert.equal(decision.nextAction, 'human-escalation');
+  assert.equal(decision.runController, true);
+  assert.equal(decision.status, 'legacy-adopted');
+  assert.equal(decision.nextAction, 'post-write-refreeze');
   assert.equal(decision.attempts.implementation, 3);
+  assert.equal(decision.adoption.auditEvidence, null);
+  assert.equal(decision.adoption.adoption.source, 'github-open-pull-request');
 });
 
 test('bootstrap PR recovery rejects an explicitly persisted model mismatch instead of adopting it', () => {
@@ -99,14 +102,13 @@ test('bootstrap PR recovery rejects an explicitly persisted model mismatch inste
   }), /model does not match resolved delivery policy/);
 });
 
-test('managed PR selection excludes a fork when repository identity is required', () => {
-  const selected = selectManagedPullRequest([
+test('managed PR selection blocks a linked fork instead of falling through to a new delivery', () => {
+  assert.throws(() => selectManagedPullRequest([
     managedPr({ head: { ref: 'delivery-v2/issue-105', sha: HEAD, repo: { full_name: 'someone/fork' } } })
   ], {
     issueNumber: 105,
     baseBranch: 'main',
     trustedLogin: 'crgasparoto-br',
     repository: 'crgasparoto-br/delivery-orchestrator'
-  });
-  assert.equal(selected, null);
+  }), /repository mismatch or fork/);
 });

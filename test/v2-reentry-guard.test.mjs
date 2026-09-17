@@ -23,10 +23,11 @@ function pr(overrides = {}) {
   return {
     number: 77,
     title: '[delivery-v2] fix issue 63',
+    state: 'open', user: { login: 'owner' }, author_association: 'OWNER',
     body: 'Closes #63',
-    base: { ref: 'main', sha: BASE },
-    head: { ref: 'delivery/63', sha: HEAD_A },
-    ...overrides
+    ...overrides,
+    base: { ref: 'main', sha: BASE, ...overrides.base, repo: { full_name: 'owner/repo' } },
+    head: { ref: 'delivery/63', sha: HEAD_A, ...overrides.head, repo: { full_name: 'owner/repo' } }
   };
 }
 
@@ -70,7 +71,7 @@ function planFor(risk = 'critical') {
 }
 
 test('no managed PR and no prior bootstrap lease allows one initial controller path without pre-counting a provider call', () => {
-  const selected = selectManagedPullRequest([], { issueNumber: 63, baseBranch: 'main' });
+  const selected = selectManagedPullRequest([], { issueNumber: 63, baseBranch: 'main', repository: 'owner/repo', trustedLogin: 'owner' });
   assert.equal(selected, null);
   const decision = evaluateReentry({
     pullRequest: selected,
@@ -106,7 +107,7 @@ test('initial attempt is reserved only when deterministic dispatch has authorize
 });
 
 test('existing managed PR resumes persisted state through the controller instead of starting another initial worker', () => {
-  const selected = selectManagedPullRequest([pr()], { issueNumber: 63, baseBranch: 'main' });
+  const selected = selectManagedPullRequest([pr()], { issueNumber: 63, baseBranch: 'main', repository: 'owner/repo', trustedLogin: 'owner' });
   const decision = evaluateReentry({
     pullRequest: selected,
     stateEnvelope: envelope(),
@@ -142,7 +143,7 @@ test('head drift resumes deterministic classification without resetting attempt 
   assert.equal(decision.attempts.implementation, 1);
 });
 
-test('existing PR without canonical state fails closed instead of resetting unknown budgets', () => {
+test('existing PR without canonical state is adopted with unknown budgets instead of resetting them', () => {
   const decision = evaluateReentry({
     pullRequest: pr(),
     stateEnvelope: null,
@@ -152,11 +153,11 @@ test('existing PR without canonical state fails closed instead of resetting unkn
     baseBranch: 'main',
     provider: 'codex'
   });
-  assert.equal(decision.runController, false);
+  assert.equal(decision.runController, true);
   assert.equal(decision.pullRequestNumber, 77);
-  assert.equal(decision.status, 'escalated-missing-persistent-state');
-  assert.equal(decision.nextAction, 'human-escalation');
-  assert.equal(decision.attempts, null);
+  assert.equal(decision.status, 'legacy-adopted');
+  assert.equal(decision.nextAction, 'post-write-refreeze');
+  assert.deepEqual(decision.attempts, { implementation: null, audit: null, auditRemediation: null });
 });
 
 test('a failed pre-PR bootstrap attempt retries within the existing bounded budget instead of resetting it', () => {
@@ -183,7 +184,7 @@ test('duplicate managed PRs fail closed rather than selecting one nondeterminist
   assert.throws(() => selectManagedPullRequest([
     pr(),
     pr({ number: 78, head: { ref: 'delivery/63-b', sha: HEAD_B } })
-  ], { issueNumber: 63, baseBranch: 'main' }), /multiple open Delivery V2 PRs/);
+  ], { issueNumber: 63, baseBranch: 'main', repository: 'owner/repo', trustedLogin: 'owner' }), /multiple open PRs/);
 });
 
 test('state and bootstrap parsers reject ambiguity and preserve one canonical envelope', () => {

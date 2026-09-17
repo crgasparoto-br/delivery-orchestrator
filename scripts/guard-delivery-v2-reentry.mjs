@@ -7,7 +7,8 @@ import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
 import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { resolveProviderSelectionForRisk } from '../src/v2/provider-policy.mjs';
 import { expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
-import { parseTrustedJsonEnvelope, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
+import { parseTrustedJsonEnvelope, selectExistingPullRequest, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
+import { createLegacyAdoption, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
@@ -34,33 +35,14 @@ function headers(token) {
   };
 }
 
-async function api(url, token) {
-  const response = await fetch(url, { headers: headers(token) });
-  if (!response.ok) throw new Error(`GitHub API ${response.status} GET ${url}: ${await response.text()}`);
+async function api(url, token, options = {}) {
+  const response = await fetch(url, { ...options, headers: { ...headers(token), ...(options.headers ?? {}) } });
+  if (!response.ok) throw new Error(`GitHub API ${response.status} ${options.method ?? 'GET'} ${url}: ${await response.text()}`);
   return response.json();
 }
 
-function closingPattern(issueNumber) {
-  return new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
-}
-
-export function selectManagedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin = null, repository = null } = {}) {
-  if (!Array.isArray(pulls)) throw new Error('pulls must be an array');
-  const closing = closingPattern(positiveInteger(issueNumber, 'issueNumber'));
-  const base = String(baseBranch ?? '').trim();
-  if (!base) throw new Error('baseBranch is required');
-  const trusted = trustedLogin == null ? null : String(trustedLogin).toLowerCase();
-  const expectedRepository = repository == null ? null : String(repository).toLowerCase();
-  const candidates = pulls.filter((pr) =>
-    String(pr?.base?.ref ?? '') === base
-    && String(pr?.title ?? '').startsWith('[delivery-v2] ')
-    && closing.test(String(pr?.body ?? ''))
-    && (!trusted || String(pr?.user?.login ?? '').toLowerCase() === trusted)
-    && (!expectedRepository || String(pr?.head?.repo?.full_name ?? '').toLowerCase() === expectedRepository)
-  );
-  if (candidates.length > 1) throw new Error(`multiple open Delivery V2 PRs found for issue #${issueNumber}`);
-  return candidates[0] ?? null;
-}
+// Preserve the public entrypoint while sharing the exact identity contract with resume.
+export const selectManagedPullRequest = selectExistingPullRequest;
 
 function parseJsonEnvelope(comments, marker, label, trustedLogin) {
   return parseTrustedJsonEnvelope(comments, { marker, label, trustedLogin });
@@ -80,6 +62,7 @@ export function parseBootstrapLease(comments, { trustedLogin } = {}) {
   if (!parsed) return null;
   const value = parsed.value;
   return Object.freeze({
+    ...value,
     commentId: parsed.commentId,
     schemaVersion: value.schemaVersion,
     repository: String(value.repository ?? ''),
@@ -120,6 +103,7 @@ function assertBootstrapRecoveryLease(bootstrapLease, { targetRepository, issueN
 
 function bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease, recoveredWorkerRun, targetRepository, issueNumber, baseBranch, provider, model }) {
   if (!bootstrapLease || recoveredWorkerRun?.status !== 'completed' || recoveredWorkerRun?.conclusion !== 'success') return null;
+  if (bootstrapLease.status === 'escalated-initial-budget-exhausted') return null;
   assertBootstrapRecoveryLease(bootstrapLease, { targetRepository, issueNumber, baseBranch, provider, model });
   const workerRunId = positiveInteger(recoveredWorkerRun.id, 'recoveredWorkerRun.id');
   return Object.freeze({
@@ -137,27 +121,39 @@ function bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease,
   });
 }
 
-export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null } = {}) {
+export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope = null, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null } = {}) {
   const resolvedIssue = positiveInteger(issueNumber, 'issueNumber');
   const resolvedProvider = String(provider ?? '').toLowerCase();
 
   if (pullRequest) {
+    if (!selectExistingPullRequest([pullRequest], { repository: targetRepository, issueNumber: resolvedIssue, baseBranch, trustedLogin: trustedCommentAuthorForRepository(targetRepository) })) {
+      throw new Error('existing PR is not bound to requested issue');
+    }
     const prNumber = positiveInteger(pullRequest.number, 'pullRequest.number');
     const remoteHeadSha = String(pullRequest?.head?.sha ?? '').trim().toLowerCase();
     if (!SHA_RE.test(remoteHeadSha)) throw new Error('pullRequest.head.sha must be a 40-character Git commit SHA');
 
     if (!stateEnvelope) {
-      const recovery = bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease, recoveredWorkerRun, targetRepository, issueNumber: resolvedIssue, baseBranch, provider: resolvedProvider, model });
+      // A correlated V2 publication keeps its existing recovery path. A legacy PR
+      // is not retroactively claimed as output of that bootstrap worker.
+      const recovery = !adoptionEnvelope && String(pullRequest.title ?? '').startsWith('[delivery-v2] ')
+        ? bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease, recoveredWorkerRun, targetRepository, issueNumber: resolvedIssue, baseBranch, provider: resolvedProvider, model }) : null;
       if (recovery) return recovery;
+      if (adoptionEnvelope && (adoptionEnvelope.adoption.repository !== targetRepository || adoptionEnvelope.adoption.issueNumber !== resolvedIssue || adoptionEnvelope.adoption.baseRef !== baseBranch)) throw new Error('adoption target does not match requested delivery');
+      const adoption = adoptionEnvelope
+        ? reconcileLegacyAdoption(adoptionEnvelope.adoption, pullRequest)
+        : createLegacyAdoption({ pullRequest, repository: targetRepository, issueNumber: resolvedIssue, baseBranch, bootstrapLease });
       return Object.freeze({
-        runController: false,
-        resumePr: null,
-        status: 'escalated-missing-persistent-state',
+        runController: true,
+        resumePr: prNumber,
+        status: 'legacy-adopted',
         pullRequestNumber: prNumber,
         materialHeadSha: remoteHeadSha,
-        staleStateDetected: true,
-        nextAction: 'human-escalation',
-        attempts: bootstrapLease ? { implementation: bootstrapLease.implementationAttempts } : null
+        headRef: pullRequest.head.ref,
+        staleStateDetected: adoption.phase === 'blocked',
+        nextAction: 'post-write-refreeze',
+        attempts: adoption.attempts,
+        adoption
       });
     }
 
@@ -215,10 +211,10 @@ export function evaluateReentry({ pullRequest, stateEnvelope, bootstrapLease, ta
   });
 }
 
-async function listOpenPullRequests(repository, baseBranch, token) {
+async function listOpenPullRequests(repository, token) {
   const pulls = [];
   for (let page = 1; ; page += 1) {
-    const batch = await api(`https://api.github.com/repos/${repository}/pulls?state=open&base=${encodeURIComponent(baseBranch)}&per_page=100&page=${page}`, token);
+    const batch = await api(`https://api.github.com/repos/${repository}/pulls?state=open&per_page=100&page=${page}`, token);
     pulls.push(...batch);
     if (batch.length < 100) break;
   }
@@ -267,9 +263,45 @@ async function writeGithubOutput(decision) {
     `next_action=${decision.nextAction}`,
     `prior_initial_attempts=${decision.priorInitialAttempts ?? 0}`,
     `recover_worker_run_id=${decision.recoverWorkerRunId ?? ''}`,
-    `dispatch_nonce=${decision.dispatchNonce ?? ''}`
+    `dispatch_nonce=${decision.dispatchNonce ?? ''}`,
+    `adoption_head=${decision.adoption ? decision.materialHeadSha : ''}`
   ].join('\n');
   await appendFile(outputPath, `${lines}\n`, 'utf8');
+}
+
+export function terminalBootstrapLease(lease, decision, recoveredWorkerRun) {
+  if (decision.status !== 'escalated-initial-budget-exhausted') return null;
+  const { commentId, ...value } = lease;
+  return {
+    ...value, status: decision.status,
+    workerRunId: recoveredWorkerRun?.id ?? value.workerRunId,
+    failureClass: ['timed_out', 'startup_failure', 'cancelled'].includes(recoveredWorkerRun?.conclusion) ? 'infrastructure' : 'unknown',
+    failureStage: 'pre-material', workerConclusion: recoveredWorkerRun?.conclusion ?? null
+  };
+}
+
+// Resolve write capability only after a concrete mutation has been selected.
+export async function persistReentryMutation({ decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository, controller,
+  getWriteToken = () => requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'), mutate = api }) {
+  let url;
+  let method;
+  let body;
+  if (decision.adoption) {
+    if (decision.adoption.repository !== repository) throw new Error('adoption mutation repository mismatch');
+    if (adoptionEnvelope && JSON.stringify(adoptionEnvelope.adoption) === JSON.stringify(decision.adoption)) return false;
+    url = adoptionEnvelope ? `https://api.github.com/repos/${repository}/issues/comments/${adoptionEnvelope.commentId}` : `https://api.github.com/repos/${repository}/issues/${decision.pullRequestNumber}/comments`;
+    method = adoptionEnvelope ? 'PATCH' : 'POST';
+    body = legacyAdoptionComment(decision.adoption, controller);
+  } else {
+    const terminal = bootstrapLease && terminalBootstrapLease(bootstrapLease, decision, recoveredWorkerRun);
+    if (!terminal || bootstrapLease.status === terminal.status) return false;
+    if (bootstrapLease.repository !== repository) throw new Error('bootstrap mutation repository mismatch');
+    url = `https://api.github.com/repos/${repository}/issues/comments/${positiveInteger(bootstrapLease.commentId, 'bootstrap commentId')}`;
+    method = 'PATCH';
+    body = `${BOOTSTRAP_MARKER}\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify(terminal, null, 2)}\n\`\`\``;
+  }
+  await mutate(url, getWriteToken(), { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
+  return true;
 }
 
 async function main() {
@@ -284,18 +316,24 @@ async function main() {
   const resultPath = String(process.env.CONTROLLER_RESULT_PATH ?? '').trim();
 
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
-  const pulls = await listOpenPullRequests(targetRepository, baseBranch, readToken);
+  const pulls = await listOpenPullRequests(targetRepository, readToken);
   const pullRequest = selectManagedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin, repository: targetRepository });
   let stateEnvelope = null;
+  let adoptionEnvelope = null;
   let bootstrapLease = null;
-  if (pullRequest) stateEnvelope = parsePersistentStateEnvelope(await listIssueComments(targetRepository, pullRequest.number, readToken), { trustedLogin });
-  if (!stateEnvelope) bootstrapLease = parseBootstrapLease(await listIssueComments(targetRepository, issueNumber, readToken), { trustedLogin });
+  if (pullRequest) {
+    const comments = await listIssueComments(targetRepository, pullRequest.number, readToken);
+    stateEnvelope = parsePersistentStateEnvelope(comments, { trustedLogin });
+    adoptionEnvelope = parseLegacyAdoptionEnvelope(comments, targetRepository);
+  }
+  if (!stateEnvelope && !adoptionEnvelope) bootstrapLease = parseBootstrapLease(await listIssueComments(targetRepository, issueNumber, readToken), { trustedLogin });
 
-  const provenance = stateEnvelope?.controller ?? bootstrapLease;
+  const provenance = stateEnvelope?.controller ?? adoptionEnvelope?.controller ?? bootstrapLease;
   if (provenance) {
     const controllerRunId = positiveInteger(provenance.controllerRunId, 'controllerRunId');
     const controllerRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${controllerRunId}`, actionsToken);
     validateControllerRunProvenance(controllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
+    if (adoptionEnvelope && !stateEnvelope) validateLegacyAdoptionControllerRun(adoptionEnvelope, controllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
   }
   const recoveredWorkerRun = bootstrapLease ? await recoverBootstrapWorkerRun(bootstrapLease, orchestratorRepository, orchestratorRef, actionsToken) : null;
   const effectiveRisk = stateEnvelope?.persistent?.effectiveRisk ?? bootstrapLease?.effectiveRisk ?? 'critical';
@@ -304,6 +342,7 @@ async function main() {
   const decision = evaluateReentry({
     pullRequest,
     stateEnvelope,
+    adoptionEnvelope,
     bootstrapLease,
     targetRepository,
     issueNumber,
@@ -311,6 +350,14 @@ async function main() {
     provider: expectedImplementer.provider,
     model: expectedImplementer.model,
     recoveredWorkerRun
+  });
+  await persistReentryMutation({
+    decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository: targetRepository,
+    controller: decision.adoption ? {
+      controllerRunId: positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID'),
+      controllerRepository: orchestratorRepository, controllerRef: orchestratorRef,
+      controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml'
+    } : null
   });
   await writeGithubOutput(decision);
 
