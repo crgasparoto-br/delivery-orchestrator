@@ -73,6 +73,16 @@ All provider/risk workers support two controller-selected modes:
 
 FAST keeps the same file envelope on both initial PR creation and follow-up remediation. Protected files, repository allowlists and write-token isolation remain enforced for every risk profile.
 
+## Worker sandbox toolchain
+
+The `codex` FAST/STANDARD/CRITICAL workers execute inside an isolated `gh-aw` agent sandbox (`awf`) with its own constructed `PATH`, separate from the GitHub Actions runner host. Installing a tool on the host (for example `apt-get install git`) does not by itself make it resolvable inside that sandbox. Each `delivery-v2-worker-codex-*.md` workflow:
+
+- declares `runtimes.node` so `node`/`npm` are provisioned through `gh-aw`'s own compiler-managed mechanism instead of an ambient host assumption;
+- registers the host `git` executable into the `RUNNER_TOOL_CACHE` toolcache bin-directory convention (`.github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs`), the same discovery mechanism the sandbox uses to build its `PATH`;
+- runs a preflight step, after runtime setup and before "Execute Codex CLI", that fails the workflow immediately if `git`, `node` or `npm` would not resolve inside the sandbox — catching the regression before any AI budget is spent instead of after the worker reports a missing tool.
+
+This closes the regression tracked by issue #151 against the original fix in #108/#112, which only ensured `git` was present on the runner host, not inside the worker's effective execution environment.
+
 ## Independent audit
 
 `.github/workflows/delivery-v2-audit.yml` is the generic normal-path audit. It is not tied to issue #27 or a pilot marker. The deterministic controller supplies target repository/PR, exact material SHA through the trusted source CI run, effective risk and target CI workflow identity.

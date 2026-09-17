@@ -19,6 +19,9 @@ permissions:
   issues: read
 env:
   GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "${{ github.event.inputs.target_pr == '' && 'true' || 'false' }}"
+runtimes:
+  node:
+    version: "22"
 pre-steps:
   - name: Checkout trusted authorization guard
     uses: actions/checkout@v7
@@ -58,8 +61,30 @@ pre-steps:
       sudo apt-get install -y git
       command -v git
       git --version
+steps:
+  - name: Install pinned Codex CLI for Delivery V2 sandbox
+    shell: bash
+    run: npm install --ignore-scripts -g @openai/codex@0.150.1
+  - name: Checkout trusted sandbox toolchain preflight
+    uses: actions/checkout@v7
+    with:
+      repository: ${{ github.repository }}
+      ref: ${{ github.sha }}
+      path: .delivery-v2-sandbox-toolchain
+      sparse-checkout: |
+        .github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs
+        .github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh
+      sparse-checkout-cone-mode: false
+      fetch-depth: 1
+      persist-credentials: false
+  - name: Prove Delivery V2 sandbox toolchain before Codex execution
+    shell: bash
+    run: |
+      set -euo pipefail
+      node .delivery-v2-sandbox-toolchain/.github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs
 engine:
   id: codex
+  command: ./.delivery-v2-sandbox-toolchain/.github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh
   model: ${{ vars.DELIVERY_FAST_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.4' }}
 max-turns: 20
 max-ai-credits: 100
@@ -75,6 +100,7 @@ checkout:
   fetch: ["refs/pulls/open/*"]
   current: true
 tools:
+  cli-proxy: true
   edit:
   bash: true
   github:
