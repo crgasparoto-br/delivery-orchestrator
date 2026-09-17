@@ -62,13 +62,18 @@ pre-steps:
       command -v git
       git --version
 steps:
+  - name: Install pinned Codex CLI for Delivery V2 sandbox
+    shell: bash
+    run: npm install --ignore-scripts -g @openai/codex@0.150.1
   - name: Checkout trusted sandbox toolchain preflight
     uses: actions/checkout@v7
     with:
       repository: ${{ github.repository }}
       ref: ${{ github.sha }}
       path: .delivery-v2-sandbox-toolchain
-      sparse-checkout: .github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs
+      sparse-checkout: |
+        .github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs
+        .github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh
       sparse-checkout-cone-mode: false
       fetch-depth: 1
       persist-credentials: false
@@ -76,10 +81,10 @@ steps:
     shell: bash
     run: |
       set -euo pipefail
-      trap 'rm -rf .delivery-v2-sandbox-toolchain' EXIT
       node .delivery-v2-sandbox-toolchain/.github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs
 engine:
   id: codex
+  command: ./.delivery-v2-sandbox-toolchain/.github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh
   model: ${{ vars.DELIVERY_STANDARD_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.4' }}
 max-turns: 40
 max-ai-credits: 250
@@ -95,6 +100,7 @@ checkout:
   fetch: ["refs/pulls/open/*"]
   current: true
 tools:
+  cli-proxy: true
   edit:
   bash: true
   github:
