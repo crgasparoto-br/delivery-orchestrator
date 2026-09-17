@@ -96,6 +96,17 @@ jobs:
         id: reentry
         run: node scripts/guard-delivery-v2-reentry.mjs
 
+      - name: Checkout PR branch
+        if: steps.reentry.outputs.status == 'legacy-adopted'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_repository }}
+          ref: ${{ steps.reentry.outputs.adoption_head }}
+          path: .delivery-v2-adopted-pr
+          token: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Reserve initial implementation attempt
         id: reserve
         if: steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr == '' && steps.reentry.outputs.recover_worker_run_id == ''
@@ -111,10 +122,15 @@ jobs:
         if: steps.reentry.outputs.run_controller == 'true'
         env:
           DELIVERY_V2_RESUME_PR: ${{ steps.reentry.outputs.resume_pr }}
+          DELIVERY_V2_ADOPTED_CHECKOUT: ${{ github.workspace }}/.delivery-v2-adopted-pr
           DELIVERY_V2_INITIAL_ATTEMPTS: ${{ steps.reserve.outputs.attempts || steps.reentry.outputs.prior_initial_attempts || '1' }}
           DELIVERY_V2_INITIAL_DISPATCH_NONCE: ${{ steps.reserve.outputs.dispatch_nonce || steps.reentry.outputs.dispatch_nonce }}
           DELIVERY_V2_RECOVER_WORKER_RUN_ID: ${{ steps.reentry.outputs.recover_worker_run_id }}
         run: node scripts/run-delivery-v2-controller.mjs
+
+      - name: Persist exhausted initial attempt
+        if: failure() && steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr == ''
+        run: node scripts/guard-delivery-v2-reentry.mjs
 
       - name: Finalize terminal release status
         if: always() && steps.reentry.outputs.run_controller == 'true'

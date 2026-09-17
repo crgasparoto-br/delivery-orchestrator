@@ -677,6 +677,12 @@ At minimum, persistent state must retain:
 
 Controller metadata may additionally persist observability accumulation needed for DV2-011. State updates must be idempotent and tied to observed GitHub identity. A stale state document cannot override fresher remote PR/SHA facts.
 
+### 20.1 Legacy PR adoption before complete operational evidence
+
+A trusted existing PR without canonical V2 state may enter the explicit `legacy-adopted` checkpoint without claiming V2 creation or consuming an initial implementation attempt. The checkpoint is separate from the complete persistent operational-state schema: identity and adoption provenance are mandatory; unknown classifier, risk, audit and historical counters are represented by `null`, never invented defaults. Proven bootstrap counters retain source-comment provenance. Normal managed-PR recovery remains governed by its existing correlated-worker contract.
+
+A trusted exact-identity audit-continuation request may advance this checkpoint through deterministic `post-write-refreeze` after checkout of the exact PR head, canonical classification and observation of authorized terminal-green exact-head CI. The request is not independent audit approval. Refreeze is evidence-only and cannot mutate the material candidate, reset budgets, dispatch an initial implementation, or grant release readiness. Missing required independent audit, hygiene, producer or historical-budget evidence remains explicitly blocking. Head/base drift invalidates the freeze and its derived evidence. A complete operational record must still satisfy all existing DV2-008/DV2-010/DV2-016 requirements before the normal audit/release path can proceed.
+
 ## 21. Security model
 
 The controller follows least privilege:

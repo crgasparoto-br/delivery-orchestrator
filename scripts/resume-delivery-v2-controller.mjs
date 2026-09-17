@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadV2Config } from '../src/v2/config.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
@@ -17,7 +19,7 @@ import {
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
 import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
-import { parseTrustedJsonEnvelope, selectTrustedMarkerComment, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
+import { parseTrustedJsonEnvelope, selectExistingPullRequest, selectTrustedMarkerComment, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-policy.mjs';
 import {
   createControllerDeliveryMetrics,
@@ -31,6 +33,9 @@ import {
 } from '../src/v2/controller-observability.mjs';
 import { downloadGhAwUsageArtifact } from '../src/v2/gh-aw-usage-artifact.mjs';
 import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
+import { legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, refreezeLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
+import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
+import { fetchImmutableCompareEvidence } from '../src/v2/github-audit-evidence.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
@@ -359,6 +364,21 @@ export function initializeResumeObservability(controller = {}, { startedAtMs = D
   });
 }
 
+export async function persistLegacyRefreeze({ envelope, pullRequest, comments, checkoutHeadSha, plan, classifier, runs, checks, targetPolicy, controller, observePullRequest, persist }) {
+  let adoption = refreezeLegacyAdoption({ record: envelope.adoption, pullRequest, comments, checkoutHeadSha, plan, classifier, runs, checks, targetPolicy });
+  // Observe again after evidence collection. No old green check survives a race.
+  adoption = reconcileLegacyAdoption(adoption, await observePullRequest());
+  await persist(legacyAdoptionComment(adoption, controller));
+  return {
+    schemaVersion: 1, status: 'legacy-adopted', phase: adoption.phase,
+    repository: adoption.repository, issueNumber: adoption.issueNumber,
+    pullRequestNumber: adoption.pullRequestNumber, headRef: adoption.headRef,
+    materialHeadSha: adoption.materialHeadSha, nextAction: adoption.nextAction,
+    attempts: adoption.attempts, providerCalls: 0, initialImplementationReserved: false,
+    releaseReady: false, adoption
+  };
+}
+
 export async function main() {
   const resumeStartedAtMs = Date.now();
   const targetRepository = requiredEnv('TARGET_REPOSITORY');
@@ -370,7 +390,6 @@ export async function main() {
   const orchestratorRepository = requiredEnv('GITHUB_REPOSITORY');
   const orchestratorRef = requiredEnv('ORCHESTRATOR_WORKER_REF');
   const targetReadToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
-  const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
   const actionsToken = requiredEnv('GITHUB_TOKEN');
   const controllerRunId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
   const resultPath = process.env.CONTROLLER_RESULT_PATH || path.join(process.env.RUNNER_TEMP || '/tmp', 'delivery-v2-controller-result.json');
@@ -378,25 +397,56 @@ export async function main() {
   const repositoryPolicy = await loadRepositoryRiskPolicy(targetRepository);
 
   let pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
-  if (pullRequest.state !== 'open') throw new Error(`managed PR #${resumePr} is not open`);
-  if (String(pullRequest.base.ref) !== baseBranch) throw new Error('managed PR base branch does not match requested base');
-  const closing = new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
-  if (!closing.test(String(pullRequest.body ?? ''))) throw new Error('managed PR is not bound to requested issue');
+  if (!selectExistingPullRequest([pullRequest], { repository: targetRepository, issueNumber, baseBranch, trustedLogin: trustedCommentAuthorForRepository(targetRepository) })) {
+    throw new Error('existing PR is not bound to requested issue');
+  }
 
   let materialHeadSha = String(pullRequest.head.sha).toLowerCase();
   const expectedBaseSha = String(pullRequest.base.sha).toLowerCase();
-  let changedPaths = await fetchChangedPaths(targetRepository, resumePr, targetReadToken);
+  const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
+  const comments = await listComments(targetRepository, resumePr, targetReadToken);
+  const stateEnvelope = parseStateComment(comments, trustedLogin);
+  let changedPaths = stateEnvelope
+    ? await fetchChangedPaths(targetRepository, resumePr, targetReadToken)
+    : (await fetchImmutableCompareEvidence(targetRepository, expectedBaseSha, materialHeadSha, targetReadToken)).changedPaths;
   let plan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk, changedPaths, repositoryPolicy });
-  let classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
+  let classifier;
   let latestCheck = null;
   let latestSourceRun = null;
 
-  const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
-  const stateEnvelope = parseStateComment(await listComments(targetRepository, resumePr, targetReadToken), trustedLogin);
-  if (!stateEnvelope) throw new Error('managed PR is missing authoritative Delivery V2 persistent state');
-  if (!String(pullRequest.title ?? '').startsWith('[delivery-v2] ') && stateEnvelope.controller?.adoption?.type !== 'legacy-adopted') {
-    throw new Error('non-managed PR is missing authoritative legacy adoption provenance');
+  if (!stateEnvelope) {
+    const envelope = parseLegacyAdoptionEnvelope(comments, targetRepository);
+    if (!envelope) throw new Error('PR has neither canonical state nor a trusted adoption checkpoint');
+    if (envelope.adoption.issueNumber !== issueNumber || envelope.adoption.baseRef !== baseBranch) throw new Error('adoption target mismatch');
+    const priorRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${positiveInteger(envelope.controller?.controllerRunId, 'adoption controllerRunId')}`, actionsToken);
+    validateLegacyAdoptionControllerRun(envelope, priorRun, { orchestratorRepository, trustedRef: orchestratorRef });
+    const checkout = requiredEnv('DELIVERY_V2_ADOPTED_CHECKOUT');
+    const { stdout } = await promisify(execFile)('git', ['-C', checkout, 'rev-parse', 'HEAD']);
+    // Fingerprint the canonical runtime actually executing classification, not
+    // a candidate-controlled lock file or the material commit identifier.
+    const rootDir = fileURLToPath(new URL('../', import.meta.url));
+    const controlPlane = await promisify(execFile)('git', ['-C', rootDir, 'rev-parse', 'HEAD']);
+    const sourceCommit = controlPlane.stdout.trim();
+    const distribution = buildClassifierPackage({ rootDir, sourceCommit, targetConfig: { schemaVersion: 1, repository: targetRepository, baseBranch, riskPolicy: repositoryPolicy } });
+    classifier = { version: `${orchestratorRepository}@${sourceCommit}`, fingerprint: distribution.lock.canonicalClassifierFingerprint, policyFingerprint: distribution.lock.files['policy.json'] };
+    const sourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
+    const payload = await persistLegacyRefreeze({
+      envelope, pullRequest, comments, checkoutHeadSha: stdout.trim(), plan,
+      classifier: { ...classifier, subjectSha: materialHeadSha },
+      runs: sourceRun ? [sourceRun] : [], checks: await fetchCheckRuns(targetRepository, materialHeadSha, targetReadToken), targetPolicy,
+      controller: { controllerRunId, controllerRepository: orchestratorRepository, controllerRef: orchestratorRef, controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml' },
+      observePullRequest: () => fetchPullRequest(targetRepository, resumePr, targetReadToken),
+      persist: (body) => patchJson(`https://api.github.com/repos/${targetRepository}/issues/comments/${envelope.commentId}`, requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'), { body })
+    });
+    await publishReleaseStatus({ repository: targetRepository, sha: payload.materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Legacy PR adopted; independent evidence still required', token: requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN') });
+    await writeFile(resultPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+    process.stdout.write(`${JSON.stringify(payload)}\n`);
+    return;
   }
+  classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
+  if (stateEnvelope.persistent.issueNumber !== issueNumber) throw new Error('persisted state issue does not match requested issue');
+  if (stateEnvelope.persistent.baseRef !== baseBranch) throw new Error('persisted state baseRef does not match requested base');
+  if (stateEnvelope.persistent.provider !== provider) throw new Error('persisted state provider does not match requested provider');
   const resumeObservability = initializeResumeObservability(stateEnvelope.controller, { startedAtMs: resumeStartedAtMs });
   let observability = resumeObservability.observability;
   const observabilityHistoryComplete = resumeObservability.historyComplete;
@@ -406,6 +456,15 @@ export async function main() {
   let state;
   let controller = {
     ...stateEnvelope.controller,
+    ...(!String(pullRequest.title ?? '').startsWith('[delivery-v2] ') && !stateEnvelope.controller.adoption ? {
+      adoption: {
+        type: 'legacy-adopted', source: 'trusted-github-pr-and-persistent-state',
+        repository: targetRepository, issueNumber, pullRequestNumber: resumePr,
+        headRef: pullRequest.head.ref, baseRef: pullRequest.base.ref,
+        adoptedHeadSha: materialHeadSha, adoptedBaseSha: expectedBaseSha,
+        stateCommentId: stateEnvelope.commentId, priorControllerRunId
+      }
+    } : {}),
     controllerRunId,
     controllerRepository: orchestratorRepository,
     controllerRef: orchestratorRef,
@@ -451,6 +510,8 @@ export async function main() {
     headRef: pullRequest.head.ref,
     provider
   });
+
+  const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
 
   const persist = async (extra = {}) => {
     controller = { ...controller, observability, observabilityHistoryComplete, ...extra };

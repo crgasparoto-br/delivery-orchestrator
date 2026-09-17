@@ -185,8 +185,8 @@
       "status": "validated",
       "requiredForV2Default": true,
       "summary": "The deterministic controller persists candidate identity, state transitions, attempt counters and evidence pointers so a new process/chat resumes without reconstructing orchestration history from prose.",
-      "implementationRefs": ["file:src/v2/persistent-state.mjs", "file:schemas/delivery-v2-persistent-state.schema.json", "file:src/cli.mjs", "file:package.json"],
-      "validationRefs": ["file:test/v2-persistent-state.test.mjs", "file:docs/delivery-v2/evidence/dv2-016-live-resume.json", "github:delivery-orchestrator#39", "github-actions:34668025047"],
+      "implementationRefs": ["file:src/v2/persistent-state.mjs", "file:schemas/delivery-v2-persistent-state.schema.json", "file:src/v2/legacy-adoption.mjs", "file:docs/delivery-v2/LEGACY_ADOPTION.md", "file:src/cli.mjs", "file:package.json"],
+      "validationRefs": ["file:test/v2-persistent-state.test.mjs", "file:test/v2-legacy-adoption.test.mjs", "file:test/v2-existing-pr-identity.test.mjs", "file:docs/delivery-v2/evidence/dv2-016-live-resume.json", "github:delivery-orchestrator#39", "github-actions:34668025047"],
       "rolloutRefs": [],
       "trackingIssue": 27
     },

@@ -1,0 +1,221 @@
+{
+  "source": "Read-only GitHub REST snapshot, 2026-09-17; PR bodies projected to closing line; controller metadata projected to identity/audit/hygiene fields.",
+  "issue105": {
+    "pullRequest": {
+      "number": 122,
+      "title": "[delivery-v2] Adopt trusted legacy PRs for safe re-entry",
+      "state": "open",
+      "author_association": "OWNER",
+      "body": "Closes #105",
+      "user": {
+        "login": "crgasparoto-br"
+      },
+      "base": {
+        "ref": "main",
+        "sha": "3a48b6593f24e82f5415001227d0afc22fcf43d8",
+        "repo": {
+          "full_name": "crgasparoto-br/delivery-orchestrator"
+        }
+      },
+      "head": {
+        "ref": "delivery-v2/issue-105-adopt-legacy-pr-36d627ccc040f749",
+        "sha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+        "repo": {
+          "full_name": "crgasparoto-br/delivery-orchestrator"
+        }
+      }
+    },
+    "stateEnvelope": {
+      "persistent": {
+        "schemaVersion": 1,
+        "revision": 0,
+        "repository": "crgasparoto-br/delivery-orchestrator",
+        "issueNumber": 105,
+        "pullRequestNumber": 122,
+        "baseRef": "main",
+        "baseSha": "3a48b6593f24e82f5415001227d0afc22fcf43d8",
+        "headRef": "delivery-v2/issue-105-adopt-legacy-pr-36d627ccc040f749",
+        "materialHeadSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+        "effectiveRisk": "critical",
+        "classifier": {
+          "subjectSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+          "version": "delivery-v2-risk-profile-v1",
+          "fingerprint": "10cd3aa0d209cea00e053cec876c70db9156a4eac81a05d424ba0d6a1976501e",
+          "current": true
+        },
+        "provider": "codex",
+        "model": "gpt-5.6-sol",
+        "auditorProvider": "claude",
+        "auditorModel": "claude-opus-5",
+        "status": "escalated",
+        "attempts": {
+          "implementation": 3,
+          "audit": 1,
+          "auditRemediation": 0
+        },
+        "workflowChecks": [],
+        "ciFailure": null,
+        "auditEvidence": {
+          "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+          "decision": "rejected",
+          "evidenceRef": "https://github.com/crgasparoto-br/delivery-orchestrator/actions/runs/35150027806"
+        },
+        "blockingFindings": [
+          {
+            "id": "DV2-105-ADOPT-TRUST-OR",
+            "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+            "severity": "high",
+            "violatedContract": "MASTER_SPEC §4.2 (fail closed on ambiguous target identity), §21 (security model: risk/dispatch boundaries tested adversarially); issue #105 requirement \"detectar PR legada candidata apenas por evidência GitHub confiável e determinística: ... autor/ownership permitido\" and \"falhar fechado se houver ... PR de fork/autor não confiável\"",
+            "surface": "scripts/guard-delivery-v2-reentry.mjs :: selectManagedPullRequest",
+            "failureMode": "The candidate removes the mandatory `[delivery-v2] ` title anchor for ALL selections and replaces the owner-login trust test with a disjunction: `(!trustedLogin || user.login === trustedLogin || ['OWNER','MEMBER','COLLABORATOR'].includes(author_association))`. Because the login test is OR-ed (not AND-ed) with the association test, any open same-repo PR whose body contains `Closes #<issue>` and whose author carries a MEMBER/COLLABORATOR association is selected as the authoritative material candidate for that issue, is written an authoritative controller-state comment, and is resumed as the delivery candidate. The prior code required both the managed title identity and the single trusted login, so this is a net widening of a control-plane trust boundary rather than the deterministic \"allowed ownership\" gate the issue requires.",
+            "evidence": "CANDIDATE.diff, scripts/guard-delivery-v2-reentry.mjs: removed predicate `String(pr?.title ?? '').startsWith('[delivery-v2] ')` and added `&& (!trustedLogin || String(pr?.user?.login ?? '').toLowerCase() === trustedLogin || ['OWNER','MEMBER','COLLABORATOR'].includes(String(pr?.author_association ?? '').toUpperCase()))`. Contrast with the repository's existing trust helper in MATERIAL_CONTEXT.json src/v2/controller-provenance.mjs :: selectTrustedMarkerComment, which conjunctively requires `login === expectedLogin` AND `TRUSTED_ASSOCIATIONS.has(association)`. The new test `legacy adoption fails closed for forks, untrusted authors, and ambiguous candidates` only exercises `author_association: 'NONE'`, so the MEMBER/COLLABORATOR bypass of `trustedLogin` is unasserted.",
+            "remediationMode": "targeted",
+            "blocksRelease": true,
+            "evidenceRef": "https://github.com/crgasparoto-br/delivery-orchestrator/actions/runs/35150027806"
+          },
+          {
+            "id": "DV2-105-ADOPT-STATE-DEFAULT-OPEN",
+            "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+            "severity": "medium",
+            "violatedContract": "MASTER_SPEC §4.2 (\"Missing changed-file evidence, an unknown path, an unrecognized state, ambiguous target identity ... must promote/block rather than downgrade\"); issue #105 \"falhar fechado se houver ... identidade inconsistente\"",
+            "surface": "scripts/guard-delivery-v2-reentry.mjs :: selectManagedPullRequest",
+            "failureMode": "Missing PR state evidence is defaulted to the permissive value instead of rejecting the candidate. A PR payload without a `state` field (or with an unrecognized state value normalized away upstream) is treated as open and becomes adoptable, so absent identity evidence grants the cheaper path rather than blocking.",
+            "evidence": "CANDIDATE.diff adds `String(pr?.state ?? 'open') === 'open'` as the first predicate; the issue requires open-PR evidence to be proven, and the sibling head/base repository predicates in the same expression already demonstrate the fail-closed pattern (`String(pr?.head?.repo?.full_name ?? '').toLowerCase() !== ''`). No test covers a PR object lacking `state`.",
+            "remediationMode": "targeted",
+            "blocksRelease": true,
+            "evidenceRef": "https://github.com/crgasparoto-br/delivery-orchestrator/actions/runs/35150027806"
+          },
+          {
+            "id": "DV2-105-ADOPT-SYNTHETIC-CLASSIFIER",
+            "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+            "severity": "high",
+            "violatedContract": "MASTER_SPEC §4.1 (controller owns risk classification and classifier fingerprint), §4.8 (facts before judgment; material claims require reproducible evidence, otherwise UNKNOWN), DV2-001 (delivery record identity), DV2-010 (\"the classifier result and fingerprint apply to that head\")",
+            "surface": "scripts/guard-delivery-v2-reentry.mjs :: createLegacyAdoptionEnvelope and its call site in main()",
+            "failureMode": "Adoption fabricates deterministic control-plane facts instead of computing or marking them UNKNOWN: `classifier: { subjectSha: headSha, version: 'legacy-adoption-v1', fingerprint: headSha }` produces a classifier identity whose fingerprint is simply the commit SHA, and `createPersistentDeliveryState` then normalizes it to `current: true`. `effectiveRisk` is hardcoded to `'critical'` in both the helper default and the call site, so no deterministic classification of the adopted PR's changed paths ever runs, yet the persisted record (and every downstream audit request and exact-head release-gate evaluation that reads it) asserts that a current classifier result applies to that head. The same envelope also asserts `status: 'ci-pending'` with zero `workflowChecks` and resets `attempts.implementation` to 0 for a PR that may already have consumed the CRITICAL implementation budget recorded in the issue's bootstrap lease.",
+            "evidence": "CANDIDATE.diff, `createLegacyAdoptionEnvelope`: `classifier: { subjectSha: headSha, version: 'legacy-adoption-v1', fingerprint: headSha }`, `status: 'ci-pending'`, `attempts: { implementation: 0, audit: 0, auditRemediation: 0 }`; call site sets `const effectiveRisk = 'critical';` unconditionally. MATERIAL_CONTEXT.json src/v2/persistent-state.mjs :: normalizeClassifier sets `current: classifier.current !== false && subjectSha === materialHeadSha`, so the fabricated fingerprint is persisted as a current classification. Compare with the real classifier identity in AUDIT_REQUEST.json (`version: 'delivery-v2-risk-profile-v1'`, 64-hex `fingerprint`).",
+            "remediationMode": "targeted",
+            "blocksRelease": true,
+            "evidenceRef": "https://github.com/crgasparoto-br/delivery-orchestrator/actions/runs/35150027806"
+          },
+          {
+            "id": "DV2-105-GUARD-WRITE-TOKEN-UNCONDITIONAL",
+            "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+            "severity": "high",
+            "violatedContract": "MASTER_SPEC §4.1/§4.2 (deterministic control plane must not fail on unprovisioned inputs for paths that need no such capability), §7/DV2-003 (least-privilege credential delegation), §21 (least privilege)",
+            "surface": "scripts/guard-delivery-v2-reentry.mjs :: main()",
+            "failureMode": "`const writeToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');` is asserted unconditionally at the top of the guard, including on the pre-existing paths that perform no write at all (new-delivery bootstrap, normal `[delivery-v2]` PR resume, and every non-exhausted bootstrap decision). The guard previously required only read-scoped credentials. This candidate changes no workflow, action or configuration path (changedPaths is exactly the two scripts plus one test), so it ships no evidence that the dispatch runtime exposes this variable to this step; if it is absent, every Delivery V2 re-entry decision hard-fails, and if it is present it introduces a privileged write credential into a step that mostly only reads.",
+            "evidence": "CANDIDATE.diff adds `requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN')` before any branch; the only two consumers are the legacy-adoption comment POST and the bootstrap-lease PATCH, both inside conditionals. AUDIT_REQUEST.json `changedPaths` = ['scripts/guard-delivery-v2-reentry.mjs','scripts/resume-delivery-v2-controller.mjs','test/v2-reentry-guard.test.mjs']; DIFF_MANIFEST.json `categoryReservations.config`/`other` are absent (`included:false`), confirming no workflow/config provisioning accompanies the new hard requirement, and no test exercises `main()`.",
+            "remediationMode": "targeted",
+            "blocksRelease": true,
+            "evidenceRef": "https://github.com/crgasparoto-br/delivery-orchestrator/actions/runs/35150027806"
+          }
+        ],
+        "evidenceRefs": [],
+        "lastReason": "implementation-budget-exhausted-after-audit",
+        "appliedTransitionIds": []
+      },
+      "controller": {
+        "controllerRunId": 35156935807,
+        "controllerRepository": "crgasparoto-br/delivery-orchestrator",
+        "controllerRef": "main",
+        "controllerWorkflowPath": ".github/workflows/delivery-v2-dispatch.yml",
+        "nextAction": "escalated",
+        "materialWorkerRunId": 35117775004,
+        "materialWorkerIdentity": "delivery-v2-worker-codex-critical.lock.yml",
+        "materialWorkerProvider": "codex",
+        "auditRunId": 35150027806,
+        "auditDispatchNonce": "737e0daf-6cd8-43ef-93f6-1f753cc2b8d6",
+        "auditRequestFingerprint": "282d48ddea13f6b9f77c9321f9d14cdeaa0d57bda8af5e37fd6eff6640aa05e6",
+        "priorFindings": [
+          {
+            "id": "DV2-105-ADOPT-TRUST-OR",
+            "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+            "status": "open"
+          },
+          {
+            "id": "DV2-105-ADOPT-STATE-DEFAULT-OPEN",
+            "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+            "status": "open"
+          },
+          {
+            "id": "DV2-105-ADOPT-SYNTHETIC-CLASSIFIER",
+            "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+            "status": "open"
+          },
+          {
+            "id": "DV2-105-GUARD-WRITE-TOKEN-UNCONDITIONAL",
+            "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+            "status": "open"
+          },
+          {
+            "id": "DV2-105-WORKER-FAILURE-CLASS-MISSING",
+            "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+            "status": "non-blocking"
+          },
+          {
+            "id": "DV2-105-PARALLEL-TRUST-ABSTRACTION",
+            "candidateSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+            "status": "non-blocking"
+          }
+        ],
+        "technicalHygiene": {
+          "schemaVersion": 1,
+          "materialSha": "ed6dfdc35b59853ae65a135b7ecfb49a71c859a3",
+          "baselineSha": "3a48b6593f24e82f5415001227d0afc22fcf43d8",
+          "previousMaterialSha": null,
+          "result": "PASS",
+          "effectiveProfile": "critical",
+          "promotionRequired": false,
+          "reusedSymbols": [],
+          "extendedSymbols": [
+            "worker-scope"
+          ],
+          "createdSymbols": [],
+          "createdFiles": [],
+          "structuralFindings": [],
+          "missingEvidence": [],
+          "evidenceRef": "https://api.github.com/repos/crgasparoto-br/delivery-orchestrator/actions/artifacts/10455951275/zip"
+        }
+      }
+    },
+    "stateComment": {
+      "id": 5704450998,
+      "user": {
+        "login": "crgasparoto-br"
+      },
+      "author_association": "OWNER"
+    }
+  },
+  "solverFin613": {
+    "pullRequest": {
+      "number": 660,
+      "title": "feat(web): migrar Orçamentos para acompanhamento multi-moedas",
+      "state": "open",
+      "author_association": "OWNER",
+      "body": "Closes #613",
+      "user": {
+        "login": "crgasparoto-br"
+      },
+      "base": {
+        "ref": "main",
+        "sha": "47052e36dd1c3413095d8a8a37769677bff28d39",
+        "repo": {
+          "full_name": "crgasparoto-br/SolverFin"
+        }
+      },
+      "head": {
+        "ref": "codex/613-budgets-multicurrency",
+        "sha": "70499851ee7a96734a447bc3de50f7da56b8bf50",
+        "repo": {
+          "full_name": "crgasparoto-br/SolverFin"
+        }
+      }
+    },
+    "continuation": {
+      "reason": "handoff-stale",
+      "recovery_scope": "post-write-refreeze",
+      "requires_refreeze": true,
+      "next_phase": "finalize-after-ci"
+    }
+  }
+}

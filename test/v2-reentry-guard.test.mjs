@@ -4,11 +4,9 @@ import test from 'node:test';
 import { createPersistentDeliveryState } from '../src/v2/persistent-state.mjs';
 import {
   evaluateReentry,
-  createLegacyAdoptionEnvelope,
   parseBootstrapLease,
   parsePersistentStateEnvelope,
-  selectManagedPullRequest,
-  terminalizeBootstrapLease
+  selectManagedPullRequest
 } from '../scripts/guard-delivery-v2-reentry.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
 import { controllerMetadataForNewMaterial, markExistingAuditInFlight, rebuildCiPendingState } from '../scripts/resume-delivery-v2-controller.mjs';
@@ -25,13 +23,11 @@ function pr(overrides = {}) {
   return {
     number: 77,
     title: '[delivery-v2] fix issue 63',
+    state: 'open', user: { login: 'owner' }, author_association: 'OWNER',
     body: 'Closes #63',
-    state: 'open',
-    user: { login: 'owner' },
-    author_association: 'OWNER',
-    base: { ref: 'main', sha: BASE, repo: { full_name: 'owner/repo' } },
-    head: { ref: 'delivery/63', sha: HEAD_A, repo: { full_name: 'owner/repo' } },
-    ...overrides
+    ...overrides,
+    base: { ref: 'main', sha: BASE, ...overrides.base, repo: { full_name: 'owner/repo' } },
+    head: { ref: 'delivery/63', sha: HEAD_A, ...overrides.head, repo: { full_name: 'owner/repo' } }
   };
 }
 
@@ -75,7 +71,7 @@ function planFor(risk = 'critical') {
 }
 
 test('no managed PR and no prior bootstrap lease allows one initial controller path without pre-counting a provider call', () => {
-  const selected = selectManagedPullRequest([], { issueNumber: 63, baseBranch: 'main' });
+  const selected = selectManagedPullRequest([], { issueNumber: 63, baseBranch: 'main', repository: 'owner/repo', trustedLogin: 'owner' });
   assert.equal(selected, null);
   const decision = evaluateReentry({
     pullRequest: selected,
@@ -111,7 +107,7 @@ test('initial attempt is reserved only when deterministic dispatch has authorize
 });
 
 test('existing managed PR resumes persisted state through the controller instead of starting another initial worker', () => {
-  const selected = selectManagedPullRequest([pr()], { issueNumber: 63, baseBranch: 'main' });
+  const selected = selectManagedPullRequest([pr()], { issueNumber: 63, baseBranch: 'main', repository: 'owner/repo', trustedLogin: 'owner' });
   const decision = evaluateReentry({
     pullRequest: selected,
     stateEnvelope: envelope(),
@@ -127,25 +123,6 @@ test('existing managed PR resumes persisted state through the controller instead
   assert.equal(decision.nextAction, 'observe-ci');
   assert.equal(decision.staleStateDetected, false);
   assert.equal(decision.attempts.implementation, 1);
-});
-
-test('trusted same-repository legacy PR is adopted without requiring the managed title prefix', () => {
-  const selected = selectManagedPullRequest([pr({ title: 'Existing implementation' })], { issueNumber: 63, baseBranch: 'main', trustedLogin: 'owner' });
-  const adopted = createLegacyAdoptionEnvelope({ pullRequest: selected, repository: 'owner/repo', issueNumber: 63, provider: 'codex', controllerRunId: 123 });
-  const decision = evaluateReentry({ pullRequest: selected, stateEnvelope: adopted, targetRepository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex' });
-  assert.equal(decision.resumePr, 77);
-  assert.equal(decision.status, 'legacy-adopted');
-  assert.equal(decision.nextAction, 'observe-ci');
-  assert.equal(adopted.persistent.materialHeadSha, HEAD_A);
-  assert.equal(adopted.persistent.lastReason, 'legacy-adopted');
-});
-
-test('legacy adoption fails closed for forks, untrusted authors, and ambiguous candidates', () => {
-  const fork = pr({ title: 'Legacy', head: { ref: 'fork', sha: HEAD_A, repo: { full_name: 'attacker/repo' } } });
-  assert.equal(selectManagedPullRequest([fork], { issueNumber: 63, baseBranch: 'main', trustedLogin: 'owner' }), null);
-  const untrusted = pr({ title: 'Legacy', user: { login: 'attacker' }, author_association: 'NONE' });
-  assert.equal(selectManagedPullRequest([untrusted], { issueNumber: 63, baseBranch: 'main', trustedLogin: 'owner' }), null);
-  assert.throws(() => selectManagedPullRequest([pr({ title: 'Legacy A' }), pr({ number: 78, title: 'Legacy B' })], { issueNumber: 63, baseBranch: 'main', trustedLogin: 'owner' }), /multiple open adoptable PRs/);
 });
 
 test('head drift resumes deterministic classification without resetting attempt counters', () => {
@@ -166,7 +143,7 @@ test('head drift resumes deterministic classification without resetting attempt 
   assert.equal(decision.attempts.implementation, 1);
 });
 
-test('existing PR without canonical state fails closed instead of resetting unknown budgets', () => {
+test('existing PR without canonical state is adopted with unknown budgets instead of resetting them', () => {
   const decision = evaluateReentry({
     pullRequest: pr(),
     stateEnvelope: null,
@@ -176,11 +153,11 @@ test('existing PR without canonical state fails closed instead of resetting unkn
     baseBranch: 'main',
     provider: 'codex'
   });
-  assert.equal(decision.runController, false);
+  assert.equal(decision.runController, true);
   assert.equal(decision.pullRequestNumber, 77);
-  assert.equal(decision.status, 'escalated-missing-persistent-state');
-  assert.equal(decision.nextAction, 'human-escalation');
-  assert.equal(decision.attempts, null);
+  assert.equal(decision.status, 'legacy-adopted');
+  assert.equal(decision.nextAction, 'post-write-refreeze');
+  assert.deepEqual(decision.attempts, { implementation: null, audit: null, auditRemediation: null });
 });
 
 test('a failed pre-PR bootstrap attempt retries within the existing bounded budget instead of resetting it', () => {
@@ -203,18 +180,11 @@ test('a failed pre-PR bootstrap attempt retries within the existing bounded budg
   assert.equal(decision.attempts.implementation, 1);
 });
 
-test('exhausted initial budget produces a terminal bootstrap state without persisting comment metadata', () => {
-  const terminal = terminalizeBootstrapLease({ commentId: 9, status: 'reserved-initial-attempt', implementationAttempts: 3 }, 'escalated-initial-budget-exhausted');
-  assert.equal(terminal.status, 'escalated-initial-budget-exhausted');
-  assert.equal(terminal.implementationAttempts, 3);
-  assert.equal('commentId' in terminal, false);
-});
-
 test('duplicate managed PRs fail closed rather than selecting one nondeterministically', () => {
   assert.throws(() => selectManagedPullRequest([
     pr(),
-    pr({ number: 78, head: { ref: 'delivery/63-b', sha: HEAD_B, repo: { full_name: 'owner/repo' } } })
-  ], { issueNumber: 63, baseBranch: 'main' }), /multiple open adoptable PRs/);
+    pr({ number: 78, head: { ref: 'delivery/63-b', sha: HEAD_B } })
+  ], { issueNumber: 63, baseBranch: 'main', repository: 'owner/repo', trustedLogin: 'owner' }), /multiple open PRs/);
 });
 
 test('state and bootstrap parsers reject ambiguity and preserve one canonical envelope', () => {
