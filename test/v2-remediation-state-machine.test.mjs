@@ -151,6 +151,35 @@ test('remote head drift invalidates evidence and returns to queued classificatio
   assert.equal(drifted.auditAttempts, 1);
 });
 
+test('audit rejection with remediable findings opens auditRemediation even after implementationAttempts is exhausted (issue #139/#134/#130, PR #122)', () => {
+  let state = publish(begin('standard'), A);
+  state = recordCiResult(state, { candidateSha: A, conclusion: 'failure', failureClass: 'actionable', cause: 'test failure', evidenceRef: 'run:1' });
+  assert.equal(state.status, 'ci-failed-remediable');
+  state = publish(startImplementation(state), B);
+  assert.equal(state.implementationAttempts, 2, 'implementationAttempts reaches the STANDARD ceiling before audit ever runs');
+  state = ciSuccess(state);
+  state = startAudit(state);
+  state = recordAuditResult(state, { candidateSha: B, decision: 'rejected', evidenceRef: 'audit:1', findings: [blockingFinding(B)] });
+  assert.equal(state.status, 'audit-failed-remediable', 'a remediable audit rejection must not escalate merely because implementationAttempts is exhausted');
+  assert.equal(state.auditRemediationAttempts, 0);
+  assert.equal(state.implementationAttempts, 2);
+
+  state = startImplementation(state);
+  assert.equal(state.status, 'implementing');
+  assert.equal(state.auditRemediationAttempts, 1, 'remediation after audit rejection consumes the auditRemediation budget');
+  assert.equal(state.implementationAttempts, 2, 'the exhausted initial-implementation budget must not be consumed by audit remediation');
+
+  const D = 'd'.repeat(40);
+  state = ciSuccess(publish(state, D));
+  state = startAudit(state);
+  state = recordAuditResult(state, { candidateSha: D, decision: 'rejected', evidenceRef: 'audit:2', findings: [blockingFinding(D, 'DV2-TEST-002')] });
+  assert.equal(state.status, 'escalated', 'once auditRemediationAttempts itself is exhausted the delivery escalates distinctly');
+  assert.equal(state.escalation.reason, 'audit-remediation-budget-exhausted');
+  assert.equal(state.escalation.auditRemediationAttempts, 1);
+  assert.equal(state.escalation.maxAuditRemediationAttempts, 1);
+  assert.equal(state.escalation.implementationAttempts, 2);
+});
+
 test('controller exposes no recursive AI orchestration or automatic merge authority', () => {
   const state = createDeliveryState({ repository: 'owner/repo', workItem: 'issue#27', riskProfile: 'critical' });
   assert.equal(state.controls.recursiveAiOrchestrationAllowed, false);
