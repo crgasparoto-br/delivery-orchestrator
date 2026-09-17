@@ -1,0 +1,98 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+
+import {
+  resolveToolCache,
+  registerGit,
+  findBinDirs,
+  resolveInBinDirs
+} from '../.github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs';
+
+function makeFakeExecutable(path) {
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, '#!/bin/sh\necho fake\n');
+  chmodSync(path, 0o755);
+}
+
+test('resolveToolCache requires RUNNER_TOOL_CACHE', () => {
+  assert.throws(() => resolveToolCache({}), /RUNNER_TOOL_CACHE/);
+});
+
+test('resolveToolCache returns the configured value', () => {
+  assert.equal(resolveToolCache({ RUNNER_TOOL_CACHE: '/opt/hostedtoolcache' }), '/opt/hostedtoolcache');
+});
+
+test('registerGit publishes a discoverable bin directory using the toolcache convention', () => {
+  const toolCache = mkdtempSync(join(tmpdir(), 'delivery-v2-toolcache-'));
+  const fakeGitDir = mkdtempSync(join(tmpdir(), 'delivery-v2-realgit-'));
+  const fakeGitPath = join(fakeGitDir, 'git');
+  makeFakeExecutable(fakeGitPath);
+
+  try {
+    const { binDir, linkPath } = registerGit(toolCache, { gitPath: fakeGitPath });
+    assert.match(binDir, new RegExp(`^${toolCache}`));
+    assert.equal(linkPath, join(binDir, 'git'));
+
+    const binDirs = findBinDirs(toolCache);
+    assert.ok(binDirs.includes(binDir), 'registered bin dir must be discoverable by the sandbox bin-directory scan');
+
+    const resolved = resolveInBinDirs('git', binDirs);
+    assert.equal(resolved, linkPath);
+  } finally {
+    rmSync(toolCache, { recursive: true, force: true });
+    rmSync(fakeGitDir, { recursive: true, force: true });
+  }
+});
+
+test('registerGit is idempotent when called twice for the same git binary', () => {
+  const toolCache = mkdtempSync(join(tmpdir(), 'delivery-v2-toolcache-'));
+  const fakeGitDir = mkdtempSync(join(tmpdir(), 'delivery-v2-realgit-'));
+  const fakeGitPath = join(fakeGitDir, 'git');
+  makeFakeExecutable(fakeGitPath);
+
+  try {
+    const first = registerGit(toolCache, { gitPath: fakeGitPath });
+    const second = registerGit(toolCache, { gitPath: fakeGitPath });
+    assert.equal(first.linkPath, second.linkPath);
+    assert.equal(findBinDirs(toolCache).filter((d) => d === first.binDir).length, 1);
+  } finally {
+    rmSync(toolCache, { recursive: true, force: true });
+    rmSync(fakeGitDir, { recursive: true, force: true });
+  }
+});
+
+test('findBinDirs discovers a node-style setup-node layout used inside the sandbox', () => {
+  const toolCache = mkdtempSync(join(tmpdir(), 'delivery-v2-toolcache-'));
+  const nodeBinDir = join(toolCache, 'node', '22.0.0', 'x64', 'bin');
+  mkdirSync(nodeBinDir, { recursive: true });
+  writeFileSync(join(nodeBinDir, 'node'), '');
+  writeFileSync(join(nodeBinDir, 'npm'), '');
+
+  try {
+    const binDirs = findBinDirs(toolCache);
+    assert.ok(binDirs.includes(nodeBinDir));
+    assert.equal(resolveInBinDirs('node', binDirs), join(nodeBinDir, 'node'));
+    assert.equal(resolveInBinDirs('npm', binDirs), join(nodeBinDir, 'npm'));
+    assert.equal(resolveInBinDirs('does-not-exist', binDirs), '');
+  } finally {
+    rmSync(toolCache, { recursive: true, force: true });
+  }
+});
+
+for (const risk of ['fast', 'standard', 'critical']) {
+  test(`codex ${risk} worker declares the sandbox toolchain contract`, async () => {
+    const body = await readFile(`.github/workflows/delivery-v2-worker-codex-${risk}.md`, 'utf8');
+    assert.match(body, /runtimes:\s*\n\s+node:\s*\n\s+version: "22"/);
+    assert.match(body, /name: Prove Delivery V2 sandbox toolchain before Codex execution/);
+    assert.match(body, /node \.delivery-v2-sandbox-toolchain\/\.github\/scripts\/ensure-delivery-v2-worker-sandbox-toolchain\.mjs/);
+    const lockBody = await readFile(`.github/workflows/delivery-v2-worker-codex-${risk}.lock.yml`, 'utf8');
+    assert.match(lockBody, /Prove Delivery V2 sandbox toolchain before Codex execution/);
+    const preflightIndex = lockBody.indexOf('Prove Delivery V2 sandbox toolchain before Codex execution');
+    const executeIndex = lockBody.indexOf('name: Execute Codex CLI');
+    assert.ok(preflightIndex > -1 && executeIndex > -1 && preflightIndex < executeIndex, 'preflight must run before Codex CLI execution');
+  });
+}

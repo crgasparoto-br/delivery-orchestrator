@@ -19,6 +19,9 @@ permissions:
   issues: read
 env:
   GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "${{ github.event.inputs.target_pr == '' && 'true' || 'false' }}"
+runtimes:
+  node:
+    version: "22"
 pre-steps:
   - name: Checkout trusted authorization guard
     uses: actions/checkout@v7
@@ -58,6 +61,23 @@ pre-steps:
       sudo apt-get install -y git
       command -v git
       git --version
+steps:
+  - name: Checkout trusted sandbox toolchain preflight
+    uses: actions/checkout@v7
+    with:
+      repository: ${{ github.repository }}
+      ref: ${{ github.sha }}
+      path: .delivery-v2-sandbox-toolchain
+      sparse-checkout: .github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs
+      sparse-checkout-cone-mode: false
+      fetch-depth: 1
+      persist-credentials: false
+  - name: Prove Delivery V2 sandbox toolchain before Codex execution
+    shell: bash
+    run: |
+      set -euo pipefail
+      trap 'rm -rf .delivery-v2-sandbox-toolchain' EXIT
+      node .delivery-v2-sandbox-toolchain/.github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs
 engine:
   id: codex
   model: ${{ vars.DELIVERY_STANDARD_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.4' }}
