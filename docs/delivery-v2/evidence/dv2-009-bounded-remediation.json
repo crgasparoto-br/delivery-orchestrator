@@ -5,7 +5,7 @@
   "repository": "crgasparoto-br/delivery-orchestrator",
   "pullRequestNumber": 48,
   "riskProfile": "critical",
-  "evidenceNature": "Real GitHub CI and independent-audit outcomes from the final PR #48 remediation sequence, replayed through the current production remediation state machine. The historical sequence was not originally driven by this replay test, so the evidence does not claim retroactive controller ownership.",
+  "evidenceNature": "Real GitHub CI and independent-audit outcomes from the final PR #48 remediation sequence, replayed through the current production remediation state machine. The historical sequence was not originally driven by this replay test, so the evidence does not claim retroactive controller ownership. Per-step implementationAttempt/auditRemediationAttempt labels reflect the corrected budget separation from issues #130/#134/#139: only material attempts that follow classified/ci-failed-remediable consume maxImplementationAttempts, while a remediation started from audit-failed-remediable consumes only maxAuditRemediationAttempts. Immutable GitHub facts (SHAs, workflow run IDs, decisions, findings) are unchanged.",
   "policy": {
     "maxImplementationAttempts": 3,
     "maxAuditRemediationAttempts": 2,
@@ -44,7 +44,7 @@
     {
       "sequence": 2,
       "candidateSha": "6de29792e0f9a828ee6332d756ffbe82aa964615",
-      "implementationAttempt": 2,
+      "implementationAttempt": 1,
       "auditRemediationAttempt": 1,
       "ci": {
         "workflowRunId": 34690481605,
@@ -59,7 +59,7 @@
     {
       "sequence": 3,
       "candidateSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
-      "implementationAttempt": 3,
+      "implementationAttempt": 2,
       "auditRemediationAttempt": 1,
       "ci": {
         "workflowRunId": 34690592843,
@@ -76,7 +76,7 @@
     }
   ],
   "observedCounters": {
-    "implementationAttempts": 3,
+    "implementationAttempts": 2,
     "auditAttempts": 2,
     "auditRemediationAttempts": 1
   },
@@ -88,10 +88,11 @@
   },
   "boundedAlternative": {
     "branchPointCandidateSha": "c403eaf94fcd10b9fae6da3b781be3a3955e273c",
-    "hypothesis": "If the third implementation attempt had produced another actionable CI failure instead of the observed success, the state machine must escalate immediately rather than authorize a fourth implementation attempt.",
+    "hypothesis": "The real sequence used only 2 of 3 material implementationAttempts and 1 of 2 auditRemediationAttempts, because the audit-triggered remediation at sequence 2 correctly consumed only the auditRemediation budget (issues #130/#134/#139). If the third material attempt had produced another actionable CI failure, one more material implementation attempt would still be authorized; only a subsequent (fourth) material actionable failure exhausts maxImplementationAttempts and must escalate.",
     "expectedState": "escalated",
-    "expectedReason": "implementation-budget-exhausted"
+    "expectedReason": "implementation-budget-exhausted",
+    "expectedImplementationAttemptsAtEscalation": 3
   },
   "result": "validation-evidence",
-  "conclusion": "The final real PR #48 sequence contains one independent-audit rejection, one actionable CI failure during remediation, and a subsequent exact-SHA CI plus independent-audit approval. Replaying those real outcomes through the current DV2 remediation state machine reaches the approved merge path within CRITICAL budgets; the same live state deterministically escalates if a fourth implementation attempt would otherwise be required."
+  "conclusion": "The final real PR #48 sequence contains one independent-audit rejection, one actionable CI failure during remediation, and a subsequent exact-SHA CI plus independent-audit approval. Replaying those real outcomes through the current DV2 remediation state machine reaches the approved merge path using only 2 of 3 material implementation attempts and 1 of 2 audit-remediation attempts; the same live state deterministically escalates only once a fourth material implementation attempt would otherwise be required."
 }
