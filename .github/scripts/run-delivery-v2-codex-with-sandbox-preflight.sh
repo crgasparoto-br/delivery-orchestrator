@@ -15,15 +15,49 @@ echo "== Delivery V2 effective sandbox toolchain =="
 
 # gh-aw materializes MCP-backed CLIs under RUNNER_TEMP before entering awf.
 # Rebuild that compiler-owned PATH entry here so Codex and its child shells
-# inherit safeoutputs even if the outer sandbox command loses the host PATH.
+# inherit safeoutputs even when the outer sandbox command loses the host PATH.
 if [ -n "${RUNNER_TEMP:-}" ]; then
   export PATH="${RUNNER_TEMP}/gh-aw/mcp-cli/bin:${PATH}"
 fi
 
+# Keep the verified toolcache entries already present in PATH, while also
+# restoring the normal system locations needed by login/non-interactive shells.
+export PATH="${PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 require_tool git
+require_tool sed
 require_tool node
 require_tool npm
 require_tool safeoutputs
+require_tool mktemp
+
+# Codex executes commands through child bash shells. Those shells may rebuild
+# PATH and discard the toolcache/MCP entries proven above. BASH_ENV is sourced
+# by non-interactive bash processes, including the command shells used by Codex.
+#
+# RUNNER_TEMP is read-only inside awf, so keep this tiny trusted bootstrap in
+# the sandbox-writable /tmp filesystem.
+umask 077
+DELIVERY_V2_BASH_ENV="$(mktemp /tmp/delivery-v2-shell-env.XXXXXX)"
+printf 'export PATH=%q\n' "$PATH" > "$DELIVERY_V2_BASH_ENV"
+export BASH_ENV="$DELIVERY_V2_BASH_ENV"
+
+require_child_tool() {
+  local tool="$1"
+  /bin/bash -lc "command -v '$tool' >/dev/null 2>&1" ||
+    fail "$tool is not available inside Codex child bash shells"
+}
+
+for tool in git sed node npm safeoutputs; do
+  require_child_tool "$tool"
+done
+
+# npm itself uses /usr/bin/env node. Running npm here proves that node remains
+# resolvable after the exact bash -lc boundary used by Codex command execution.
+/bin/bash -lc 'git --version >/dev/null && node --version >/dev/null && npm --version >/dev/null' ||
+  fail "git/node/npm execution failed inside Codex child bash shells"
+
+echo "Delivery V2 Codex child-shell toolchain preflight: PASS"
 
 echo "git=$(command -v git)"
 echo "node=$(command -v node)"
@@ -44,6 +78,9 @@ require_safeoutput() {
 
 require_safeoutput create_pull_request
 require_safeoutput push_to_pull_request_branch
+
+/bin/bash -lc 'safeoutputs create_pull_request --help >/dev/null 2>&1 && safeoutputs push_to_pull_request_branch --help >/dev/null 2>&1' ||
+  fail "safeoutputs commands are not executable inside Codex child bash shells"
 
 echo "Delivery V2 effective sandbox toolchain preflight: PASS"
 

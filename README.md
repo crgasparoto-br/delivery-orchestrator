@@ -81,9 +81,10 @@ The `codex` FAST/STANDARD/CRITICAL workers execute inside an isolated `gh-aw` ag
 
 - declares `runtimes.node` so `node`/`npm` are provisioned through `gh-aw`'s own compiler-managed mechanism instead of an ambient host assumption;
 - registers the host `git` executable into the `RUNNER_TOOL_CACHE` toolcache bin-directory convention (`.github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs`), the same discovery mechanism the sandbox uses to build its `PATH`;
-- runs a preflight step, after runtime setup and before "Execute Codex CLI", that fails the workflow immediately if `git`, `node` or `npm` would not resolve inside the sandbox — catching the regression before any AI budget is spent instead of after the worker reports a missing tool.
+- preserves the verified sandbox `PATH` through a trusted `BASH_ENV` bootstrap so the non-interactive/login Bash shells created by Codex keep access to `git`, `node`, `npm`, system tools and `safeoutputs`;
+- runs preflight checks both at the outer sandbox boundary and through the same `bash -lc` child-shell boundary used by Codex, failing before AI budget is spent when either environment cannot execute the required toolchain.
 
-This closes the regression tracked by issue #151 against the original fix in #108/#112, which only ensured `git` was present on the runner host, not inside the worker's effective execution environment.
+This closes the sandbox-toolchain regressions tracked by issues #151 and #166 against the original fix in #108/#112. The earlier protection proved tools at the outer sandbox boundary; #166 additionally requires proving that the Codex child command shells preserve the same effective toolchain.
 
 ## Independent audit
 
