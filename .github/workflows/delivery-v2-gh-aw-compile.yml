@@ -25,7 +25,7 @@ jobs:
       - name: Install pinned gh-aw
         uses: github/gh-aw/actions/setup-cli@bde367913adeb3132f0a171594c88a17f4b7d08c
         with:
-          version: v0.88.7
+          version: v0.89.15
 
       - name: Compile workers in strict mode
         run: gh aw compile --strict
