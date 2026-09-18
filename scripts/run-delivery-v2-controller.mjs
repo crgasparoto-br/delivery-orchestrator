@@ -22,6 +22,7 @@ import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePrevie
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
 import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
 import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-policy.mjs';
+import { withTransientFetchRetry } from '../src/v2/github-api-retry.mjs';
 import {
   createControllerDeliveryMetrics,
   createControllerObservability,
@@ -155,7 +156,10 @@ async function findManagedPullRequest({ repository, issueNumber, baseBranch, sin
   const deadline = Date.now() + 12 * 60 * 1000;
   const closing = new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
   while (Date.now() < deadline) {
-    const pulls = await api(`https://api.github.com/repos/${repository}/pulls?state=open&base=${encodeURIComponent(baseBranch)}&per_page=100`, token);
+    const pulls = await withTransientFetchRetry(
+      () => api(`https://api.github.com/repos/${repository}/pulls?state=open&base=${encodeURIComponent(baseBranch)}&per_page=100`, token),
+      { label: `findManagedPullRequest(${repository}#${issueNumber})` }
+    );
     const trustedLogin = trustedCommentAuthorForRepository(repository);
     const candidates = pulls.filter((pr) => Date.parse(pr.created_at) >= since - 5000 && String(pr.title ?? '').startsWith('[delivery-v2] ') && closing.test(String(pr.body ?? '')) && String(pr.user?.login ?? '').toLowerCase() === trustedLogin && String(pr.head?.repo?.full_name ?? repository) === repository);
     if (candidates.length === 1) return candidates[0];

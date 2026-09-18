@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile
+} from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,16 +15,26 @@ import { join } from 'node:path';
 const wrapper =
   '.github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh';
 
-test('effective sandbox wrapper executes git/node/npm/safeoutputs preflight', async () => {
+test('effective sandbox exposes safeoutputs to the Codex child process', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'delivery-v2-preflight-'));
 
   try {
-    const safeoutputs = join(dir, 'safeoutputs');
+    const runTemp = join(dir, 'runner-temp');
+    const mcpBin = join(runTemp, 'gh-aw', 'mcp-cli', 'bin');
+    const fakeBin = join(dir, 'bin');
+    const manifest = join(dir, 'safeoutputs.jsonl');
+
+    await mkdir(mcpBin, { recursive: true });
+    await mkdir(fakeBin, { recursive: true });
+
+    const safeoutputs = join(mcpBin, 'safeoutputs');
+    const codex = join(fakeBin, 'codex');
 
     await writeFile(
       safeoutputs,
       `#!/usr/bin/env bash
 set -euo pipefail
+
 case "\${1:-}" in
   create_pull_request|push_to_pull_request_branch)
     if [ "\${2:-}" = "--help" ]; then
@@ -25,19 +42,34 @@ case "\${1:-}" in
       exit 0
     fi
     ;;
+  noop)
+    printf '{"tool":"noop"}\\n' >> "\${GH_AW_SAFE_OUTPUTS:?}"
+    exit 0
+    ;;
 esac
+
 exit 2
 `
     );
 
+    await writeFile(
+      codex,
+      `#!/usr/bin/env bash
+set -euo pipefail
+safeoutputs noop
+`
+    );
+
     await chmod(safeoutputs, 0o755);
+    await chmod(codex, 0o755);
 
     const result = spawnSync(wrapper, [], {
       encoding: 'utf8',
       env: {
         ...process.env,
-        PATH: `${dir}:${process.env.PATH}`,
-        DELIVERY_V2_PREFLIGHT_ONLY: 'true'
+        RUNNER_TEMP: runTemp,
+        GH_AW_SAFE_OUTPUTS: manifest,
+        PATH: `${fakeBin}:/usr/local/bin:/usr/bin:/bin`
       }
     });
 
@@ -51,6 +83,9 @@ exit 2
       result.stdout,
       /Delivery V2 effective sandbox toolchain preflight: PASS/
     );
+
+    const emitted = await readFile(manifest, 'utf8');
+    assert.equal(emitted, '{"tool":"noop"}\n');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

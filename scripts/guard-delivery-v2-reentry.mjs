@@ -9,6 +9,7 @@ import { resolveProviderSelectionForRisk } from '../src/v2/provider-policy.mjs';
 import { expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { parseTrustedJsonEnvelope, selectExistingPullRequest, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 import { createLegacyAdoption, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
+import { withTransientFetchRetry } from '../src/v2/github-api-retry.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
@@ -36,7 +37,10 @@ function headers(token) {
 }
 
 async function api(url, token, options = {}) {
-  const response = await fetch(url, { ...options, headers: { ...headers(token), ...(options.headers ?? {}) } });
+  const response = await withTransientFetchRetry(
+    () => fetch(url, { ...options, headers: { ...headers(token), ...(options.headers ?? {}) } }),
+    { label: `reentry guard ${options.method ?? 'GET'} ${url}` }
+  );
   if (!response.ok) throw new Error(`GitHub API ${response.status} ${options.method ?? 'GET'} ${url}: ${await response.text()}`);
   return response.json();
 }
