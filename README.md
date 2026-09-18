@@ -60,6 +60,8 @@ Risk remains fail-closed. Unknown or missing changed-file evidence is a **CRITIC
 
 - FAST: 20 turns / 100 credits, focused validation, no mandatory LLM audit.
 - STANDARD: 40 turns / 250 credits, affected validation/build and focused independent audit by policy.
+
+Runtime limits for FAST, STANDARD and CRITICAL may be overridden through repository variables using `DELIVERY_<PROFILE>_MAX_AI_CREDITS`, `DELIVERY_<PROFILE>_MAX_AI_TURNS` and `DELIVERY_<PROFILE>_MAX_IMPLEMENTATION_ATTEMPTS`. When an override is absent, the versioned baseline remains in effect.
 - CRITICAL: 80 turns / 500 credits, full PR regression and independent audit.
 
 Requested risk can promote but never downgrade observed risk. Provider selection is explicit; provider failure never silently substitutes another provider.

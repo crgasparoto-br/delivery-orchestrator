@@ -28,8 +28,38 @@ for (const provider of ['copilot', 'codex', 'claude']) {
       const body = await readFile(file, 'utf8');
       const lockBody = await readFile(lockFile, 'utf8');
       assert.match(body, new RegExp(`engine:\\s*\\n\\s+id: ${provider}`));
-      assert.match(body, new RegExp(`max-turns: ${policy[risk].turns}`));
-      assert.match(body, new RegExp(`max-ai-credits: ${policy[risk].credits}`));
+
+      const prefix = risk.toUpperCase();
+
+      assert.match(
+        body,
+        new RegExp(
+          `max-turns:\\s*\\$\\{\\{\\s*vars\\.DELIVERY_${prefix}_MAX_AI_TURNS\\s*\\|\\|\\s*'${policy[risk].turns}'\\s*\\}\\}`
+        )
+      );
+
+      assert.match(
+        body,
+        new RegExp(
+          `GH_AW_MAX_AI_CREDITS:\\s*\\$\\{\\{\\s*vars\\.DELIVERY_${prefix}_MAX_AI_CREDITS\\s*\\|\\|\\s*'${policy[risk].credits}'\\s*\\}\\}`
+        )
+      );
+
+      assert.doesNotMatch(
+        body,
+        /^max-ai-credits:/m,
+        'AI credits must be supplied through engine.env for runtime configurability'
+      );
+
+      assert.match(
+        lockBody,
+        new RegExp(`DELIVERY_${prefix}_MAX_AI_TURNS`)
+      );
+
+      assert.match(
+        lockBody,
+        new RegExp(`DELIVERY_${prefix}_MAX_AI_CREDITS`)
+      );
       assert.match(body, /target_ref:/);
       assert.match(body, /target_pr:/);
       assert.match(body, /remediation_context:/);
