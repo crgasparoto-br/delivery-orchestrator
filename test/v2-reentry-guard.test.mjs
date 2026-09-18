@@ -9,7 +9,7 @@ import {
   selectManagedPullRequest
 } from '../scripts/guard-delivery-v2-reentry.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
-import { controllerMetadataForNewMaterial, markExistingAuditInFlight, rebuildCiPendingState } from '../scripts/resume-delivery-v2-controller.mjs';
+import { controllerMetadataForNewMaterial, markExistingAuditInFlight, rebuildCiPendingState, shouldStartFreshAudit } from '../scripts/resume-delivery-v2-controller.mjs';
 import { ciFailureClassForEvidence } from '../src/v2/controller-runtime.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { operationalStateFromPersistent } from '../src/v2/operational-controller.mjs';
@@ -213,6 +213,103 @@ test('resume rebuild keeps consumed implementation budget while reobserving a dr
   assert.equal(rebuilt.implementationAttempts, 2);
   assert.equal(rebuilt.auditAttempts, 1);
   assert.equal(rebuilt.auditRemediationAttempts, 1);
+});
+
+test('issue 149: drift of an adopted epoch does not fabricate an implementation attempt', () => {
+  const previous = operationalStateFromPersistent(persistent({
+    materialHeadSha: HEAD_A,
+    classifier: {
+      subjectSha: HEAD_A,
+      version: 'v1',
+      fingerprint: 'fp'
+    },
+    attempts: {
+      implementation: 0,
+      audit: 1,
+      auditRemediation: 0
+    }
+  }));
+
+  const rebuilt = rebuildCiPendingState({
+    plan: planFor(),
+    materialHeadSha: HEAD_B,
+    previousState: previous
+  });
+
+  assert.equal(rebuilt.status, 'ci-pending');
+  assert.equal(rebuilt.materialHeadSha, HEAD_B);
+  assert.equal(rebuilt.implementationAttempts, 0);
+  assert.equal(rebuilt.auditAttempts, 1);
+  assert.equal(rebuilt.auditRemediationAttempts, 0);
+});
+
+test('issue 149: a remediated candidate can reserve a fresh audit after a previous audit attempt', () => {
+  const remediated = operationalStateFromPersistent(persistent({
+    status: 'audit-pending',
+    attempts: {
+      implementation: 0,
+      audit: 1,
+      auditRemediation: 1
+    },
+    workflowChecks: [{
+      name: 'required',
+      subjectSha: HEAD_A,
+      status: 'completed',
+      conclusion: 'success',
+      workflowRunId: 10,
+      evidenceRef: 'run:10'
+    }]
+  }));
+
+  assert.equal(
+    shouldStartFreshAudit({
+      state: remediated,
+      controller: {
+        auditRunId: null,
+        auditDispatchNonce: null,
+        materialWorkerRunId: 77,
+        priorFindings: [{
+          id: 'DV2-149-TEST',
+          candidateSha: HEAD_B,
+          status: 'remediated-pending-verification'
+        }]
+      }
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldStartFreshAudit({
+      state: remediated,
+      controller: {
+        auditRunId: null,
+        auditDispatchNonce: 'reserved-audit-nonce'
+      }
+    }),
+    false
+  );
+});
+
+test('issue 149: the initial legacy audit may reuse its pre-reserved nonce without being mistaken for an in-flight audit', () => {
+  const initial = operationalStateFromPersistent(persistent({
+    status: 'audit-pending',
+    attempts: {
+      implementation: 0,
+      audit: 0,
+      auditRemediation: 0
+    }
+  }));
+
+  assert.equal(
+    shouldStartFreshAudit({
+      state: initial,
+      controller: {
+        auditRunId: null,
+        auditDispatchNonce: 'legacy-pre-reserved-nonce'
+      }
+    }),
+    true
+  );
 });
 
 test('existing in-flight audit is restored without consuming another audit attempt', () => {

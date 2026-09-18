@@ -10,6 +10,7 @@ import { loadV2Config } from '../src/v2/config.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import {
   applyOperationalEvent,
+  createAdoptedOperationalDelivery,
   createOperationalDelivery,
   operationalRemediationInput,
   operationalStateFromPersistent,
@@ -33,7 +34,7 @@ import {
 } from '../src/v2/controller-observability.mjs';
 import { downloadGhAwUsageArtifact } from '../src/v2/gh-aw-usage-artifact.mjs';
 import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
-import { legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, refreezeLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
+import { attachLegacyAdoptionAuditRun, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
 import { fetchImmutableCompareEvidence } from '../src/v2/github-audit-evidence.mjs';
 
@@ -327,7 +328,9 @@ export function rebuildCiPendingState({ plan, materialHeadSha, previousState }) 
   const fresh = createOperationalDelivery({ plan, materialHeadSha });
   return Object.freeze({
     ...fresh,
-    implementationAttempts: Math.max(fresh.implementationAttempts, previousState?.implementationAttempts ?? 0),
+    // Reobserving a drifted material head is not a new V2 implementation.
+    // Preserve exactly the attempt counters from the existing operational epoch.
+    implementationAttempts: previousState?.implementationAttempts ?? fresh.implementationAttempts,
     auditAttempts: previousState?.auditAttempts ?? 0,
     auditRemediationAttempts: previousState?.auditRemediationAttempts ?? 0
   });
@@ -336,6 +339,20 @@ export function rebuildCiPendingState({ plan, materialHeadSha, previousState }) 
 export function markExistingAuditInFlight(state) {
   if (state.status !== 'audit-pending' || state.auditAttempts < 1) throw new Error('existing audit requires audit-pending state with a reserved attempt');
   return Object.freeze({ ...state, auditInFlight: true });
+}
+
+export function shouldStartFreshAudit({ state, controller = {} } = {}) {
+  if (state?.status !== 'audit-pending' || state.auditInFlight === true) return false;
+  if (controller.auditRunId) return false;
+
+  // A persisted nonce with an already consumed audit attempt means an
+  // in-flight audit must be recovered instead of allocating another one.
+  if (state.auditAttempts > 0 && controller.auditDispatchNonce) return false;
+
+  // Covers both the first audit and a new audit after remediation published
+  // a different material SHA. Historical auditAttempts belong to prior
+  // candidates and do not represent an in-flight audit for the current SHA.
+  return true;
 }
 
 export function initializeResumeObservability(controller = {}, { startedAtMs = Date.now() } = {}) {
@@ -379,6 +396,109 @@ export async function persistLegacyRefreeze({ envelope, pullRequest, comments, c
   };
 }
 
+export function auditProducerInputs({ state, controller = {}, provider, plan } = {}) {
+  if (!state || typeof state !== 'object') throw new Error('audit producer state is required');
+
+  const legacyEpoch = controller.adoption?.type === 'legacy-adopted-post-refreeze';
+  const materialWorkerRunId = Number(controller.materialWorkerRunId ?? controller.workerRunId ?? 0);
+  const materialProducerKnown = Number.isInteger(materialWorkerRunId) && materialWorkerRunId > 0;
+
+  if (legacyEpoch && !materialProducerKnown) {
+    return Object.freeze({
+      implementation_attempt: '',
+      implementer_provenance: 'legacy-unknown',
+      implementer_provider: '',
+      implementer_worker_identity: '',
+      implementer_run_id: ''
+    });
+  }
+
+  if (!materialProducerKnown) {
+    throw new Error('known material producer requires persisted worker run identity');
+  }
+
+  const implementationAttempt = legacyEpoch
+    ? Math.max(1, Number(state.auditRemediationAttempts ?? 0))
+    : Number(state.implementationAttempts);
+
+  if (!Number.isInteger(implementationAttempt) || implementationAttempt < 1) {
+    throw new Error('known material producer requires a positive implementation attempt');
+  }
+
+  const workerProvider = String(controller.materialWorkerProvider ?? provider ?? '').trim().toLowerCase();
+  const workerIdentity = String(controller.materialWorkerIdentity ?? plan?.implementation?.workflow ?? '').trim();
+
+  if (!workerProvider || !workerIdentity) {
+    throw new Error('known material producer identity is incomplete');
+  }
+
+  return Object.freeze({
+    implementation_attempt: String(implementationAttempt),
+    implementer_provenance: 'known',
+    implementer_provider: workerProvider,
+    implementer_worker_identity: workerIdentity,
+    implementer_run_id: String(materialWorkerRunId)
+  });
+}
+
+export function legacyTechnicalHygieneContext({
+  materialHeadSha,
+  baselineSha,
+  profile
+} = {}) {
+  const material = String(materialHeadSha ?? '').trim().toLowerCase();
+  const baseline = String(baselineSha ?? '').trim().toLowerCase();
+  const risk = String(profile ?? '').trim().toLowerCase();
+
+  if (!/^[0-9a-f]{40}$/.test(material)) {
+    throw new Error('legacy technical hygiene requires exact material SHA');
+  }
+
+  if (!/^[0-9a-f]{40}$/.test(baseline)) {
+    throw new Error('legacy technical hygiene requires exact baseline SHA');
+  }
+
+  if (!['fast', 'standard', 'critical'].includes(risk)) {
+    throw new Error('legacy technical hygiene requires a valid risk profile');
+  }
+
+  return JSON.stringify({
+    kind: 'technical-hygiene-evidence-collection',
+    evidenceOnly: true,
+    materialSha: material,
+    baselineSha: baseline,
+    profile: risk,
+    mutationAllowed: false
+  });
+}
+
+async function mutateLegacyAdoptionCheckpoint({
+  repository,
+  prNumber,
+  expectedCommentId,
+  token,
+  controller,
+  mutate
+}) {
+  const currentComments = await listComments(repository, prNumber, token);
+  const envelope = parseLegacyAdoptionEnvelope(currentComments, repository);
+
+  if (!envelope) throw new Error('legacy adoption checkpoint disappeared');
+  if (envelope.commentId !== expectedCommentId) {
+    throw new Error('legacy adoption checkpoint identity changed');
+  }
+
+  const next = mutate(envelope.adoption);
+
+  await patchJson(
+    `https://api.github.com/repos/${repository}/issues/comments/${envelope.commentId}`,
+    token,
+    { body: legacyAdoptionComment(next, controller) }
+  );
+
+  return next;
+}
+
 export async function main() {
   const resumeStartedAtMs = Date.now();
   const targetRepository = requiredEnv('TARGET_REPOSITORY');
@@ -405,7 +525,7 @@ export async function main() {
   const expectedBaseSha = String(pullRequest.base.sha).toLowerCase();
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
   const comments = await listComments(targetRepository, resumePr, targetReadToken);
-  const stateEnvelope = parseStateComment(comments, trustedLogin);
+  let stateEnvelope = parseStateComment(comments, trustedLogin);
   let changedPaths = stateEnvelope
     ? await fetchChangedPaths(targetRepository, resumePr, targetReadToken)
     : (await fetchImmutableCompareEvidence(targetRepository, expectedBaseSha, materialHeadSha, targetReadToken)).changedPaths;
@@ -418,30 +538,221 @@ export async function main() {
     const envelope = parseLegacyAdoptionEnvelope(comments, targetRepository);
     if (!envelope) throw new Error('PR has neither canonical state nor a trusted adoption checkpoint');
     if (envelope.adoption.issueNumber !== issueNumber || envelope.adoption.baseRef !== baseBranch) throw new Error('adoption target mismatch');
-    const priorRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${positiveInteger(envelope.controller?.controllerRunId, 'adoption controllerRunId')}`, actionsToken);
-    validateLegacyAdoptionControllerRun(envelope, priorRun, { orchestratorRepository, trustedRef: orchestratorRef });
+
+    const priorRun = await api(
+      `https://api.github.com/repos/${orchestratorRepository}/actions/runs/${positiveInteger(envelope.controller?.controllerRunId, 'adoption controllerRunId')}`,
+      actionsToken
+    );
+    validateLegacyAdoptionControllerRun(envelope, priorRun, {
+      orchestratorRepository,
+      trustedRef: orchestratorRef
+    });
+
     const checkout = requiredEnv('DELIVERY_V2_ADOPTED_CHECKOUT');
-    const { stdout } = await promisify(execFile)('git', ['-C', checkout, 'rev-parse', 'HEAD']);
+    const { stdout } = await promisify(execFile)(
+      'git',
+      ['-C', checkout, 'rev-parse', 'HEAD']
+    );
+
     // Fingerprint the canonical runtime actually executing classification, not
     // a candidate-controlled lock file or the material commit identifier.
     const rootDir = fileURLToPath(new URL('../', import.meta.url));
-    const controlPlane = await promisify(execFile)('git', ['-C', rootDir, 'rev-parse', 'HEAD']);
+    const controlPlane = await promisify(execFile)(
+      'git',
+      ['-C', rootDir, 'rev-parse', 'HEAD']
+    );
     const sourceCommit = controlPlane.stdout.trim();
-    const distribution = buildClassifierPackage({ rootDir, sourceCommit, targetConfig: { schemaVersion: 1, repository: targetRepository, baseBranch, riskPolicy: repositoryPolicy } });
-    classifier = { version: `${orchestratorRepository}@${sourceCommit}`, fingerprint: distribution.lock.canonicalClassifierFingerprint, policyFingerprint: distribution.lock.files['policy.json'] };
-    const sourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
-    const payload = await persistLegacyRefreeze({
-      envelope, pullRequest, comments, checkoutHeadSha: stdout.trim(), plan,
-      classifier: { ...classifier, subjectSha: materialHeadSha },
-      runs: sourceRun ? [sourceRun] : [], checks: await fetchCheckRuns(targetRepository, materialHeadSha, targetReadToken), targetPolicy,
-      controller: { controllerRunId, controllerRepository: orchestratorRepository, controllerRef: orchestratorRef, controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml' },
-      observePullRequest: () => fetchPullRequest(targetRepository, resumePr, targetReadToken),
-      persist: (body) => patchJson(`https://api.github.com/repos/${targetRepository}/issues/comments/${envelope.commentId}`, requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'), { body })
+
+    const distribution = buildClassifierPackage({
+      rootDir,
+      sourceCommit,
+      targetConfig: {
+        schemaVersion: 1,
+        repository: targetRepository,
+        baseBranch,
+        riskPolicy: repositoryPolicy
+      }
     });
-    await publishReleaseStatus({ repository: targetRepository, sha: payload.materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Legacy PR adopted; independent evidence still required', token: requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN') });
-    await writeFile(resultPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-    process.stdout.write(`${JSON.stringify(payload)}\n`);
-    return;
+
+    classifier = {
+      version: `${orchestratorRepository}@${sourceCommit}`,
+      fingerprint: distribution.lock.canonicalClassifierFingerprint,
+      policyFingerprint: distribution.lock.files['policy.json']
+    };
+
+    const sourceRun = await sourceWorkflowRunForHead({
+      repository: targetRepository,
+      sha: materialHeadSha,
+      workflowName: targetPolicy.ciWorkflowName,
+      token: targetReadToken
+    });
+
+    const checkRuns = await fetchCheckRuns(
+      targetRepository,
+      materialHeadSha,
+      targetReadToken
+    );
+
+    const adoptionController = {
+      controllerRunId,
+      controllerRepository: orchestratorRepository,
+      controllerRef: orchestratorRef,
+      controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml'
+    };
+
+    const payload = await persistLegacyRefreeze({
+      envelope,
+      pullRequest,
+      comments,
+      checkoutHeadSha: stdout.trim(),
+      plan,
+      classifier: { ...classifier, subjectSha: materialHeadSha },
+      runs: sourceRun ? [sourceRun] : [],
+      checks: checkRuns,
+      targetPolicy,
+      controller: adoptionController,
+      observePullRequest: () => fetchPullRequest(
+        targetRepository,
+        resumePr,
+        targetReadToken
+      ),
+      persist: (body) => patchJson(
+        `https://api.github.com/repos/${targetRepository}/issues/comments/${envelope.commentId}`,
+        requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'),
+        { body }
+      )
+    });
+
+    const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
+
+    if (payload.phase !== 'post-write-refreeze') {
+      await publishReleaseStatus({
+        repository: targetRepository,
+        sha: payload.materialHeadSha,
+        context: targetPolicy.finalStatusName,
+        state: 'pending',
+        description: 'Legacy PR adoption still requires trusted refreeze evidence',
+        token: targetWriteToken
+      });
+
+      await writeFile(
+        resultPath,
+        `${JSON.stringify(payload, null, 2)}\n`,
+        'utf8'
+      );
+      process.stdout.write(`${JSON.stringify(payload)}\n`);
+      return;
+    }
+
+    materialHeadSha = payload.materialHeadSha;
+    latestSourceRun = sourceRun;
+
+    if (!latestSourceRun) {
+      throw new Error('post-write-refreeze requires authoritative source CI run');
+    }
+
+    latestCheck = selectCheckForWorkflowRun(checkRuns, {
+      requiredStatusName: targetPolicy.requiredStatusName,
+      workflowRunId: latestSourceRun.id
+    });
+
+    if (
+      !latestCheck ||
+      latestCheck.status !== 'completed' ||
+      latestCheck.conclusion !== 'success'
+    ) {
+      throw new Error('post-write-refreeze requires exact-head terminal green CI');
+    }
+
+    let adoption = payload.adoption;
+    let auditDispatchNonce = adoption.legacyAudit?.dispatchNonce ?? null;
+
+    if (plan.audit.required) {
+      auditDispatchNonce = auditDispatchNonce ?? createDispatchNonce();
+
+      adoption = reserveLegacyAdoptionAudit(adoption, {
+        dispatchNonce: auditDispatchNonce
+      });
+
+      await patchJson(
+        `https://api.github.com/repos/${targetRepository}/issues/comments/${envelope.commentId}`,
+        targetWriteToken,
+        { body: legacyAdoptionComment(adoption, adoptionController) }
+      );
+    }
+
+    const adoptedState = createAdoptedOperationalDelivery({
+      plan,
+      materialHeadSha,
+      ciEvidence: {
+        evidenceRef: latestCheck.details_url ?? latestSourceRun.html_url
+      }
+    });
+
+    await upsertStateComment({
+      repository: targetRepository,
+      prNumber: resumePr,
+      state: adoptedState,
+      identity: {
+        issueNumber,
+        pullRequestNumber: resumePr,
+        baseRef: pullRequest.base.ref,
+        baseSha: pullRequest.base.sha,
+        headRef: pullRequest.head.ref,
+        provider
+      },
+      classifier,
+      latestCheck,
+      latestSourceRun,
+      token: targetWriteToken,
+      extra: {
+        controllerRunId,
+        controllerRepository: orchestratorRepository,
+        controllerRef: orchestratorRef,
+        controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml',
+        nextAction: adoptedState.status,
+        auditRunId: adoption.legacyAudit?.runId ?? null,
+        auditDispatchNonce,
+        auditRequestFingerprint: adoption.legacyAudit?.requestFingerprint ?? null,
+        materialWorkerRunId: null,
+        materialWorkerIdentity: null,
+        materialWorkerProvider: null,
+        technicalHygiene: null,
+        adoption: {
+          type: 'legacy-adopted-post-refreeze',
+          source: 'delivery-v2-legacy-adoption-checkpoint',
+          checkpointCommentId: envelope.commentId,
+          historicalAttempts: adoption.attempts,
+          legacyAdoptionAuditAttempts: adoption.legacyAdoptionAuditAttempts,
+          legacyAdoptionAuditMaxAttempts: adoption.legacyAdoptionAuditMaxAttempts,
+          producerProvenance: 'legacy-unknown',
+          adoptedHeadSha: adoption.adoption.adoptedHeadSha,
+          operationalEpochHeadSha: adoption.materialHeadSha
+        }
+      }
+    });
+
+    await publishReleaseStatus({
+      repository: targetRepository,
+      sha: materialHeadSha,
+      context: targetPolicy.finalStatusName,
+      state: 'pending',
+      description: 'Legacy PR refrozen; post-adoption V2 evaluation in progress',
+      token: targetWriteToken,
+      targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}`
+    });
+
+    const refreshedComments = await listComments(
+      targetRepository,
+      resumePr,
+      targetReadToken
+    );
+
+    stateEnvelope = parseStateComment(refreshedComments, trustedLogin);
+
+    if (!stateEnvelope) {
+      throw new Error('failed to persist post-adoption operational state');
+    }
   }
   classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
   if (stateEnvelope.persistent.issueNumber !== issueNumber) throw new Error('persisted state issue does not match requested issue');
@@ -720,41 +1031,171 @@ export async function main() {
 
     if (state.status === 'audit-pending') {
       let auditRun;
-      if (controller.auditRunId) {
-        state = markExistingAuditInFlight(state);
-        auditRun = await waitWorkflowRun(orchestratorRepository, Number(controller.auditRunId), actionsToken);
-      } else if (state.auditAttempts > 0 && controller.auditDispatchNonce) {
-        const recovered = selectCorrelatedWorkflowRun(await listWorkflowRuns(orchestratorRepository, 'delivery-v2-audit.yml', actionsToken), { kind: 'audit', nonce: controller.auditDispatchNonce, ref: orchestratorRef });
-        if (!recovered) throw new Error('cannot safely recover in-flight audit by dispatch nonce; refusing duplicate audit');
-        state = markExistingAuditInFlight(state);
-        auditRun = await waitWorkflowRun(orchestratorRepository, recovered.id, actionsToken);
-        await persist({ nextAction: 'observe-audit', auditRunId: recovered.id, auditDispatchNonce: controller.auditDispatchNonce });
-      } else if (state.auditAttempts > 0) {
-        throw new Error('cannot safely resume audit-pending state without persisted audit identity; refusing duplicate audit');
-      } else {
-        state = applyOperationalEvent(state, { type: 'start-audit' });
-        const auditDispatchNonce = createDispatchNonce();
-        await persist({ nextAction: 'dispatch-audit', auditRunId: null, auditDispatchNonce });
-        const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
-        auditRun = await dispatchWorkflowAndResolveRun({
+
+      const dispatchCurrentAudit = async (dispatchNonce) => {
+        const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({
+          repository: targetRepository,
+          sha: materialHeadSha,
+          workflowName: targetPolicy.ciWorkflowName,
+          token: targetReadToken
+        });
+
+        if (!sourceRun) {
+          throw new Error('audit dispatch requires authoritative exact-head source CI');
+        }
+
+        return dispatchWorkflowAndResolveRun({
           repository: orchestratorRepository,
           workflow: 'delivery-v2-audit.yml',
           ref: orchestratorRef,
           token: actionsToken,
           kind: 'audit',
-          dispatchNonce: auditDispatchNonce,
+          dispatchNonce,
           inputs: {
-            target_repository: targetRepository, target_issue: String(issueNumber), target_pr: String(resumePr),
-            risk_profile: state.riskProfile, source_workflow_run_id: String(sourceRun.id), source_workflow_name: targetPolicy.ciWorkflowName,
-            source_workflow_path: targetPolicy.ciWorkflowPath, implementation_attempt: String(state.implementationAttempts),
-            implementer_provider: controller.materialWorkerProvider ?? provider,
-            implementer_worker_identity: controller.materialWorkerIdentity ?? plan.implementation.workflow,
-            implementer_run_id: String(controller.materialWorkerRunId ?? controller.workerRunId),
+            target_repository: targetRepository,
+            target_issue: String(issueNumber),
+            target_pr: String(resumePr),
+            risk_profile: state.riskProfile,
+            source_workflow_run_id: String(sourceRun.id),
+            source_workflow_name: targetPolicy.ciWorkflowName,
+            source_workflow_path: targetPolicy.ciWorkflowPath,
+            ...auditProducerInputs({
+              state,
+              controller,
+              provider,
+              plan
+            }),
             prior_findings_json: JSON.stringify(controller.priorFindings ?? [])
           }
         });
-        await persist({ nextAction: 'observe-audit', auditRunId: auditRun.id, auditDispatchNonce });
-        auditRun = await waitWorkflowRun(orchestratorRepository, auditRun.id, actionsToken);
+      };
+
+      if (controller.auditRunId) {
+        state = markExistingAuditInFlight(state);
+
+        auditRun = await waitWorkflowRun(
+          orchestratorRepository,
+          Number(controller.auditRunId),
+          actionsToken
+        );
+      } else if (state.auditAttempts > 0 && controller.auditDispatchNonce) {
+        state = markExistingAuditInFlight(state);
+
+        const recovered = selectCorrelatedWorkflowRun(
+          await listWorkflowRuns(
+            orchestratorRepository,
+            'delivery-v2-audit.yml',
+            actionsToken
+          ),
+          {
+            kind: 'audit',
+            nonce: controller.auditDispatchNonce,
+            ref: orchestratorRef
+          }
+        );
+
+        if (recovered) {
+          auditRun = recovered;
+        } else if (controller.nextAction === 'dispatch-audit') {
+          // Crash-safe window:
+          // nonce + reserved attempt were persisted before dispatch.
+          // Reuse the SAME nonce instead of allocating another audit.
+          auditRun = await dispatchCurrentAudit(controller.auditDispatchNonce);
+        } else {
+          throw new Error(
+            'cannot safely recover in-flight audit by dispatch nonce; refusing duplicate audit'
+          );
+        }
+
+        await persist({
+          nextAction: 'observe-audit',
+          auditRunId: auditRun.id,
+          auditDispatchNonce: controller.auditDispatchNonce
+        });
+
+        auditRun = await waitWorkflowRun(
+          orchestratorRepository,
+          auditRun.id,
+          actionsToken
+        );
+      } else if (shouldStartFreshAudit({ state, controller })) {
+        state = applyOperationalEvent(state, { type: 'start-audit' });
+
+        if (state.status === 'escalated') {
+          await persist({
+            nextAction: 'human-escalation',
+            auditRunId: null,
+            auditDispatchNonce: null
+          });
+          continue;
+        }
+
+        const auditDispatchNonce =
+          controller.auditDispatchNonce ?? createDispatchNonce();
+
+        await persist({
+          nextAction: 'dispatch-audit',
+          auditRunId: null,
+          auditDispatchNonce
+        });
+
+        // The process may have crashed after a workflow_dispatch but before the
+        // run id was persisted. Resolve by nonce before issuing any new dispatch.
+        const recovered = selectCorrelatedWorkflowRun(
+          await listWorkflowRuns(
+            orchestratorRepository,
+            'delivery-v2-audit.yml',
+            actionsToken
+          ),
+          {
+            kind: 'audit',
+            nonce: auditDispatchNonce,
+            ref: orchestratorRef
+          }
+        );
+
+        auditRun = recovered ?? await dispatchCurrentAudit(auditDispatchNonce);
+
+        await persist({
+          nextAction: 'observe-audit',
+          auditRunId: auditRun.id,
+          auditDispatchNonce
+        });
+
+        auditRun = await waitWorkflowRun(
+          orchestratorRepository,
+          auditRun.id,
+          actionsToken
+        );
+      } else {
+        throw new Error(
+          'audit-pending state has inconsistent persisted audit identity'
+        );
+      }
+
+      const isInitialLegacyAudit =
+        controller.adoption?.type === 'legacy-adopted-post-refreeze' &&
+        controller.adoption?.producerProvenance === 'legacy-unknown' &&
+        !controller.materialWorkerRunId &&
+        state.auditAttempts === 1;
+
+      if (isInitialLegacyAudit) {
+        await mutateLegacyAdoptionCheckpoint({
+          repository: targetRepository,
+          prNumber: resumePr,
+          expectedCommentId: Number(controller.adoption.checkpointCommentId),
+          token: targetWriteToken,
+          controller: {
+            controllerRunId,
+            controllerRepository: orchestratorRepository,
+            controllerRef: orchestratorRef,
+            controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml'
+          },
+          mutate: (record) => attachLegacyAdoptionAuditRun(record, {
+            dispatchNonce: controller.auditDispatchNonce,
+            runId: auditRun.id
+          })
+        });
       }
       if (auditRun.conclusion !== 'success') {
         const terminalReason =
@@ -823,6 +1264,29 @@ export async function main() {
         durationMs: runDurationMs(auditRun),
         evidenceRef: auditRun.html_url
       });
+      if (isInitialLegacyAudit) {
+        await mutateLegacyAdoptionCheckpoint({
+          repository: targetRepository,
+          prNumber: resumePr,
+          expectedCommentId: Number(controller.adoption.checkpointCommentId),
+          token: targetWriteToken,
+          controller: {
+            controllerRunId,
+            controllerRepository: orchestratorRepository,
+            controllerRef: orchestratorRef,
+            controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml'
+          },
+          mutate: (record) => recordLegacyAdoptionAuditResult(record, {
+            runId: auditRun.id,
+            candidateSha: materialHeadSha,
+            decision: result.decision,
+            requestFingerprint: result.requestFingerprint,
+            evidenceRef: auditRun.html_url,
+            findings: result.findings
+          })
+        });
+      }
+
       state = applyOperationalEvent(state, { type: 'audit-result', result: { candidateSha: materialHeadSha, decision: result.decision, findings: result.findings, evidenceRef: auditRun.html_url } });
       const priorFindings = result.findings.map((finding) => ({ id: finding.id, candidateSha: finding.candidateSha, status: finding.blocksRelease ? 'open' : 'non-blocking' }));
       await persist({ nextAction: state.status, auditRunId: auditRun.id, auditDispatchNonce: controller.auditDispatchNonce, auditRequestFingerprint: result.requestFingerprint, priorFindings });
@@ -835,6 +1299,13 @@ export async function main() {
   if (state.status === 'ready-for-human-merge') {
     pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
     materialHeadSha = String(pullRequest.head.sha).toLowerCase();
+
+    // Do not collect hygiene or release evidence against an unrefrozen head.
+    releaseIdentityFromPullRequest(pullRequest, {
+      materialHeadSha: state.materialHeadSha,
+      baseSha: expectedBaseSha
+    });
+
     latestCheck = (await fetchCheckRuns(targetRepository, materialHeadSha, targetReadToken)).find((item) => item.name === targetPolicy.requiredStatusName);
     if (!latestCheck || latestCheck.status !== 'completed' || latestCheck.conclusion !== 'success') throw new Error('release gate requires exact-head terminal green source CI');
     latestSourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
@@ -857,6 +1328,167 @@ export async function main() {
       });
       audit = { candidateSha: materialHeadSha, decision: 'approved', mode: state.auditMode, requestFingerprint: auditResult.requestFingerprint, evidenceRef: auditRun.html_url };
     }
+
+    if (
+      controller.adoption?.type === 'legacy-adopted-post-refreeze' &&
+      !state.technicalHygiene
+    ) {
+      let hygieneDispatchNonce =
+        String(controller.hygieneDispatchNonce ?? '').trim();
+
+      if (!hygieneDispatchNonce) {
+        hygieneDispatchNonce = createDispatchNonce();
+
+        await persist({
+          nextAction: 'dispatch-technical-hygiene',
+          hygieneDispatchNonce,
+          hygieneRunId: null
+        });
+      }
+
+      const hygieneContext = legacyTechnicalHygieneContext({
+        materialHeadSha,
+        baselineSha: expectedBaseSha,
+        profile: state.riskProfile
+      });
+
+      let hygieneRun;
+      const persistedHygieneRunId = Number(controller.hygieneRunId ?? 0);
+
+      if (
+        Number.isInteger(persistedHygieneRunId) &&
+        persistedHygieneRunId > 0
+      ) {
+        hygieneRun = await waitWorkflowRun(
+          orchestratorRepository,
+          persistedHygieneRunId,
+          actionsToken
+        );
+      } else {
+        const recovered = selectCorrelatedWorkflowRun(
+          await listWorkflowRuns(
+            orchestratorRepository,
+            plan.implementation.workflow,
+            actionsToken
+          ),
+          {
+            kind: 'worker',
+            nonce: hygieneDispatchNonce,
+            ref: orchestratorRef
+          }
+        );
+
+        hygieneRun = recovered;
+
+        if (!hygieneRun) {
+          if (
+            controller.nextAction !== 'dispatch-technical-hygiene' ||
+            controller.hygieneDispatchNonce !== hygieneDispatchNonce
+          ) {
+            throw new Error(
+              'cannot safely recover technical hygiene evidence dispatch; refusing duplicate worker'
+            );
+          }
+
+          hygieneRun = await dispatchWorker({
+            orchestratorRepository,
+            orchestratorRef,
+            plan,
+            controllerRunId,
+            targetRepository,
+            issueNumber,
+            baseBranch,
+            targetRef: materialHeadSha,
+            targetPr: resumePr,
+            remediationContext: hygieneContext,
+            token: actionsToken,
+            dispatchNonce: hygieneDispatchNonce
+          });
+        }
+
+        await persist({
+          nextAction: 'observe-technical-hygiene',
+          hygieneDispatchNonce,
+          hygieneRunId: hygieneRun.id
+        });
+
+        hygieneRun = await waitWorkflowRun(
+          orchestratorRepository,
+          hygieneRun.id,
+          actionsToken
+        );
+      }
+
+      if (hygieneRun.conclusion !== 'success') {
+        await persist({
+          nextAction: 'technical-hygiene-worker-failed',
+          hygieneDispatchNonce,
+          hygieneRunId: hygieneRun.id
+        });
+
+        throw new Error(
+          `technical hygiene evidence worker failed: ${hygieneRun.html_url}`
+        );
+      }
+
+      await recordWorkerUsage(hygieneRun);
+
+      const postHygienePullRequest = await fetchPullRequest(
+        targetRepository,
+        resumePr,
+        targetReadToken
+      );
+
+      // Evidence-only means exactly that: no material mutation is accepted.
+      releaseIdentityFromPullRequest(postHygienePullRequest, {
+        materialHeadSha,
+        baseSha: expectedBaseSha
+      });
+
+      const technicalHygiene =
+        await downloadGhAwTechnicalHygieneArtifact({
+          repository: orchestratorRepository,
+          runId: hygieneRun.id,
+          token: actionsToken,
+          baselineSha: expectedBaseSha,
+          materialSha: materialHeadSha,
+          previousMaterialSha: null,
+          profile: state.riskProfile
+        });
+
+      state = applyOperationalEvent(state, {
+        type: 'technical-hygiene-result',
+        result: technicalHygiene
+      });
+
+      await persist({
+        nextAction: 'evaluate-release-gate',
+        hygieneDispatchNonce,
+        hygieneRunId: hygieneRun.id,
+        technicalHygiene: state.technicalHygiene
+      });
+
+      if (
+        !['PASS', 'PASS_WITH_DEBT'].includes(
+          state.technicalHygiene?.result
+        )
+      ) {
+        await publishReleaseStatus({
+          repository: targetRepository,
+          sha: materialHeadSha,
+          context: targetPolicy.finalStatusName,
+          state: 'failure',
+          description: `Delivery V2 technical hygiene ${state.technicalHygiene?.result ?? 'UNKNOWN'}`,
+          token: targetWriteToken,
+          targetUrl: hygieneRun.html_url
+        });
+
+        throw new Error(
+          `legacy adoption technical hygiene did not pass: ${state.technicalHygiene?.result ?? 'UNKNOWN'}`
+        );
+      }
+    }
+
     const finalPullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
     const releaseIdentity = releaseIdentityFromPullRequest(finalPullRequest, { materialHeadSha, baseSha: expectedBaseSha });
     const mergePreview = await collectMergePreviewEvidence({ repository: targetRepository, pullRequest: finalPullRequest, materialHeadSha, baseSha: expectedBaseSha, workflowRun: latestSourceRun, requiredJobName: targetPolicy.mergePreviewJobName, token: targetReadToken });

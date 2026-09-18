@@ -166,7 +166,7 @@ export function buildGithubNativeAuditRequest({
       workflowEvidence: trusted.workflowEvidence
     }],
     changedPaths,
-    implementationAttempt: requiredPositiveInteger(implementationAttempt, 'implementationAttempt'),
+    implementationAttempt,
     implementer: worker,
     priorFindings
   });

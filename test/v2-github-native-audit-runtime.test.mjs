@@ -84,6 +84,99 @@ test('generic audit fails closed when candidate changes the trusted CI workflow'
   }), /differs from trusted base/);
 });
 
+test('issue 149: legacy adopted audit keeps producer history explicitly unknown instead of fabricating identity or attempts', () => {
+  const value = buildGithubNativeAuditRequest({
+    repository: REPO,
+    issueNumber: 63,
+    pullRequest: pr(),
+    changedPaths: ['src/service.ts'],
+    riskProfile: 'critical',
+    riskReasons: ['legacy-adoption-post-write-refreeze'],
+    classifier: { version: 'source@abc', fingerprint: fingerprintSource('classifier') },
+    sourceWorkflowRun: run(),
+    sourceWorkflowDefinition: definition,
+    sourceWorkflowEvidence: evidence,
+    workflowName: 'Validate PR',
+    workflowPath: PATH,
+    implementationAttempt: null,
+    implementer: {
+      provenance: 'legacy-unknown',
+      provider: null,
+      workerIdentity: null,
+      runId: null
+    },
+    priorFindings: []
+  });
+
+  assert.equal(value.candidate.implementationAttempt, null);
+  assert.equal(value.candidate.implementer.provenance, 'legacy-unknown');
+  assert.equal(value.candidate.implementer.provider, null);
+  assert.equal(value.candidate.implementer.workerIdentity, null);
+  assert.equal(value.candidate.implementer.runId, null);
+  assert.equal(value.applicability.mode, 'independent');
+
+  const approved = finalizeGithubNativeAuditResult({
+    request: value,
+    reviewerRunId: 991,
+    modelResult: { decision: 'approved', findings: [] }
+  });
+
+  assert.equal(approved.result.decision, 'approved');
+  assert.equal(approved.result.reviewer.workerIdentity, 'delivery-v2-github-native-auditor');
+  assert.equal(approved.outcome.status, 'approved');
+
+  assert.throws(() => finalizeGithubNativeAuditResult({
+    request: value,
+    reviewerRunId: 992,
+    workerIdentity: 'some-other-auditor',
+    modelResult: { decision: 'approved', findings: [] }
+  }), /canonical isolated GitHub-native auditor/);
+});
+
+test('issue 149: legacy-unknown producer rejects fabricated historical implementation provenance', () => {
+  assert.throws(() => buildGithubNativeAuditRequest({
+    repository: REPO,
+    issueNumber: 63,
+    pullRequest: pr(),
+    changedPaths: ['src/service.ts'],
+    riskProfile: 'critical',
+    classifier: { version: 'source@abc', fingerprint: fingerprintSource('classifier') },
+    sourceWorkflowRun: run(),
+    sourceWorkflowDefinition: definition,
+    sourceWorkflowEvidence: evidence,
+    workflowName: 'Validate PR',
+    workflowPath: PATH,
+    implementationAttempt: 1,
+    implementer: {
+      provenance: 'legacy-unknown',
+      provider: null,
+      workerIdentity: null,
+      runId: null
+    }
+  }), /cannot fabricate implementationAttempt/);
+
+  assert.throws(() => buildGithubNativeAuditRequest({
+    repository: REPO,
+    issueNumber: 63,
+    pullRequest: pr(),
+    changedPaths: ['src/service.ts'],
+    riskProfile: 'critical',
+    classifier: { version: 'source@abc', fingerprint: fingerprintSource('classifier') },
+    sourceWorkflowRun: run(),
+    sourceWorkflowDefinition: definition,
+    sourceWorkflowEvidence: evidence,
+    workflowName: 'Validate PR',
+    workflowPath: PATH,
+    implementationAttempt: null,
+    implementer: {
+      provenance: 'legacy-unknown',
+      provider: 'codex',
+      workerIdentity: null,
+      runId: null
+    }
+  }), /cannot fabricate producer identity/);
+});
+
 test('final result preserves independent exact-head outcome', () => {
   const auditRequest = request('critical');
   const finalized = finalizeGithubNativeAuditResult({ request: auditRequest, reviewerRunId: 10, modelResult: { decision: 'approved', findings: [] } });

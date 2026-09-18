@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { auditApplicability, buildAuditRequest, evaluateAuditOutcome, normalizeAuditInput, normalizeAuditResult } from '../src/v2/audit-contract.mjs';
 
@@ -62,6 +63,49 @@ test('normalizes GitHub-native candidate evidence and treats stale V1 handoff as
   assert.equal(normalized.materialHeadSha, A);
   assert.equal(normalized.legacyV1HandoffObserved, true);
   assert.equal(normalized.policy.auditMode, 'independent');
+});
+
+test('issue 149: canonical audit-input schema supports legacy-unknown producer provenance', () => {
+  const schema = JSON.parse(readFileSync(
+    new URL('../schemas/delivery-v2-audit-input.schema.json', import.meta.url),
+    'utf8'
+  ));
+
+  assert.equal(
+    schema.properties.implementationAttempt.anyOf.some((entry) => entry.type === 'null'),
+    true
+  );
+
+  const implementer = schema.properties.implementer;
+
+  assert.equal(
+    implementer.properties.provenance.enum.includes('legacy-unknown'),
+    true
+  );
+
+  const producerConditional = implementer.allOf[0];
+
+  assert.equal(
+    producerConditional.then.properties.provider.type,
+    'null'
+  );
+
+  assert.equal(
+    producerConditional.else.properties.provider.type,
+    'string'
+  );
+
+  const attemptConditional = schema.allOf[0];
+
+  assert.equal(
+    attemptConditional.then.properties.implementationAttempt.type,
+    'null'
+  );
+
+  assert.equal(
+    attemptConditional.else.properties.implementationAttempt.type,
+    'integer'
+  );
 });
 
 test('FAST has no mandatory audit while STANDARD can be policy-configured and CRITICAL is mandatory', () => {

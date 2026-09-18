@@ -155,6 +155,48 @@ export function createOperationalDelivery({ plan, materialHeadSha } = {}) {
   return Object.freeze({ ...state, technicalHygiene: null });
 }
 
+export function createAdoptedOperationalDelivery({ plan, materialHeadSha, ciEvidence } = {}) {
+  const value = requiredObject(plan, 'plan');
+  if (value.architecture !== 'github-native-v2') throw new Error('Expected github-native-v2 delivery plan');
+
+  const sha = requiredSha(materialHeadSha, 'materialHeadSha');
+  const evidence = requiredObject(ciEvidence, 'ciEvidence');
+
+  let state = createDeliveryState({
+    repository: requiredString(value.repository, 'plan.repository'),
+    workItem: `issue:${requiredPositiveInteger(value.issueNumber, 'plan.issueNumber')}`,
+    riskProfile: requiredString(value.risk?.profile, 'plan.risk.profile'),
+    materialHeadSha: sha
+  });
+
+  state = classifyDelivery(state, { riskProfile: value.risk.profile });
+  state = applyAuditPolicy(state, {
+    repository: value.repository,
+    audit: requiredObject(value.audit, 'plan.audit')
+  });
+  state = bindPlanAiIdentity(state, value);
+
+  // This material existed before Delivery V2 adopted the PR. Do not call
+  // startImplementation/publishMaterial: doing so would fabricate an
+  // implementation attempt. CI was already validated exact-head by the
+  // adoption refreeze and is imported explicitly as the first operational
+  // evidence of the new post-adoption epoch.
+  state = Object.freeze({
+    ...state,
+    status: 'ci-pending',
+    materialHeadSha: sha,
+    technicalHygiene: null
+  });
+
+  state = recordCiResult(state, {
+    candidateSha: sha,
+    conclusion: 'success',
+    evidenceRef: requiredString(evidence.evidenceRef, 'ciEvidence.evidenceRef')
+  });
+
+  return Object.freeze({ ...state, technicalHygiene: null });
+}
+
 export function nextOperationalAction(state) {
   switch (state?.status) {
     case 'queued': return 'classify';

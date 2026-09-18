@@ -4,6 +4,7 @@ import test from 'node:test';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import {
   applyOperationalEvent,
+  createAdoptedOperationalDelivery,
   createOperationalDelivery,
   evaluateOperationalRelease,
   nextOperationalAction,
@@ -52,6 +53,24 @@ test('normal path composes implementation -> CI -> audit -> ready without conver
   state = applyOperationalEvent(state, { type: 'audit-result', result: { candidateSha: A, decision: 'approved', evidenceRef: 'audit:1' } });
   assert.equal(state.status, 'ready-for-human-merge');
   assert.equal(state.auditAttempts, 1);
+});
+
+test('issue 149: adopted operational epoch imports exact-head green CI without fabricating an implementation attempt', () => {
+  const state = createAdoptedOperationalDelivery({
+    plan: planFor('critical'),
+    materialHeadSha: A,
+    ciEvidence: { evidenceRef: 'run:legacy-green' }
+  });
+
+  assert.equal(state.status, 'audit-pending');
+  assert.equal(state.materialHeadSha, A);
+  assert.equal(state.implementationAttempts, 0);
+  assert.equal(state.auditAttempts, 0);
+  assert.equal(state.auditRemediationAttempts, 0);
+  assert.equal(state.ciEvidence.candidateSha, A);
+  assert.equal(state.ciEvidence.conclusion, 'success');
+  assert.equal(state.ciEvidence.evidenceRef, 'run:legacy-green');
+  assert.equal(nextOperationalAction(state), 'dispatch-audit');
 });
 
 test('actionable CI failure becomes the only bounded remediation input and preserves attempt budget', () => {

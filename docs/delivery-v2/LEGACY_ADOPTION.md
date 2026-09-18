@@ -63,12 +63,38 @@ blocked; a later re-entry re-observes evidence without dispatching implementatio
 
 Successful refreeze persists phase `post-write-refreeze`, the real CI references,
 classification and continuation reference. It does **not** report release ready.
-Independent audit, technical hygiene and any unknown historical audit budgets or
-producer identity remain blocking. Once a complete, authoritative operational
-state exists, the existing normal state/CI/audit/release path has precedence;
-the adoption record remains provenance. No unknown count is silently converted
-to zero merely to invoke a provider. Metrics with zero provider calls describe
-only this deterministic refreeze, not unknown historical consumption.
+
+Unknown historical `attempts.audit` and `attempts.auditRemediation` remain `null`.
+They are never converted to zero. After a successful exact-head refreeze, the
+controller may reserve one explicitly separate post-adoption audit attempt through
+`legacyAdoptionAuditAttempts` / `legacyAdoptionAuditMaxAttempts`. The reservation
+is candidate-SHA-bound and persists its dispatch nonce, workflow run ID, request
+fingerprint, result and evidence reference so interruption recovery reuses the
+same audit instead of spending another one.
+
+The first post-adoption audit may declare the material producer as
+`legacy-unknown`; this is an explicit provenance state, not a fabricated provider,
+worker identity, run ID or implementation attempt. The auditor still uses the
+normal independently configured audit provider/model and the normal isolated
+GitHub-native audit runtime.
+
+After refreeze the controller creates a separate operational epoch for the adopted
+material. That epoch starts with `implementationAttempts=0` and imports only the
+already-proven exact-head green CI evidence. The legacy checkpoint remains durable
+historical provenance. If the audit rejects, normal bounded V2 audit-remediation
+state handles new material and subsequent audits; those new operational counters
+do not rewrite the unknown historical counters.
+
+If the fresh audit approves, applicable Technical Hygiene is collected for the
+same material SHA in explicit `evidenceOnly` mode. That worker is not considered
+the producer of the material and any PR-head mutation during evidence collection
+fails closed. Release can become ready only after exact-head CI, required audit,
+`PASS`/`PASS_WITH_DEBT` hygiene and the normal release gate all agree on the same
+candidate.
+
+No unknown count is silently converted to zero merely to invoke a provider.
+Metrics with zero provider calls describe only deterministic stages with proven
+zero calls, not unknown historical consumption.
 
 State and evidence are observed again on every re-entry. Head or base drift clears
 the freeze, CI and classifier, preserves counters/provenance, and requires fresh

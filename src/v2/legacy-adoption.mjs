@@ -5,7 +5,9 @@ import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from 
 export const LEGACY_ADOPTION_MARKER = '<!-- delivery-v2-legacy-adoption -->';
 export const AUDIT_CONTINUATION_MARKER = '<!-- delivery-v2-audit-continuation -->';
 const SHA = /^[0-9a-f]{40}$/i;
+const FINGERPRINT = /^[0-9a-f]{64}$/i;
 const IDENTITY_KEYS = ['repository', 'issueNumber', 'pullRequestNumber', 'baseRef', 'baseSha', 'headRef', 'materialHeadSha'];
+export const LEGACY_ADOPTION_AUDIT_MAX_ATTEMPTS = 1;
 
 function positive(value, label) {
   if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer`);
@@ -47,6 +49,9 @@ export function createLegacyAdoption({ pullRequest, repository, issueNumber, bas
     // This is a pre-operational checkpoint, NOT a fabricated operational state.
     effectiveRisk: null, classifier: null,
     attempts: { implementation, audit: null, auditRemediation: null },
+    legacyAdoptionAuditAttempts: 0,
+    legacyAdoptionAuditMaxAttempts: LEGACY_ADOPTION_AUDIT_MAX_ATTEMPTS,
+    legacyAudit: null,
     workflowChecks: [], auditEvidence: null, continuation: null,
     blockers: ['classification-unknown', 'audit-continuation-required'], nextAction: 'collect-adoption-evidence'
   };
@@ -54,6 +59,15 @@ export function createLegacyAdoption({ pullRequest, repository, issueNumber, bas
 
 export function normalizeLegacyAdoption(value) {
   if (value?.schemaVersion !== 1 || value.status !== 'legacy-adopted') throw new Error('invalid legacy adoption checkpoint');
+
+  // Checkpoints persisted before issue #149 do not contain the dedicated
+  // post-adoption audit budget. Upgrade those records in memory without
+  // inventing or modifying the historical attempts.audit/auditRemediation.
+  const normalized = structuredClone(value);
+  if (normalized.legacyAdoptionAuditAttempts == null) normalized.legacyAdoptionAuditAttempts = 0;
+  if (normalized.legacyAdoptionAuditMaxAttempts == null) normalized.legacyAdoptionAuditMaxAttempts = LEGACY_ADOPTION_AUDIT_MAX_ATTEMPTS;
+  if (normalized.legacyAudit == null) normalized.legacyAudit = null;
+
   if (!Number.isInteger(value.revision) || value.revision < 0) throw new Error('invalid adoption revision');
   if (!['identity-verified', 'post-write-refreeze', 'blocked'].includes(value.phase)) throw new Error('invalid adoption phase');
   if (!/^[\w.-]+\/[\w.-]+$/.test(value.repository ?? '')) throw new Error('invalid adoption repository');
@@ -69,7 +83,42 @@ export function normalizeLegacyAdoption(value) {
   }
   if (value.attempts.implementation !== null && !value.adoption.attemptEvidenceRef) throw new Error('adoption attempt provenance required');
   if (value.attempts.audit !== null || value.attempts.auditRemediation !== null) throw new Error('legacy adoption cannot infer historical audit counters');
-  if (value.auditEvidence !== null) throw new Error('legacy continuation is not audit approval');
+
+  if (!Number.isInteger(normalized.legacyAdoptionAuditAttempts) || normalized.legacyAdoptionAuditAttempts < 0) {
+    throw new Error('legacyAdoptionAuditAttempts must be a non-negative integer');
+  }
+  if (!Number.isInteger(normalized.legacyAdoptionAuditMaxAttempts) || normalized.legacyAdoptionAuditMaxAttempts < 1) {
+    throw new Error('legacyAdoptionAuditMaxAttempts must be a positive integer');
+  }
+  if (normalized.legacyAdoptionAuditAttempts > normalized.legacyAdoptionAuditMaxAttempts) {
+    throw new Error('legacy adoption audit budget exceeded');
+  }
+
+  if (normalized.legacyAudit !== null) {
+    if (!normalized.legacyAudit || Array.isArray(normalized.legacyAudit) || typeof normalized.legacyAudit !== 'object') {
+      throw new Error('legacyAudit must be null or an object');
+    }
+    if (normalized.legacyAudit.candidateSha !== value.materialHeadSha) throw new Error('legacy audit candidate is stale');
+    if (!String(normalized.legacyAudit.dispatchNonce ?? '').trim()) throw new Error('legacy audit dispatch nonce required');
+    if (normalized.legacyAudit.runId !== null) positive(normalized.legacyAudit.runId, 'legacy audit runId');
+    if (normalized.legacyAudit.requestFingerprint !== null && !FINGERPRINT.test(normalized.legacyAudit.requestFingerprint)) {
+      throw new Error('legacy audit request fingerprint invalid');
+    }
+    if (normalized.legacyAudit.evidenceRef !== null && !String(normalized.legacyAudit.evidenceRef).trim()) {
+      throw new Error('legacy audit evidenceRef invalid');
+    }
+    if (![null, 'approved', 'rejected'].includes(normalized.legacyAudit.decision)) {
+      throw new Error('legacy audit decision invalid');
+    }
+    if (!Array.isArray(normalized.legacyAudit.findings)) throw new Error('legacy audit findings must be an array');
+    if (normalized.legacyAudit.decision !== null) {
+      if (normalized.legacyAudit.runId === null || normalized.legacyAudit.requestFingerprint === null || normalized.legacyAudit.evidenceRef === null) {
+        throw new Error('completed legacy audit requires run, fingerprint and evidence');
+      }
+    }
+  }
+
+  if (value.auditEvidence !== null) throw new Error('legacy continuation is not normal operational audit approval');
   if (value.classifier !== null && (!/^[0-9a-f]{64}$/.test(value.classifier?.fingerprint ?? '') || value.classifier.subjectSha !== value.materialHeadSha || value.classifier.current !== true || !value.classifier.version || !['fast', 'standard', 'critical'].includes(value.effectiveRisk))) throw new Error('invalid adoption classifier');
   if (value.classifier === null && value.effectiveRisk !== null) throw new Error('adoption risk requires classification');
   if (!Array.isArray(value.workflowChecks) || !Array.isArray(value.blockers)) throw new Error('invalid adoption evidence lists');
@@ -78,7 +127,7 @@ export function normalizeLegacyAdoption(value) {
     positive(check.workflowRunId, 'CI workflowRunId');
   }
   if (value.phase === 'post-write-refreeze' && (!value.classifier || !value.continuation || value.workflowChecks.length === 0)) throw new Error('refreeze requires current classification, continuation and CI');
-  return structuredClone(value);
+  return normalized;
 }
 
 function trustedEnvelope(comments, marker, repository, label) {
@@ -128,6 +177,7 @@ export function reconcileLegacyAdoption(record, pullRequest) {
   return {
     ...previous, ...observed, revision: previous.revision + 1, phase: 'blocked',
     classifier: null, effectiveRisk: null, workflowChecks: [], continuation: null,
+    legacyAudit: null,
     blockers: ['adoption-identity-drift'], nextAction: 'collect-adoption-evidence'
   };
 }
@@ -151,17 +201,128 @@ export function refreezeLegacyAdoption({ record, pullRequest, comments, checkout
     && check?.head_sha === next.materialHeadSha && check.app?.slug === 'github-actions'
     && Number.isInteger(run.check_suite_id) && run.check_suite_id > 0 && check.check_suite?.id === run.check_suite_id
     && check.status === 'completed' && check.conclusion === 'success';
+  const auditRequired = plan.audit?.required === true;
   next = {
     ...next, revision: next.revision + 1, phase: reusable ? 'post-write-refreeze' : 'blocked',
     continuation, effectiveRisk: plan.risk.profile,
     classifier: { subjectSha: next.materialHeadSha, version: classifier.version, fingerprint: classifier.fingerprint, ...(classifier.policyFingerprint ? { policyFingerprint: classifier.policyFingerprint } : {}), current: true },
     workflowChecks: reusable ? [{ name: check.name, subjectSha: next.materialHeadSha, status: check.status, conclusion: check.conclusion, workflowRunId: run.id, evidenceRef: check.details_url }] : [],
-    // Refreeze completes deterministically. Unknown historical budgets and producer
-    // identity must be proven before an independently bounded audit can be scheduled.
-    blockers: reusable ? ['historical-audit-attempts-unknown', 'independent-audit-required', 'technical-hygiene-required'] : ['exact-head-ci-required'],
-    nextAction: reusable ? 'collect-independent-audit-evidence' : 'observe-ci'
+    // Historical audit counters remain UNKNOWN. A fresh post-adoption audit uses
+    // its own explicit budget and never rewrites attempts.audit/auditRemediation.
+    blockers: reusable
+      ? [...(auditRequired ? ['independent-audit-required'] : []), 'technical-hygiene-required']
+      : ['exact-head-ci-required'],
+    nextAction: reusable
+      ? (auditRequired ? 'dispatch-legacy-adoption-audit' : 'collect-technical-hygiene-evidence')
+      : 'observe-ci'
   };
   return normalizeLegacyAdoption(next);
+}
+
+export function reserveLegacyAdoptionAudit(record, { dispatchNonce } = {}) {
+  const previous = normalizeLegacyAdoption(record);
+  if (previous.phase !== 'post-write-refreeze') throw new Error('legacy audit requires post-write-refreeze');
+  if (!previous.classifier?.current || previous.classifier.subjectSha !== previous.materialHeadSha) {
+    throw new Error('legacy audit requires current exact-head classifier');
+  }
+  if (previous.workflowChecks.length === 0 || previous.workflowChecks.some((check) => check.subjectSha !== previous.materialHeadSha || check.status !== 'completed' || check.conclusion !== 'success')) {
+    throw new Error('legacy audit requires exact-head terminal green CI');
+  }
+  if (!previous.blockers.includes('independent-audit-required')) throw new Error('legacy audit is not required for this adoption');
+
+  const nonce = String(dispatchNonce ?? '').trim();
+  if (!nonce) throw new Error('legacy audit dispatch nonce required');
+
+  if (previous.legacyAudit !== null) {
+    if (previous.legacyAudit.dispatchNonce === nonce) return previous;
+    throw new Error('legacy audit already reserved with another nonce');
+  }
+
+  if (previous.legacyAdoptionAuditAttempts >= previous.legacyAdoptionAuditMaxAttempts) {
+    throw new Error('legacy adoption audit budget exhausted');
+  }
+
+  return normalizeLegacyAdoption({
+    ...previous,
+    revision: previous.revision + 1,
+    legacyAdoptionAuditAttempts: previous.legacyAdoptionAuditAttempts + 1,
+    legacyAudit: {
+      candidateSha: previous.materialHeadSha,
+      dispatchNonce: nonce,
+      runId: null,
+      requestFingerprint: null,
+      evidenceRef: null,
+      decision: null,
+      findings: []
+    },
+    nextAction: 'resolve-legacy-adoption-audit-run'
+  });
+}
+
+export function attachLegacyAdoptionAuditRun(record, { dispatchNonce, runId } = {}) {
+  const previous = normalizeLegacyAdoption(record);
+  const nonce = String(dispatchNonce ?? '').trim();
+  positive(runId, 'legacy audit runId');
+
+  if (!previous.legacyAudit) throw new Error('legacy audit was not reserved');
+  if (previous.legacyAudit.dispatchNonce !== nonce) throw new Error('legacy audit nonce mismatch');
+
+  if (previous.legacyAudit.runId !== null) {
+    if (previous.legacyAudit.runId === runId) return previous;
+    throw new Error('legacy audit run already bound');
+  }
+
+  return normalizeLegacyAdoption({
+    ...previous,
+    revision: previous.revision + 1,
+    legacyAudit: { ...previous.legacyAudit, runId },
+    nextAction: 'observe-legacy-adoption-audit'
+  });
+}
+
+export function recordLegacyAdoptionAuditResult(record, {
+  runId,
+  candidateSha,
+  decision,
+  requestFingerprint,
+  evidenceRef,
+  findings = []
+} = {}) {
+  const previous = normalizeLegacyAdoption(record);
+  positive(runId, 'legacy audit runId');
+
+  const normalizedCandidate = String(candidateSha ?? '').toLowerCase();
+  const normalizedDecision = String(decision ?? '').toLowerCase();
+  const normalizedFingerprint = String(requestFingerprint ?? '').toLowerCase();
+  const normalizedEvidence = String(evidenceRef ?? '').trim();
+
+  if (!previous.legacyAudit) throw new Error('legacy audit was not reserved');
+  if (previous.legacyAudit.runId !== runId) throw new Error('legacy audit result run mismatch');
+  if (normalizedCandidate !== previous.materialHeadSha) throw new Error('legacy audit result is stale');
+  if (!['approved', 'rejected'].includes(normalizedDecision)) throw new Error('legacy audit result decision invalid');
+  if (!FINGERPRINT.test(normalizedFingerprint)) throw new Error('legacy audit result fingerprint invalid');
+  if (!normalizedEvidence) throw new Error('legacy audit result evidence required');
+  if (!Array.isArray(findings)) throw new Error('legacy audit result findings must be an array');
+
+  const blockers = normalizedDecision === 'approved'
+    ? previous.blockers.filter((blocker) => blocker !== 'independent-audit-required')
+    : [...new Set([...previous.blockers, 'independent-audit-rejected'])];
+
+  return normalizeLegacyAdoption({
+    ...previous,
+    revision: previous.revision + 1,
+    legacyAudit: {
+      ...previous.legacyAudit,
+      requestFingerprint: normalizedFingerprint,
+      evidenceRef: normalizedEvidence,
+      decision: normalizedDecision,
+      findings: structuredClone(findings)
+    },
+    blockers,
+    nextAction: normalizedDecision === 'approved'
+      ? 'collect-technical-hygiene-evidence'
+      : 'dispatch-legacy-adoption-audit-remediation'
+  });
 }
 
 export function legacyAdoptionComment(record, controller) {

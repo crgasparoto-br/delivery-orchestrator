@@ -186,9 +186,29 @@ export async function main() {
   const workflowName = requiredEnv('SOURCE_WORKFLOW_NAME');
   const workflowPath = requiredEnv('SOURCE_WORKFLOW_PATH');
   const riskProfile = requiredEnv('AUDIT_RISK_PROFILE').toLowerCase();
-  const implementerProvider = requiredEnv('IMPLEMENTER_PROVIDER').toLowerCase();
-  const implementerWorkerIdentity = requiredEnv('IMPLEMENTER_WORKER_IDENTITY');
-  const implementerRunId = positiveInteger('IMPLEMENTER_RUN_ID');
+  const implementerProvenance = String(process.env.IMPLEMENTER_PROVENANCE ?? 'known').trim().toLowerCase();
+  if (!['known', 'legacy-unknown'].includes(implementerProvenance)) {
+    throw new Error('IMPLEMENTER_PROVENANCE must be known or legacy-unknown');
+  }
+
+  const implementationAttempt = implementerProvenance === 'legacy-unknown'
+    ? null
+    : positiveInteger('IMPLEMENTATION_ATTEMPT');
+
+  const implementer = implementerProvenance === 'legacy-unknown'
+    ? {
+        provenance: 'legacy-unknown',
+        provider: null,
+        workerIdentity: null,
+        runId: null
+      }
+    : {
+        provenance: 'known',
+        provider: requiredEnv('IMPLEMENTER_PROVIDER').toLowerCase(),
+        workerIdentity: requiredEnv('IMPLEMENTER_WORKER_IDENTITY'),
+        runId: positiveInteger('IMPLEMENTER_RUN_ID')
+      };
+
   const priorFindings = priorFindingsFromEnv();
   const token = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const reviewerRunId = positiveInteger('GITHUB_RUN_ID');
@@ -240,8 +260,8 @@ export async function main() {
     sourceWorkflowEvidence: { candidate: candidateWorkflow, trustedBase: baseWorkflow },
     workflowName,
     workflowPath,
-    implementationAttempt: positiveInteger('IMPLEMENTATION_ATTEMPT', '1'),
-    implementer: { provider: implementerProvider, workerIdentity: implementerWorkerIdentity, runId: implementerRunId },
+    implementationAttempt,
+    implementer,
     priorFindings
   });
 

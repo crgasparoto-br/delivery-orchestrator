@@ -105,6 +105,40 @@ export function normalizeAuditInput(input) {
   if (!normalizedChecks.some((check) => check.scope === 'material-head' && check.required)) {
     throw new Error('at least one required material-head check is required');
   }
+
+  const implementerProvenance = String(implementer.provenance ?? 'known').trim().toLowerCase();
+  if (!['known', 'legacy-unknown'].includes(implementerProvenance)) {
+    throw new Error('implementer.provenance must be known or legacy-unknown');
+  }
+
+  let normalizedImplementer;
+  let implementationAttempt;
+
+  if (implementerProvenance === 'legacy-unknown') {
+    if (value.implementationAttempt != null) {
+      throw new Error('legacy-unknown implementer cannot fabricate implementationAttempt');
+    }
+    if (implementer.provider != null || implementer.workerIdentity != null || implementer.runId != null) {
+      throw new Error('legacy-unknown implementer cannot fabricate producer identity');
+    }
+
+    implementationAttempt = null;
+    normalizedImplementer = Object.freeze({
+      provenance: 'legacy-unknown',
+      provider: null,
+      workerIdentity: null,
+      runId: null
+    });
+  } else {
+    implementationAttempt = requirePositiveInteger(value.implementationAttempt, 'implementationAttempt');
+    normalizedImplementer = Object.freeze({
+      provenance: 'known',
+      provider: requireString(implementer.provider, 'implementer.provider').toLowerCase(),
+      workerIdentity: requireString(implementer.workerIdentity, 'implementer.workerIdentity'),
+      runId: requirePositiveInteger(implementer.runId, 'implementer.runId')
+    });
+  }
+
   return Object.freeze({
     schemaVersion: DELIVERY_V2_AUDIT_SCHEMA_VERSION,
     repository: normalizeRepository(value.repository),
@@ -122,12 +156,8 @@ export function normalizeAuditInput(input) {
     }),
     checks: Object.freeze(normalizedChecks),
     changedPaths: Object.freeze(normalizePaths(value.changedPaths)),
-    implementationAttempt: requirePositiveInteger(value.implementationAttempt, 'implementationAttempt'),
-    implementer: Object.freeze({
-      provider: requireString(implementer.provider, 'implementer.provider').toLowerCase(),
-      workerIdentity: requireString(implementer.workerIdentity, 'implementer.workerIdentity'),
-      runId: requirePositiveInteger(implementer.runId, 'implementer.runId')
-    }),
+    implementationAttempt,
+    implementer: normalizedImplementer,
     priorFindings: Object.freeze((value.priorFindings ?? []).map((finding, index) => normalizePriorFinding(finding, index, materialHeadSha))),
     legacyV1HandoffObserved: value.legacyV1Handoff != null,
     policy: Object.freeze({ auditRequired: policy.auditRequired, auditMode: policy.auditMode, maxAuditAttempts: policy.maxAuditAttempts })
@@ -198,8 +228,12 @@ export function normalizeAuditResult(result, request) {
     throw new Error('required audit must attest candidate-contract-evidence-only context isolation');
   }
   if (request.applicability.mode === 'independent') {
-    if (reviewerIdentity === request.candidate.implementer.workerIdentity || reviewerRunId === request.candidate.implementer.runId) {
-      throw new Error('CRITICAL audit reviewer must be independent from the implementation worker/run');
+    if (request.candidate.implementer.provenance === 'known') {
+      if (reviewerIdentity === request.candidate.implementer.workerIdentity || reviewerRunId === request.candidate.implementer.runId) {
+        throw new Error('CRITICAL audit reviewer must be independent from the implementation worker/run');
+      }
+    } else if (reviewerIdentity !== 'delivery-v2-github-native-auditor') {
+      throw new Error('legacy-unknown CRITICAL audit requires the canonical isolated GitHub-native auditor');
     }
   }
   const decision = requireString(value.decision, 'decision').toLowerCase();
