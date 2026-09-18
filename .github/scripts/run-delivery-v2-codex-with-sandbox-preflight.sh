@@ -13,6 +13,13 @@ require_tool() {
 
 echo "== Delivery V2 effective sandbox toolchain =="
 
+# gh-aw materializes MCP-backed CLIs under RUNNER_TEMP before entering awf.
+# Rebuild that compiler-owned PATH entry here so Codex and its child shells
+# inherit safeoutputs even if the outer sandbox command loses the host PATH.
+if [ -n "${RUNNER_TEMP:-}" ]; then
+  export PATH="${RUNNER_TEMP}/gh-aw/mcp-cli/bin:${PATH}"
+fi
+
 require_tool git
 require_tool node
 require_tool npm
