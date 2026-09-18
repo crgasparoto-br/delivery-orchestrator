@@ -45,6 +45,8 @@ Baseline ceilings remain:
 - STANDARD — 40 turns / 250 credits, max 2 implementation attempts;
 - CRITICAL — 80 turns / 500 credits, max 3 implementation attempts and max 2 audit-remediation attempts.
 
+These ceilings are not increased by bootstrap recovery. After `escalated-initial-budget-exhausted`, the deterministic controller may grant exactly one recovery dispatch per verified control-plane SHA epoch only for a proven `pre-material` failure classified as `infrastructure` or `unknown` with an eligible terminal worker conclusion. The re-armed reservation remains numerically inside `maxImplementationAttempts`; the prior exhaustion, prior/current controller SHAs, recovery reason, and one granted recovery are preserved in the bootstrap `recovery` provenance. Re-entry on the same control-plane SHA remains `human-escalation`, and a failed recovery can only be re-armed after another verified control-plane SHA change.
+
 FAST, STANDARD and CRITICAL operational limits may be overridden with the repository variables `DELIVERY_<PROFILE>_MAX_AI_CREDITS`, `DELIVERY_<PROFILE>_MAX_AI_TURNS` and `DELIVERY_<PROFILE>_MAX_IMPLEMENTATION_ATTEMPTS`. Removing an override restores the versioned baseline.
 
 ## Same-PR remediation

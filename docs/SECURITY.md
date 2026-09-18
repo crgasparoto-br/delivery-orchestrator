@@ -1,6 +1,6 @@
 # Security and independence model
 
-Delivery V2 treats GitHub and deterministic code as the control plane. AI execution is bounded by explicit provider/model/risk policy and cannot grant itself additional attempts, credentials, release authority, another provider, or another model.
+Delivery V2 treats GitHub and deterministic code as the control plane. AI execution is bounded by explicit provider/model/risk policy and cannot grant itself additional attempts, credentials, release authority, another provider, or another model. The only bounded exception is controller-owned pre-material recovery: the deterministic controller may authorize one recovery dispatch after a verified control-plane SHA change when trusted evidence proves an eligible pre-material infrastructure/unknown failure.
 
 ## Deterministic control plane
 
@@ -18,7 +18,9 @@ Independent semantic review is separated from implementation by fresh context an
 
 ## Risk and attempt budgets
 
-FAST, STANDARD and CRITICAL policies define finite implementation and audit/remediation budgets. Every review/remediation cycle must consume the corresponding counter. Exhaustion escalates to a human terminal state rather than starting another open-ended AI-on-AI loop.
+FAST, STANDARD and CRITICAL policies define finite implementation and audit/remediation budgets. Every material implementation or audit/remediation cycle must consume the corresponding counter. Exhaustion normally escalates to a human terminal state rather than starting another open-ended AI-on-AI loop.
+
+A bootstrap failure before usable material exists has a narrower control-plane recovery rule. After terminal initial-budget exhaustion, one recovery dispatch may be authorized only when persisted failure provenance is eligible and the checked-out control-plane SHA is demonstrably different from the prior provenance-valid controller SHA. This recovery does not raise the configured implementation ceiling, cannot apply to a material/functional failure, and cannot repeat on the same control-plane SHA. A failed recovery returns to human escalation until another verified control-plane change occurs.
 
 FAST is an allowlist: unknown paths and authentication/authorization/session/identity/permission boundaries promote to CRITICAL. Repository policy may promote risk or add reviewed safe roots but cannot weaken core invariants.
 
