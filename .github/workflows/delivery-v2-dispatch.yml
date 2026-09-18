@@ -121,6 +121,9 @@ jobs:
         if: steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr == '' && steps.reentry.outputs.recover_worker_run_id == ''
         env:
           DELIVERY_V2_PRIOR_INITIAL_ATTEMPTS: ${{ steps.reentry.outputs.prior_initial_attempts }}
+          DELIVERY_V2_RECOVERY_REASON: ${{ steps.reentry.outputs.recovery_reason }}
+          DELIVERY_V2_RECOVERY_PREVIOUS_ATTEMPTS: ${{ steps.reentry.outputs.recovery_previous_attempts }}
+          DELIVERY_V2_RECOVERY_PREVIOUS_CONTROLLER_SHA: ${{ steps.reentry.outputs.recovery_previous_controller_sha }}
         run: node scripts/reserve-delivery-v2-initial-attempt.mjs
 
       - name: Build initial deterministic plan
