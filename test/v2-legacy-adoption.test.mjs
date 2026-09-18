@@ -3,12 +3,12 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { evaluateReentry, persistReentryMutation, terminalBootstrapLease } from '../scripts/guard-delivery-v2-reentry.mjs';
-import { persistLegacyRefreeze } from '../scripts/resume-delivery-v2-controller.mjs';
+import { auditProducerInputs, legacyTechnicalHygieneContext, persistLegacyRefreeze } from '../scripts/resume-delivery-v2-controller.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
 import { normalizePersistentDeliveryState } from '../src/v2/persistent-state.mjs';
 import { evaluateOperationalRelease } from '../src/v2/operational-controller.mjs';
-import { AUDIT_CONTINUATION_MARKER, LEGACY_ADOPTION_MARKER, createLegacyAdoption, legacyAdoptionComment, normalizeLegacyAdoption, parseAuditContinuation, parseLegacyAdoptionEnvelope, refreezeLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
+import { AUDIT_CONTINUATION_MARKER, LEGACY_ADOPTION_MARKER, attachLegacyAdoptionAuditRun, createLegacyAdoption, legacyAdoptionComment, normalizeLegacyAdoption, parseAuditContinuation, parseLegacyAdoptionEnvelope, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 
 const snapshot = JSON.parse(readFileSync(new URL('./fixtures/issue-105-existing-pr.json', import.meta.url), 'utf8'));
 const pr = snapshot.solverFin613.pullRequest;
@@ -82,6 +82,9 @@ test('J / DV2-105-ADOPT-SYNTHETIC-CLASSIFIER: adoption without any prior V2 stat
   assert.equal(record.classifier, null);
   assert.equal(record.effectiveRisk, null);
   assert.deepEqual(record.attempts, { implementation: null, audit: null, auditRemediation: null });
+  assert.equal(record.legacyAdoptionAuditAttempts, 0);
+  assert.equal(record.legacyAdoptionAuditMaxAttempts, 1);
+  assert.equal(record.legacyAudit, null);
   assert.deepEqual(record.workflowChecks, []);
   assert.equal(record.auditEvidence, null);
   assert.equal(record.adoption.source, 'github-open-pull-request');
@@ -212,6 +215,212 @@ test('attempt provenance is preserved, never defaulted, decremented or consumed 
   const altered = structuredClone(data.record);
   altered.attempts.audit = 0;
   assert.throws(() => normalizeLegacyAdoption(altered), /cannot infer historical audit/);
+});
+
+test('issue 149: pre-149 persisted adoption checkpoints upgrade in memory without fabricating historical counters', () => {
+  const historical = refreezeLegacyAdoption(evidence());
+
+  delete historical.legacyAdoptionAuditAttempts;
+  delete historical.legacyAdoptionAuditMaxAttempts;
+  delete historical.legacyAudit;
+
+  const normalized = normalizeLegacyAdoption(historical);
+
+  assert.equal(normalized.phase, 'post-write-refreeze');
+  assert.equal(normalized.legacyAdoptionAuditAttempts, 0);
+  assert.equal(normalized.legacyAdoptionAuditMaxAttempts, 1);
+  assert.equal(normalized.legacyAudit, null);
+  assert.equal(normalized.attempts.audit, null);
+  assert.equal(normalized.attempts.auditRemediation, null);
+});
+
+test('issue 149: post-adoption audit uses a separate bounded idempotent budget without fabricating historical counters', () => {
+  const frozen = refreezeLegacyAdoption(evidence());
+
+  assert.equal(frozen.phase, 'post-write-refreeze');
+  assert.equal(frozen.nextAction, 'dispatch-legacy-adoption-audit');
+  assert.equal(frozen.attempts.audit, null);
+  assert.equal(frozen.attempts.auditRemediation, null);
+  assert.equal(frozen.legacyAdoptionAuditAttempts, 0);
+
+  const reserved = reserveLegacyAdoptionAudit(frozen, { dispatchNonce: 'legacy-audit-nonce-1' });
+
+  assert.equal(reserved.legacyAdoptionAuditAttempts, 1);
+  assert.equal(reserved.attempts.audit, null);
+  assert.equal(reserved.attempts.auditRemediation, null);
+  assert.equal(reserved.legacyAudit.candidateSha, pr.head.sha);
+  assert.equal(reserved.legacyAudit.dispatchNonce, 'legacy-audit-nonce-1');
+  assert.equal(reserved.legacyAudit.runId, null);
+  assert.equal(reserved.nextAction, 'resolve-legacy-adoption-audit-run');
+
+  assert.deepEqual(
+    reserveLegacyAdoptionAudit(reserved, { dispatchNonce: 'legacy-audit-nonce-1' }),
+    reserved,
+    'same nonce must be idempotent'
+  );
+
+  const bound = attachLegacyAdoptionAuditRun(reserved, {
+    dispatchNonce: 'legacy-audit-nonce-1',
+    runId: 9001
+  });
+
+  assert.equal(bound.legacyAudit.runId, 9001);
+  assert.equal(bound.nextAction, 'observe-legacy-adoption-audit');
+
+  assert.deepEqual(
+    attachLegacyAdoptionAuditRun(bound, {
+      dispatchNonce: 'legacy-audit-nonce-1',
+      runId: 9001
+    }),
+    bound,
+    'same run binding must be idempotent'
+  );
+
+  const approved = recordLegacyAdoptionAuditResult(bound, {
+    runId: 9001,
+    candidateSha: pr.head.sha,
+    decision: 'approved',
+    requestFingerprint: 'a'.repeat(64),
+    evidenceRef: 'https://github.com/crgasparoto-br/delivery-orchestrator/actions/runs/9001',
+    findings: []
+  });
+
+  assert.equal(approved.legacyAudit.decision, 'approved');
+  assert.equal(approved.attempts.audit, null);
+  assert.equal(approved.attempts.auditRemediation, null);
+  assert.equal(approved.blockers.includes('independent-audit-required'), false);
+  assert.equal(approved.nextAction, 'collect-technical-hygiene-evidence');
+
+  assert.throws(
+    () => reserveLegacyAdoptionAudit({ ...frozen, legacyAdoptionAuditAttempts: 1 }, { dispatchNonce: 'legacy-audit-nonce-2' }),
+    /budget exhausted/
+  );
+});
+
+test('issue 149: rejected legacy audit routes to bounded remediation and head drift invalidates its evidence without resetting budget', () => {
+  const frozen = refreezeLegacyAdoption(evidence());
+  const reserved = reserveLegacyAdoptionAudit(frozen, { dispatchNonce: 'legacy-audit-nonce-2' });
+  const bound = attachLegacyAdoptionAuditRun(reserved, {
+    dispatchNonce: 'legacy-audit-nonce-2',
+    runId: 9002
+  });
+
+  const rejected = recordLegacyAdoptionAuditResult(bound, {
+    runId: 9002,
+    candidateSha: pr.head.sha,
+    decision: 'rejected',
+    requestFingerprint: 'b'.repeat(64),
+    evidenceRef: 'https://github.com/crgasparoto-br/delivery-orchestrator/actions/runs/9002',
+    findings: [{
+      id: 'DV2-149-TEST',
+      candidateSha: pr.head.sha,
+      blocksRelease: true
+    }]
+  });
+
+  assert.equal(rejected.legacyAudit.decision, 'rejected');
+  assert.equal(rejected.nextAction, 'dispatch-legacy-adoption-audit-remediation');
+  assert.equal(rejected.blockers.includes('independent-audit-rejected'), true);
+  assert.equal(rejected.legacyAdoptionAuditAttempts, 1);
+
+  const drift = evidence();
+  drift.record = rejected;
+  drift.pullRequest.head.sha = 'f'.repeat(40);
+  drift.checkoutHeadSha = drift.pullRequest.head.sha;
+
+  const invalidated = refreezeLegacyAdoption(drift);
+
+  assert.equal(invalidated.phase, 'blocked');
+  assert.equal(invalidated.legacyAudit, null);
+  assert.equal(invalidated.legacyAdoptionAuditAttempts, 1);
+  assert.equal(invalidated.attempts.audit, null);
+  assert.equal(invalidated.attempts.auditRemediation, null);
+});
+
+test('issue 149: audit dispatch declares legacy producer unknown until a V2 remediation creates new material', () => {
+  const legacy = auditProducerInputs({
+    state: {
+      implementationAttempts: 0,
+      auditRemediationAttempts: 0
+    },
+    controller: {
+      adoption: {
+        type: 'legacy-adopted-post-refreeze'
+      },
+      materialWorkerRunId: null,
+      materialWorkerIdentity: null,
+      materialWorkerProvider: null
+    },
+    provider: 'codex',
+    plan: {
+      implementation: {
+        workflow: 'delivery-v2-worker-codex-critical.yml'
+      }
+    }
+  });
+
+  assert.deepEqual(legacy, {
+    implementation_attempt: '',
+    implementer_provenance: 'legacy-unknown',
+    implementer_provider: '',
+    implementer_worker_identity: '',
+    implementer_run_id: ''
+  });
+
+  const remediated = auditProducerInputs({
+    state: {
+      implementationAttempts: 0,
+      auditRemediationAttempts: 1
+    },
+    controller: {
+      adoption: {
+        type: 'legacy-adopted-post-refreeze'
+      },
+      materialWorkerRunId: 9010,
+      materialWorkerIdentity: 'delivery-v2-worker-codex-critical.yml',
+      materialWorkerProvider: 'codex'
+    },
+    provider: 'codex',
+    plan: {
+      implementation: {
+        workflow: 'delivery-v2-worker-codex-critical.yml'
+      }
+    }
+  });
+
+  assert.deepEqual(remediated, {
+    implementation_attempt: '1',
+    implementer_provenance: 'known',
+    implementer_provider: 'codex',
+    implementer_worker_identity: 'delivery-v2-worker-codex-critical.yml',
+    implementer_run_id: '9010'
+  });
+});
+
+test('issue 149: technical hygiene collection is explicitly evidence-only and exact-head bound', () => {
+  const context = JSON.parse(legacyTechnicalHygieneContext({
+    materialHeadSha: pr.head.sha,
+    baselineSha: pr.base.sha,
+    profile: 'critical'
+  }));
+
+  assert.deepEqual(context, {
+    kind: 'technical-hygiene-evidence-collection',
+    evidenceOnly: true,
+    materialSha: pr.head.sha,
+    baselineSha: pr.base.sha,
+    profile: 'critical',
+    mutationAllowed: false
+  });
+
+  assert.throws(
+    () => legacyTechnicalHygieneContext({
+      materialHeadSha: 'invalid',
+      baselineSha: pr.base.sha,
+      profile: 'critical'
+    }),
+    /exact material SHA/
+  );
 });
 
 test('budget exhaustion persists a terminal bootstrap lease and distinguishes infrastructure from unknown pre-material failures', async () => {

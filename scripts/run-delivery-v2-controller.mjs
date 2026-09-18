@@ -591,6 +591,7 @@ export async function main() {
           source_workflow_name: targetPolicy.ciWorkflowName,
           source_workflow_path: targetPolicy.ciWorkflowPath,
           implementation_attempt: String(state.implementationAttempts),
+          implementer_provenance: 'known',
           implementer_provider: controller.materialWorkerProvider ?? initialWorkerProvider,
           implementer_worker_identity: controller.materialWorkerIdentity ?? initialWorkerIdentity,
           implementer_run_id: String(controller.materialWorkerRunId ?? worker.id),

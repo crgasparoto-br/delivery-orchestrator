@@ -117,3 +117,18 @@ async function exists(path) {
 test('duplicate compiled worker snapshot directory stays absent', async () => {
   assert.equal(await exists('.generated/gh-aw'), false);
 });
+
+test('evidence-only technical hygiene mode is non-mutating by contract', async () => {
+  const body = await readFile(
+    '.github/workflows/shared/delivery-v2-worker-scope-guard.md',
+    'utf8'
+  );
+
+  assert.match(body, /evidenceOnly: true/);
+  assert.match(body, /Evidence-only mode/);
+  assert.match(body, /Do not edit repository files/);
+  assert.match(body, /Do not.*create commits/i);
+  assert.match(body, /push to the existing pull-request branch/);
+  assert.match(body, /non-material `noop` safe output/);
+  assert.match(body, /stop fail-closed/);
+});
