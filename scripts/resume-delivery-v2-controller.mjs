@@ -328,7 +328,9 @@ export function rebuildCiPendingState({ plan, materialHeadSha, previousState }) 
   const fresh = createOperationalDelivery({ plan, materialHeadSha });
   return Object.freeze({
     ...fresh,
-    implementationAttempts: Math.max(fresh.implementationAttempts, previousState?.implementationAttempts ?? 0),
+    // Reobserving a drifted material head is not a new V2 implementation.
+    // Preserve exactly the attempt counters from the existing operational epoch.
+    implementationAttempts: previousState?.implementationAttempts ?? fresh.implementationAttempts,
     auditAttempts: previousState?.auditAttempts ?? 0,
     auditRemediationAttempts: previousState?.auditRemediationAttempts ?? 0
   });
@@ -337,6 +339,20 @@ export function rebuildCiPendingState({ plan, materialHeadSha, previousState }) 
 export function markExistingAuditInFlight(state) {
   if (state.status !== 'audit-pending' || state.auditAttempts < 1) throw new Error('existing audit requires audit-pending state with a reserved attempt');
   return Object.freeze({ ...state, auditInFlight: true });
+}
+
+export function shouldStartFreshAudit({ state, controller = {} } = {}) {
+  if (state?.status !== 'audit-pending' || state.auditInFlight === true) return false;
+  if (controller.auditRunId) return false;
+
+  // A persisted nonce with an already consumed audit attempt means an
+  // in-flight audit must be recovered instead of allocating another one.
+  if (state.auditAttempts > 0 && controller.auditDispatchNonce) return false;
+
+  // Covers both the first audit and a new audit after remediation published
+  // a different material SHA. Historical auditAttempts belong to prior
+  // candidates and do not represent an in-flight audit for the current SHA.
+  return true;
 }
 
 export function initializeResumeObservability(controller = {}, { startedAtMs = Date.now() } = {}) {
@@ -1102,12 +1118,17 @@ export async function main() {
           auditRun.id,
           actionsToken
         );
-      } else if (state.auditAttempts > 0) {
-        throw new Error(
-          'cannot safely resume audit-pending state without persisted audit identity; refusing duplicate audit'
-        );
-      } else {
+      } else if (shouldStartFreshAudit({ state, controller })) {
         state = applyOperationalEvent(state, { type: 'start-audit' });
+
+        if (state.status === 'escalated') {
+          await persist({
+            nextAction: 'human-escalation',
+            auditRunId: null,
+            auditDispatchNonce: null
+          });
+          continue;
+        }
 
         const auditDispatchNonce =
           controller.auditDispatchNonce ?? createDispatchNonce();
@@ -1145,6 +1166,10 @@ export async function main() {
           orchestratorRepository,
           auditRun.id,
           actionsToken
+        );
+      } else {
+        throw new Error(
+          'audit-pending state has inconsistent persisted audit identity'
         );
       }
 
