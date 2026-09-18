@@ -60,9 +60,11 @@ Risk remains fail-closed. Unknown or missing changed-file evidence is a **CRITIC
 
 - FAST: 20 turns / 100 credits, focused validation, no mandatory LLM audit.
 - STANDARD: 40 turns / 250 credits, affected validation/build and focused independent audit by policy.
+- CRITICAL: 80 turns / 500 credits, full PR regression and independent audit.
 
 Runtime limits for FAST, STANDARD and CRITICAL may be overridden through repository variables using `DELIVERY_<PROFILE>_MAX_AI_CREDITS`, `DELIVERY_<PROFILE>_MAX_AI_TURNS` and `DELIVERY_<PROFILE>_MAX_IMPLEMENTATION_ATTEMPTS`. When an override is absent, the versioned baseline remains in effect.
-- CRITICAL: 80 turns / 500 credits, full PR regression and independent audit.
+
+A terminal pre-material bootstrap exhaustion has one narrow recovery path owned by the deterministic controller, not by an AI worker: exactly one recovery dispatch may be granted after a verified change of the checked-out control-plane SHA, only for eligible `pre-material` infrastructure/unknown failures. Same-SHA re-entry remains blocked, recovery provenance is persisted, and the configured implementation ceiling is not increased.
 
 Requested risk can promote but never downgrade observed risk. Provider selection is explicit; provider failure never silently substitutes another provider.
 
@@ -98,7 +100,7 @@ Audit context is risk-adaptive at two levels. Diff/material sub-budgets remain S
 
 Compiled `gh-aw` workers retain native `usage` artifacts. The controller ingests those artifacts and preserves turns/credits/input/output/total tokens when the provider reports them. Missing usage remains `null`/unknown — never fabricated as zero. Audit model usage is included in the same delivery record.
 
-The observability accumulator is persisted with controller state. Re-entry continues the same provider-call/usage record and deduplicates provider runs by run ID; it does not restart counters. The final controller artifact records provider calls, implementation/audit attempts, AI usage, CI/audit/end-to-end duration, change size, exact material SHA, evidence references and terminal state. Legacy state that predates persistent observability is labeled rather than reconstructed from guesses.
+Once operational controller state exists, the observability accumulator is persisted with that state. Re-entry continues the same provider-call/usage record and deduplicates provider runs by run ID; it does not restart operational counters. The final controller artifact records provider calls, implementation/audit attempts, AI usage, CI/audit/end-to-end duration, change size, exact material SHA, evidence references and terminal state. Pre-material bootstrap exhaustion/recovery keeps its provenance on the trusted bootstrap lease instead of fabricating a counter above the configured implementation ceiling. Legacy state that predates persistent observability is labeled rather than reconstructed from guesses.
 
 ## Release and merge enforcement
 

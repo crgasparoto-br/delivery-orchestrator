@@ -18,6 +18,8 @@ import { validateControllerRunProvenance } from '../src/v2/controller-provenance
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
 const BASE = 'c'.repeat(40);
+const CONTROLLER_OLD = 'd'.repeat(40);
+const CONTROLLER_NEW = 'e'.repeat(40);
 
 function pr(overrides = {}) {
   return {
@@ -104,6 +106,33 @@ test('initial attempt is reserved only when deterministic dispatch has authorize
   assert.equal(lease.dispatchNonce, 'nonce-1');
   assert.equal(lease.controllerRunId, 101);
   assert.equal(lease.status, 'reserved-initial-attempt');
+
+  const recoveredLease = bootstrapLeaseForDecision({
+    decision: { dispatchAllowed: true, securityProfile: 'critical' },
+    repository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    requestedRisk: 'critical',
+    runId: 102,
+    priorImplementationAttempts: 2,
+    workerWorkflow: 'worker.yml',
+    dispatchNonce: 'nonce-recovery',
+    recovery: {
+      reason: 'control-plane-changed-after-pre-material-exhaustion',
+      previousImplementationAttempts: 3,
+      previousControllerHeadSha: CONTROLLER_OLD,
+      currentControllerHeadSha: CONTROLLER_NEW
+    }
+  });
+  assert.equal(recoveredLease.implementationAttempts, 3);
+  assert.deepEqual(recoveredLease.recovery, {
+    reason: 'control-plane-changed-after-pre-material-exhaustion',
+    previousImplementationAttempts: 3,
+    previousControllerHeadSha: CONTROLLER_OLD,
+    currentControllerHeadSha: CONTROLLER_NEW,
+    grantedImplementationAttempts: 1
+  });
 });
 
 test('existing managed PR resumes persisted state through the controller instead of starting another initial worker', () => {
@@ -178,6 +207,90 @@ test('a failed pre-PR bootstrap attempt retries within the existing bounded budg
   assert.equal(decision.nextAction, 'retry-initial-worker');
   assert.equal(decision.priorInitialAttempts, 1);
   assert.equal(decision.attempts.implementation, 1);
+});
+
+
+test('exhausted pre-material bootstrap grants exactly one recovery attempt after the control plane changes', () => {
+  const decision = evaluateReentry({
+    pullRequest: null,
+    stateEnvelope: null,
+    bootstrapLease: {
+      repository: 'owner/repo',
+      issueNumber: 63,
+      baseBranch: 'main',
+      provider: 'codex',
+      implementationAttempts: 3,
+      status: 'escalated-initial-budget-exhausted',
+      effectiveRisk: 'critical',
+      failureClass: 'unknown',
+      failureStage: 'pre-material',
+      workerConclusion: 'failure'
+    },
+    targetRepository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    bootstrapControllerHeadSha: CONTROLLER_OLD,
+    currentControllerHeadSha: CONTROLLER_NEW
+  });
+
+  assert.equal(decision.runController, true);
+  assert.equal(decision.status, 'retry-initial-delivery');
+  assert.equal(decision.nextAction, 'retry-initial-worker');
+  assert.equal(decision.priorInitialAttempts, 2);
+  assert.equal(decision.attempts.implementation, 3);
+  assert.deepEqual(decision.recovery, {
+    reason: 'control-plane-changed-after-pre-material-exhaustion',
+    previousImplementationAttempts: 3,
+    previousControllerHeadSha: CONTROLLER_OLD,
+    currentControllerHeadSha: CONTROLLER_NEW,
+    grantedImplementationAttempts: 1
+  });
+});
+
+test('exhausted bootstrap remains blocked without a new control-plane epoch or for a non pre-material failure', () => {
+  const bootstrapLease = {
+    repository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    implementationAttempts: 3,
+    status: 'escalated-initial-budget-exhausted',
+    effectiveRisk: 'critical',
+    failureClass: 'unknown',
+    failureStage: 'pre-material',
+    workerConclusion: 'failure'
+  };
+
+  const sameControlPlane = evaluateReentry({
+    bootstrapLease,
+    targetRepository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    bootstrapControllerHeadSha: CONTROLLER_OLD,
+    currentControllerHeadSha: CONTROLLER_OLD
+  });
+
+  assert.equal(sameControlPlane.runController, false);
+  assert.equal(sameControlPlane.status, 'escalated-initial-budget-exhausted');
+  assert.equal(sameControlPlane.nextAction, 'human-escalation');
+
+  const materialFailure = evaluateReentry({
+    bootstrapLease: {
+      ...bootstrapLease,
+      failureStage: 'material'
+    },
+    targetRepository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    bootstrapControllerHeadSha: CONTROLLER_OLD,
+    currentControllerHeadSha: CONTROLLER_NEW
+  });
+
+  assert.equal(materialFailure.runController, false);
+  assert.equal(materialFailure.nextAction, 'human-escalation');
 });
 
 test('duplicate managed PRs fail closed rather than selecting one nondeterministically', () => {

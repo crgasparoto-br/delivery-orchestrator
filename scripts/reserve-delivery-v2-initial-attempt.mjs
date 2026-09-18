@@ -11,6 +11,35 @@ import { createDispatchNonce } from '../src/v2/controller-runtime.mjs';
 import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
 
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
+const SHA_RE = /^[0-9a-f]{40}$/i;
+
+function normalizeRecoveryContext(value) {
+  if (!value) return null;
+
+  const reason = String(value.reason ?? '').trim();
+  const previousImplementationAttempts = Number.parseInt(String(value.previousImplementationAttempts ?? ''), 10);
+  const previousControllerHeadSha = String(value.previousControllerHeadSha ?? '').trim().toLowerCase();
+  const currentControllerHeadSha = String(value.currentControllerHeadSha ?? '').trim().toLowerCase();
+
+  if (!reason) throw new Error('recovery reason is required');
+  if (!Number.isInteger(previousImplementationAttempts) || previousImplementationAttempts < 1) {
+    throw new Error('recovery previousImplementationAttempts must be a positive integer');
+  }
+  if (!SHA_RE.test(previousControllerHeadSha) || !SHA_RE.test(currentControllerHeadSha)) {
+    throw new Error('recovery controller SHAs must be exact Git commit SHAs');
+  }
+  if (previousControllerHeadSha === currentControllerHeadSha) {
+    throw new Error('recovery requires a changed control-plane SHA');
+  }
+
+  return Object.freeze({
+    reason,
+    previousImplementationAttempts,
+    previousControllerHeadSha,
+    currentControllerHeadSha,
+    grantedImplementationAttempts: 1
+  });
+}
 
 function requiredEnv(name) {
   const value = String(process.env[name] ?? '').trim();
@@ -94,9 +123,10 @@ function makePlan({ repository, issueNumber, provider, requestedRisk, changedPat
   }, {}));
 }
 
-export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, model = null, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce(), scopeBinding = null } = {}) {
+export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, model = null, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce(), scopeBinding = null, recovery = null } = {}) {
   if (!decision?.dispatchAllowed) return null;
   const policy = executionPolicyFor(decision.securityProfile);
+  const recoveryContext = normalizeRecoveryContext(recovery);
   const nextAttempt = Number(priorImplementationAttempts) + 1;
   if (!Number.isInteger(nextAttempt) || nextAttempt < 1 || nextAttempt > policy.maxImplementationAttempts) throw new Error('initial implementation attempt budget exhausted');
   return Object.freeze({
@@ -114,7 +144,8 @@ export function bootstrapLeaseForDecision({ decision, repository, issueNumber, b
     workerRunId: null,
     workerWorkflow: String(workerWorkflow ?? ''),
     dispatchNonce: String(dispatchNonce),
-    scopeBinding
+    scopeBinding,
+    ...(recoveryContext ? { recovery: recoveryContext } : {})
   });
 }
 
@@ -128,6 +159,13 @@ async function main() {
   const writeToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
   const runId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
   const priorImplementationAttempts = Number.parseInt(String(process.env.DELIVERY_V2_PRIOR_INITIAL_ATTEMPTS ?? '0'), 10);
+  const recoveryReason = String(process.env.DELIVERY_V2_RECOVERY_REASON ?? '').trim();
+  const recovery = recoveryReason ? {
+    reason: recoveryReason,
+    previousImplementationAttempts: Number.parseInt(String(process.env.DELIVERY_V2_RECOVERY_PREVIOUS_ATTEMPTS ?? ''), 10),
+    previousControllerHeadSha: String(process.env.DELIVERY_V2_RECOVERY_PREVIOUS_CONTROLLER_SHA ?? '').trim(),
+    currentControllerHeadSha: requiredEnv('DELIVERY_V2_RECOVERY_CURRENT_CONTROLLER_SHA')
+  } : null;
 
   const issue = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}`, readToken);
   const explicitChangedPaths = splitPaths(process.env.DELIVERY_CHANGED_PATHS);
@@ -148,7 +186,8 @@ async function main() {
     runId,
     priorImplementationAttempts,
     workerWorkflow: plan.implementation.workflow,
-    scopeBinding
+    scopeBinding,
+    recovery
   });
 
   if (lease) {
