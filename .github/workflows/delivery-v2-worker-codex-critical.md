@@ -86,8 +86,9 @@ engine:
   id: codex
   command: ./.delivery-v2-sandbox-toolchain/.github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh
   model: ${{ vars.DELIVERY_CRITICAL_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'gpt-5.4' }}
-max-turns: 80
-max-ai-credits: 500
+  env:
+    GH_AW_MAX_AI_CREDITS: ${{ vars.DELIVERY_CRITICAL_MAX_AI_CREDITS || '500' }}
+max-turns: ${{ vars.DELIVERY_CRITICAL_MAX_AI_TURNS || '80' }}
 timeout-minutes: 55
 network:
   allowed: [defaults, node, binaries.prisma.sh]

@@ -45,6 +45,8 @@ Baseline ceilings remain:
 - STANDARD — 40 turns / 250 credits, max 2 implementation attempts;
 - CRITICAL — 80 turns / 500 credits, max 3 implementation attempts and max 2 audit-remediation attempts.
 
+FAST, STANDARD and CRITICAL operational limits may be overridden with the repository variables `DELIVERY_<PROFILE>_MAX_AI_CREDITS`, `DELIVERY_<PROFILE>_MAX_AI_TURNS` and `DELIVERY_<PROFILE>_MAX_IMPLEMENTATION_ATTEMPTS`. Removing an override restores the versioned baseline.
+
 ## Same-PR remediation
 
 All compiled provider/risk workers have an initial mode and a remediation mode. Initial mode creates one managed `[delivery-v2] ` PR. Remediation mode receives the controller's structured CI/audit failure packet, works on the exact current PR head, and may write only through constrained `push-to-pull-request-branch` safe output.

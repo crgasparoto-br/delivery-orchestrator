@@ -37,8 +37,49 @@ const POLICIES = Object.freeze({
   })
 });
 
-export function executionPolicyFor(profile) {
+function positiveIntegerLimit(env, name, fallback) {
+  const raw = String(env?.[name] ?? '').trim();
+  if (!raw) return fallback;
+
+  const value = Number.parseInt(raw, 10);
+
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+
+  return value;
+}
+
+function profilePrefix(profile) {
+  return String(profile).toUpperCase();
+}
+
+export function executionPolicyFor(profile, env = process.env) {
   const policy = POLICIES[profile];
-  if (!policy) throw new Error(`Unknown risk profile: ${profile}`);
-  return { profile, ...policy };
+
+  if (!policy) {
+    throw new Error(`Unknown risk profile: ${profile}`);
+  }
+
+  const prefix = profilePrefix(profile);
+
+  return {
+    profile,
+    ...policy,
+    maxImplementationAttempts: positiveIntegerLimit(
+      env,
+      `DELIVERY_${prefix}_MAX_IMPLEMENTATION_ATTEMPTS`,
+      policy.maxImplementationAttempts
+    ),
+    maxAiTurns: positiveIntegerLimit(
+      env,
+      `DELIVERY_${prefix}_MAX_AI_TURNS`,
+      policy.maxAiTurns
+    ),
+    maxAiCredits: positiveIntegerLimit(
+      env,
+      `DELIVERY_${prefix}_MAX_AI_CREDITS`,
+      policy.maxAiCredits
+    )
+  };
 }

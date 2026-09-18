@@ -53,8 +53,9 @@ pre-steps:
 engine:
   id: claude
   model: ${{ vars.DELIVERY_FAST_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'claude-sonnet-5' }}
-max-turns: 20
-max-ai-credits: 100
+  env:
+    GH_AW_MAX_AI_CREDITS: ${{ vars.DELIVERY_FAST_MAX_AI_CREDITS || '100' }}
+max-turns: ${{ vars.DELIVERY_FAST_MAX_AI_TURNS || '20' }}
 timeout-minutes: 20
 network:
   allowed: [defaults, node, binaries.prisma.sh]
