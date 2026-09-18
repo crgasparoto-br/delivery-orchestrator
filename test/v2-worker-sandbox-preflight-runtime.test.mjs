@@ -56,7 +56,13 @@ exit 2
       codex,
       `#!/usr/bin/env bash
 set -euo pipefail
-safeoutputs noop
+
+# Reproduce the real Codex command boundary from issue #166: the provider
+# starts with a valid PATH but a child shell receives a broken one.
+test -n "\${BASH_ENV:-}"
+test -r "$BASH_ENV"
+export PATH=/definitely-missing
+/bin/bash -lc 'git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; safeoutputs noop'
 `
     );
 
@@ -77,6 +83,11 @@ safeoutputs noop
       result.status,
       0,
       `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`
+    );
+
+    assert.match(
+      result.stdout,
+      /Delivery V2 Codex child-shell toolchain preflight: PASS/
     );
 
     assert.match(
