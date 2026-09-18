@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from 'node:child_process';
 import { appendFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
@@ -20,6 +21,16 @@ const RECOVERABLE_PRE_MATERIAL_CONCLUSIONS = new Set(['failure', 'timed_out', 's
 function normalizedSha(value) {
   const sha = String(value ?? '').trim().toLowerCase();
   return SHA_RE.test(sha) ? sha : null;
+}
+
+export function resolveCheckedOutControlPlaneHeadSha({
+  readHead = () => execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' })
+} = {}) {
+  const sha = normalizedSha(readHead());
+  if (!sha) {
+    throw new Error('checked-out control-plane HEAD must be an exact Git commit SHA');
+  }
+  return sha;
 }
 
 function exhaustedBootstrapCanRearm({
@@ -326,7 +337,8 @@ async function writeGithubOutput(decision) {
     `adoption_head=${decision.adoption ? decision.materialHeadSha : ''}`,
     `recovery_reason=${decision.recovery?.reason ?? ''}`,
     `recovery_previous_attempts=${decision.recovery?.previousImplementationAttempts ?? ''}`,
-    `recovery_previous_controller_sha=${decision.recovery?.previousControllerHeadSha ?? ''}`
+    `recovery_previous_controller_sha=${decision.recovery?.previousControllerHeadSha ?? ''}`,
+    `recovery_current_controller_sha=${decision.recovery?.currentControllerHeadSha ?? ''}`
   ].join('\n');
   await appendFile(outputPath, `${lines}\n`, 'utf8');
 }
@@ -376,6 +388,7 @@ async function main() {
   const orchestratorRepository = requiredEnv('GITHUB_REPOSITORY');
   const orchestratorRef = requiredEnv('ORCHESTRATOR_WORKER_REF');
   const resultPath = String(process.env.CONTROLLER_RESULT_PATH ?? '').trim();
+  const currentControllerHeadSha = resolveCheckedOutControlPlaneHeadSha();
 
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
   const pulls = await listOpenPullRequests(targetRepository, readToken);
@@ -414,7 +427,7 @@ async function main() {
     model: expectedImplementer.model,
     recoveredWorkerRun,
     bootstrapControllerHeadSha: provenanceControllerRun?.head_sha ?? null,
-    currentControllerHeadSha: requiredEnv('GITHUB_SHA')
+    currentControllerHeadSha
   });
   await persistReentryMutation({
     decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository: targetRepository,

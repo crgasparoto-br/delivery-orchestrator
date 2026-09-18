@@ -164,7 +164,7 @@ async function main() {
     reason: recoveryReason,
     previousImplementationAttempts: Number.parseInt(String(process.env.DELIVERY_V2_RECOVERY_PREVIOUS_ATTEMPTS ?? ''), 10),
     previousControllerHeadSha: String(process.env.DELIVERY_V2_RECOVERY_PREVIOUS_CONTROLLER_SHA ?? '').trim(),
-    currentControllerHeadSha: requiredEnv('GITHUB_SHA')
+    currentControllerHeadSha: requiredEnv('DELIVERY_V2_RECOVERY_CURRENT_CONTROLLER_SHA')
   } : null;
 
   const issue = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}`, readToken);
