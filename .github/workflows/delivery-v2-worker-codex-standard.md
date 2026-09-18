@@ -19,6 +19,9 @@ permissions:
   issues: read
 env:
   GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "${{ github.event.inputs.target_pr == '' && 'true' || 'false' }}"
+  GH_AW_CODEX_CONTEXT_REBUILD_CIRCUIT_BREAKER: "true"
+  GH_AW_CODEX_MAX_REBUILD_FACTOR: "35"
+  GH_AW_CODEX_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS: "1000000"
 runtimes:
   node:
     version: "22"
@@ -136,7 +139,7 @@ Work only on **${{ github.event.inputs.target_repository }} issue #${{ github.ev
 
 Risk profile: **standard**. AI provider: **codex**.
 
-Context hygiene: do not inventory retired or generated delivery snapshots, `.generated/**`, compiled `*.lock.yml`, or unrelated repository history unless the issue explicitly targets them or a deterministic check requires them. Prefer targeted search in issue-relevant source/test/docs paths; do not inventory the entire repository before editing.
+Context hygiene: do not inventory retired or generated delivery snapshots, `.generated/**`, compiled `*.lock.yml`, or unrelated repository history unless the issue explicitly targets them or a deterministic check requires them. Prefer targeted search in issue-relevant source/test/docs paths; do not inventory the entire repository before editing. Keep a compact working set: reuse discovered paths, do not re-read unchanged full files, prefer `rg` plus targeted line ranges, and move from discovery to edit/test once the issue-relevant boundaries are identified. Treat repeated broad repository scans as a blocker rather than a next step.
 
 The deterministic controller owns orchestration, risk, budgets, CI/audit state and retries. You are only the bounded material worker for this attempt.
 
