@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from 'node:child_process';
 import { appendFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
@@ -14,6 +15,68 @@ import { withTransientFetchRetry } from '../src/v2/github-api-retry.mjs';
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
 const SHA_RE = /^[0-9a-f]{40}$/i;
+const RECOVERABLE_PRE_MATERIAL_FAILURE_CLASSES = new Set(['infrastructure', 'unknown']);
+const RECOVERABLE_PRE_MATERIAL_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_failure', 'cancelled']);
+
+function normalizedSha(value) {
+  const sha = String(value ?? '').trim().toLowerCase();
+  return SHA_RE.test(sha) ? sha : null;
+}
+
+export function resolveCheckedOutControlPlaneHeadSha({
+  readHead = () => execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' })
+} = {}) {
+  const sha = normalizedSha(readHead());
+  if (!sha) {
+    throw new Error('checked-out control-plane HEAD must be an exact Git commit SHA');
+  }
+  return sha;
+}
+
+export function recoveryContextForExhaustedBootstrap({
+  bootstrapLease,
+  currentControllerHeadSha,
+  bootstrapControllerHeadSha = null
+} = {}) {
+  const previousControllerHeadSha = normalizedSha(
+    bootstrapLease?.recovery?.currentControllerHeadSha
+      ?? bootstrapLease?.controllerHeadSha
+      ?? bootstrapControllerHeadSha
+  );
+  const currentControlPlaneHeadSha = normalizedSha(
+    currentControllerHeadSha
+  );
+  const previousImplementationAttempts = Number(
+    bootstrapLease?.implementationAttempts
+  );
+  const failureClass = String(
+    bootstrapLease?.failureClass ?? ''
+  ).trim().toLowerCase();
+  const workerConclusion = String(
+    bootstrapLease?.workerConclusion ?? ''
+  ).trim().toLowerCase();
+
+  const eligible =
+    bootstrapLease?.status === 'escalated-initial-budget-exhausted'
+    && bootstrapLease?.failureStage === 'pre-material'
+    && RECOVERABLE_PRE_MATERIAL_FAILURE_CLASSES.has(failureClass)
+    && RECOVERABLE_PRE_MATERIAL_CONCLUSIONS.has(workerConclusion)
+    && Number.isInteger(previousImplementationAttempts)
+    && previousImplementationAttempts >= 1
+    && previousControllerHeadSha
+    && currentControlPlaneHeadSha
+    && previousControllerHeadSha !== currentControlPlaneHeadSha;
+
+  if (!eligible) return null;
+
+  return Object.freeze({
+    reason: 'control-plane-changed-after-pre-material-exhaustion',
+    previousImplementationAttempts,
+    previousControllerHeadSha,
+    currentControllerHeadSha: currentControlPlaneHeadSha,
+    grantedImplementationAttempts: 1
+  });
+}
 
 function requiredEnv(name) {
   const value = String(process.env[name] ?? '').trim();
@@ -43,6 +106,158 @@ async function api(url, token, options = {}) {
   );
   if (!response.ok) throw new Error(`GitHub API ${response.status} ${options.method ?? 'GET'} ${url}: ${await response.text()}`);
   return response.json();
+}
+
+function githubLogPayload(line) {
+  const value = String(line ?? '');
+  const timestamped = value.match(
+    /^\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+(.*)$/
+  );
+  return String(timestamped?.[1] ?? value).trim();
+}
+
+export function checkedOutControlPlaneHeadShaFromJobLog(logText) {
+  const lines = String(logText ?? '').split(/\r?\n/);
+  const candidates = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const current = githubLogPayload(lines[index]);
+
+    if (
+      !current.includes(
+        '[command]/usr/bin/git log -1 --format=%H'
+      )
+    ) {
+      continue;
+    }
+
+    for (
+      let candidateIndex = index + 1;
+      candidateIndex < Math.min(lines.length, index + 8);
+      candidateIndex += 1
+    ) {
+      const payload = githubLogPayload(lines[candidateIndex]);
+      const sha = normalizedSha(payload);
+
+      if (sha) {
+        candidates.push(sha);
+        break;
+      }
+    }
+  }
+
+  const unique = [...new Set(candidates)];
+
+  if (unique.length !== 1) {
+    throw new Error(
+      'legacy controller checkout provenance requires exactly one '
+      + 'checked-out control-plane SHA'
+    );
+  }
+
+  return unique[0];
+}
+
+export async function resolveBootstrapControllerHeadShaFromRun({
+  bootstrapLease,
+  controllerRun,
+  orchestratorRepository,
+  trustedRef,
+  actionsToken,
+  listJobs = async ({ repository, runId, token }) => {
+    const payload = await api(
+      `https://api.github.com/repos/${repository}/actions/runs/${runId}/jobs?per_page=100`,
+      token
+    );
+    return payload.jobs ?? [];
+  },
+  readJobLog = async ({ repository, jobId, token }) => {
+    const url =
+      `https://api.github.com/repos/${repository}/actions/jobs/${jobId}/logs`;
+
+    const response = await withTransientFetchRetry(
+      () => fetch(url, { headers: headers(token) }),
+      { label: `legacy controller checkout log ${jobId}` }
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `GitHub API ${response.status} GET ${url}: ${await response.text()}`
+      );
+    }
+
+    return response.text();
+  }
+} = {}) {
+  const persisted = normalizedSha(
+    bootstrapLease?.recovery?.currentControllerHeadSha
+      ?? bootstrapLease?.controllerHeadSha
+  );
+
+  if (persisted) return persisted;
+
+  if (
+    bootstrapLease?.status
+      !== 'escalated-initial-budget-exhausted'
+  ) {
+    return null;
+  }
+
+  const runId = positiveInteger(
+    bootstrapLease?.controllerRunId,
+    'bootstrap controllerRunId'
+  );
+
+  const observedRunId = positiveInteger(
+    controllerRun?.id,
+    'controller workflow run id'
+  );
+
+  if (observedRunId !== runId) {
+    throw new Error(
+      'bootstrap controller run does not match persisted provenance'
+    );
+  }
+
+  validateControllerRunProvenance(controllerRun, {
+    orchestratorRepository,
+    trustedRef
+  });
+
+  const jobs = await listJobs({
+    repository: orchestratorRepository,
+    runId,
+    token: actionsToken
+  });
+
+  if (!Array.isArray(jobs)) {
+    throw new Error('controller workflow jobs must be an array');
+  }
+
+  const matchingJobs = jobs.filter(
+    (job) => String(job?.name ?? '')
+      === 'Bounded deterministic delivery'
+  );
+
+  if (matchingJobs.length !== 1) {
+    throw new Error(
+      'legacy controller checkout provenance requires exactly one '
+      + 'Bounded deterministic delivery job'
+    );
+  }
+
+  const jobId = positiveInteger(
+    matchingJobs[0].id,
+    'controller workflow job id'
+  );
+
+  const logText = await readJobLog({
+    repository: orchestratorRepository,
+    jobId,
+    token: actionsToken
+  });
+
+  return checkedOutControlPlaneHeadShaFromJobLog(logText);
 }
 
 // Preserve the public entrypoint while sharing the exact identity contract with resume.
@@ -125,7 +340,7 @@ function bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease,
   });
 }
 
-export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope = null, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null } = {}) {
+export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope = null, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null, bootstrapControllerHeadSha = null, currentControllerHeadSha = null } = {}) {
   const resolvedIssue = positiveInteger(issueNumber, 'issueNumber');
   const resolvedProvider = String(provider ?? '').toLowerCase();
 
@@ -191,6 +406,54 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
     if (bootstrapLease.baseBranch !== String(baseBranch ?? '')) throw new Error('bootstrap lease base branch does not match requested delivery');
     assertAiPolicyMatch({ persistedProvider: bootstrapLease.provider, persistedModel: bootstrapLease.model, expectedProvider: resolvedProvider, expectedModel: model, label: 'bootstrap lease' });
     const policy = executionPolicyFor(bootstrapLease.effectiveRisk || 'critical');
+
+    // A persisted terminal exhaustion is terminal regardless of a later
+    // runtime increase to MAX_IMPLEMENTATION_ATTEMPTS. Its only automatic
+    // recovery path is an eligible pre-material failure plus a verified
+    // checked-out control-plane SHA change.
+    if (bootstrapLease.status === 'escalated-initial-budget-exhausted') {
+      const recovery = recoveryContextForExhaustedBootstrap({
+        bootstrapLease,
+        currentControllerHeadSha,
+        bootstrapControllerHeadSha
+      });
+
+      if (recovery) {
+        return Object.freeze({
+          runController: true,
+          resumePr: null,
+          recoverWorkerRunId: null,
+          status: 'retry-initial-delivery',
+          pullRequestNumber: null,
+          materialHeadSha: null,
+          staleStateDetected: false,
+          nextAction: 'retry-initial-worker',
+          priorInitialAttempts: Math.max(
+            0,
+            recovery.previousImplementationAttempts - 1
+          ),
+          attempts: {
+            implementation: recovery.previousImplementationAttempts
+          },
+          recovery
+        });
+      }
+
+      return Object.freeze({
+        runController: false,
+        resumePr: null,
+        recoverWorkerRunId: null,
+        status: 'escalated-initial-budget-exhausted',
+        pullRequestNumber: null,
+        materialHeadSha: null,
+        staleStateDetected: false,
+        nextAction: 'human-escalation',
+        priorInitialAttempts: bootstrapLease.implementationAttempts,
+        attempts: {
+          implementation: bootstrapLease.implementationAttempts
+        }
+      });
+    }
     if (recoveredWorkerRun && !['completed'].includes(String(recoveredWorkerRun.status ?? ''))) {
       return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
     }
@@ -268,25 +531,46 @@ async function writeGithubOutput(decision) {
     `prior_initial_attempts=${decision.priorInitialAttempts ?? 0}`,
     `recover_worker_run_id=${decision.recoverWorkerRunId ?? ''}`,
     `dispatch_nonce=${decision.dispatchNonce ?? ''}`,
-    `adoption_head=${decision.adoption ? decision.materialHeadSha : ''}`
+    `adoption_head=${decision.adoption ? decision.materialHeadSha : ''}`,
+    `recovery_reason=${decision.recovery?.reason ?? ''}`,
+    `recovery_previous_attempts=${decision.recovery?.previousImplementationAttempts ?? ''}`,
+    `recovery_previous_controller_sha=${decision.recovery?.previousControllerHeadSha ?? ''}`,
+    `recovery_current_controller_sha=${decision.recovery?.currentControllerHeadSha ?? ''}`
   ].join('\n');
   await appendFile(outputPath, `${lines}\n`, 'utf8');
 }
 
-export function terminalBootstrapLease(lease, decision, recoveredWorkerRun) {
+export function terminalBootstrapLease(
+  lease,
+  decision,
+  recoveredWorkerRun,
+  currentControllerHeadSha = null
+) {
   if (decision.status !== 'escalated-initial-budget-exhausted') return null;
+
   const { commentId, ...value } = lease;
+  const controllerHeadSha = normalizedSha(
+    value.recovery?.currentControllerHeadSha
+      ?? value.controllerHeadSha
+      ?? currentControllerHeadSha
+  );
+
   return {
-    ...value, status: decision.status,
+    ...value,
+    ...(controllerHeadSha ? { controllerHeadSha } : {}),
+    status: decision.status,
     workerRunId: recoveredWorkerRun?.id ?? value.workerRunId,
-    failureClass: ['timed_out', 'startup_failure', 'cancelled'].includes(recoveredWorkerRun?.conclusion) ? 'infrastructure' : 'unknown',
-    failureStage: 'pre-material', workerConclusion: recoveredWorkerRun?.conclusion ?? null
+    failureClass: ['timed_out', 'startup_failure', 'cancelled'].includes(
+      recoveredWorkerRun?.conclusion
+    ) ? 'infrastructure' : 'unknown',
+    failureStage: 'pre-material',
+    workerConclusion: recoveredWorkerRun?.conclusion ?? null
   };
 }
 
 // Resolve write capability only after a concrete mutation has been selected.
 export async function persistReentryMutation({ decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository, controller,
-  getWriteToken = () => requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'), mutate = api }) {
+  currentControllerHeadSha = null, getWriteToken = () => requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'), mutate = api }) {
   let url;
   let method;
   let body;
@@ -297,7 +581,12 @@ export async function persistReentryMutation({ decision, adoptionEnvelope, boots
     method = adoptionEnvelope ? 'PATCH' : 'POST';
     body = legacyAdoptionComment(decision.adoption, controller);
   } else {
-    const terminal = bootstrapLease && terminalBootstrapLease(bootstrapLease, decision, recoveredWorkerRun);
+    const terminal = bootstrapLease && terminalBootstrapLease(
+      bootstrapLease,
+      decision,
+      recoveredWorkerRun,
+      currentControllerHeadSha
+    );
     if (!terminal || bootstrapLease.status === terminal.status) return false;
     if (bootstrapLease.repository !== repository) throw new Error('bootstrap mutation repository mismatch');
     url = `https://api.github.com/repos/${repository}/issues/comments/${positiveInteger(bootstrapLease.commentId, 'bootstrap commentId')}`;
@@ -318,6 +607,7 @@ async function main() {
   const orchestratorRepository = requiredEnv('GITHUB_REPOSITORY');
   const orchestratorRef = requiredEnv('ORCHESTRATOR_WORKER_REF');
   const resultPath = String(process.env.CONTROLLER_RESULT_PATH ?? '').trim();
+  const currentControllerHeadSha = resolveCheckedOutControlPlaneHeadSha();
 
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
   const pulls = await listOpenPullRequests(targetRepository, readToken);
@@ -333,12 +623,25 @@ async function main() {
   if (!stateEnvelope && !adoptionEnvelope) bootstrapLease = parseBootstrapLease(await listIssueComments(targetRepository, issueNumber, readToken), { trustedLogin });
 
   const provenance = stateEnvelope?.controller ?? adoptionEnvelope?.controller ?? bootstrapLease;
+  let provenanceControllerRun = null;
   if (provenance) {
     const controllerRunId = positiveInteger(provenance.controllerRunId, 'controllerRunId');
-    const controllerRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${controllerRunId}`, actionsToken);
-    validateControllerRunProvenance(controllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
-    if (adoptionEnvelope && !stateEnvelope) validateLegacyAdoptionControllerRun(adoptionEnvelope, controllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
+    provenanceControllerRun = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${controllerRunId}`, actionsToken);
+    validateControllerRunProvenance(provenanceControllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
+    if (adoptionEnvelope && !stateEnvelope) validateLegacyAdoptionControllerRun(adoptionEnvelope, provenanceControllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
   }
+
+  const bootstrapControllerHeadSha =
+    bootstrapLease && provenanceControllerRun
+      ? await resolveBootstrapControllerHeadShaFromRun({
+          bootstrapLease,
+          controllerRun: provenanceControllerRun,
+          orchestratorRepository,
+          trustedRef: orchestratorRef,
+          actionsToken
+        })
+      : null;
+
   const recoveredWorkerRun = bootstrapLease ? await recoverBootstrapWorkerRun(bootstrapLease, orchestratorRepository, orchestratorRef, actionsToken) : null;
   const effectiveRisk = stateEnvelope?.persistent?.effectiveRisk ?? bootstrapLease?.effectiveRisk ?? 'critical';
   const aiPolicy = loadV2Config({}, process.env).aiPolicy;
@@ -353,10 +656,13 @@ async function main() {
     baseBranch,
     provider: expectedImplementer.provider,
     model: expectedImplementer.model,
-    recoveredWorkerRun
+    recoveredWorkerRun,
+    bootstrapControllerHeadSha,
+    currentControllerHeadSha
   });
   await persistReentryMutation({
     decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository: targetRepository,
+    currentControllerHeadSha,
     controller: decision.adoption ? {
       controllerRunId: positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID'),
       controllerRepository: orchestratorRepository, controllerRef: orchestratorRef,

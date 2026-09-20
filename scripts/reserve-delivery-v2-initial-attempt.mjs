@@ -8,9 +8,116 @@ import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { createDispatchDecision } from '../src/v2/dispatch-policy.mjs';
 import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { createDispatchNonce } from '../src/v2/controller-runtime.mjs';
+import {
+  parseBootstrapLease,
+  recoveryContextForExhaustedBootstrap,
+  resolveBootstrapControllerHeadShaFromRun,
+  resolveCheckedOutControlPlaneHeadSha
+} from './guard-delivery-v2-reentry.mjs';
 import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
 
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
+const SHA_RE = /^[0-9a-f]{40}$/i;
+
+function normalizeRecoveryContext(value) {
+  if (!value) return null;
+
+  const reason = String(value.reason ?? '').trim();
+  const previousImplementationAttempts = Number.parseInt(String(value.previousImplementationAttempts ?? ''), 10);
+  const previousControllerHeadSha = String(value.previousControllerHeadSha ?? '').trim().toLowerCase();
+  const currentControllerHeadSha = String(value.currentControllerHeadSha ?? '').trim().toLowerCase();
+
+  if (!reason) throw new Error('recovery reason is required');
+  if (!Number.isInteger(previousImplementationAttempts) || previousImplementationAttempts < 1) {
+    throw new Error('recovery previousImplementationAttempts must be a positive integer');
+  }
+  if (!SHA_RE.test(previousControllerHeadSha) || !SHA_RE.test(currentControllerHeadSha)) {
+    throw new Error('recovery controller SHAs must be exact Git commit SHAs');
+  }
+  if (previousControllerHeadSha === currentControllerHeadSha) {
+    throw new Error('recovery requires a changed control-plane SHA');
+  }
+
+  return Object.freeze({
+    reason,
+    previousImplementationAttempts,
+    previousControllerHeadSha,
+    currentControllerHeadSha,
+    grantedImplementationAttempts: 1
+  });
+}
+
+export function resolveRecoveryForReservation({
+  persistedBootstrapLease = null,
+  currentControllerHeadSha,
+  priorImplementationAttempts = 0,
+  envRecovery = null,
+  bootstrapControllerHeadSha = null
+} = {}) {
+  const normalizedEnvRecovery = normalizeRecoveryContext(envRecovery);
+
+  if (
+    persistedBootstrapLease?.status
+      !== 'escalated-initial-budget-exhausted'
+  ) {
+    if (normalizedEnvRecovery) {
+      throw new Error(
+        'recovery environment requires a trusted exhausted bootstrap lease'
+      );
+    }
+    return null;
+  }
+
+  const persistedRecovery = recoveryContextForExhaustedBootstrap({
+    bootstrapLease: persistedBootstrapLease,
+    currentControllerHeadSha,
+    bootstrapControllerHeadSha
+  });
+
+  if (!persistedRecovery) {
+    throw new Error(
+      'trusted exhausted bootstrap lease is not eligible for recovery '
+      + 'on the checked-out control-plane SHA'
+    );
+  }
+
+  const prior = Number(priorImplementationAttempts);
+  const expectedPrior =
+    persistedRecovery.previousImplementationAttempts - 1;
+
+  if (!Number.isInteger(prior) || prior !== expectedPrior) {
+    throw new Error(
+      'recovery prior implementation attempts do not match '
+      + 'trusted bootstrap provenance'
+    );
+  }
+
+  if (normalizedEnvRecovery) {
+    const keys = [
+      'reason',
+      'previousImplementationAttempts',
+      'previousControllerHeadSha',
+      'currentControllerHeadSha',
+      'grantedImplementationAttempts'
+    ];
+
+    const mismatch = keys.some(
+      (key) =>
+        normalizedEnvRecovery[key] !== persistedRecovery[key]
+    );
+
+    if (mismatch) {
+      throw new Error(
+        'recovery environment does not match trusted bootstrap provenance'
+      );
+    }
+  }
+
+  // Persisted trusted state is authoritative. Environment fields are
+  // compatibility evidence only. This preserves recovery provenance
+  // even when a run started from older workflow YAML.
+  return persistedRecovery;
+}
 
 function requiredEnv(name) {
   const value = String(process.env[name] ?? '').trim();
@@ -94,9 +201,22 @@ function makePlan({ repository, issueNumber, provider, requestedRisk, changedPat
   }, {}));
 }
 
-export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, model = null, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce(), scopeBinding = null } = {}) {
+export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, model = null, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce(), scopeBinding = null, controllerHeadSha = null, recovery = null } = {}) {
   if (!decision?.dispatchAllowed) return null;
   const policy = executionPolicyFor(decision.securityProfile);
+  const recoveryContext = normalizeRecoveryContext(recovery);
+  const resolvedControllerHeadSha = controllerHeadSha == null
+    ? null
+    : String(controllerHeadSha).trim().toLowerCase();
+
+  if (
+    controllerHeadSha != null
+    && !SHA_RE.test(resolvedControllerHeadSha)
+  ) {
+    throw new Error(
+      'controllerHeadSha must be an exact Git commit SHA'
+    );
+  }
   const nextAttempt = Number(priorImplementationAttempts) + 1;
   if (!Number.isInteger(nextAttempt) || nextAttempt < 1 || nextAttempt > policy.maxImplementationAttempts) throw new Error('initial implementation attempt budget exhausted');
   return Object.freeze({
@@ -114,7 +234,11 @@ export function bootstrapLeaseForDecision({ decision, repository, issueNumber, b
     workerRunId: null,
     workerWorkflow: String(workerWorkflow ?? ''),
     dispatchNonce: String(dispatchNonce),
-    scopeBinding
+    scopeBinding,
+    ...(resolvedControllerHeadSha
+      ? { controllerHeadSha: resolvedControllerHeadSha }
+      : {}),
+    ...(recoveryContext ? { recovery: recoveryContext } : {})
   });
 }
 
@@ -126,10 +250,82 @@ async function main() {
   const requestedRisk = requiredEnv('DELIVERY_RISK_PROFILE').toLowerCase();
   const readToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const writeToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
+  const actionsToken = requiredEnv('GITHUB_TOKEN');
+  const orchestratorRepository = requiredEnv('GITHUB_REPOSITORY');
+  const orchestratorRef = requiredEnv('ORCHESTRATOR_WORKER_REF');
   const runId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
+  const controllerHeadSha = resolveCheckedOutControlPlaneHeadSha();
   const priorImplementationAttempts = Number.parseInt(String(process.env.DELIVERY_V2_PRIOR_INITIAL_ATTEMPTS ?? '0'), 10);
+  const recoveryReason = String(
+    process.env.DELIVERY_V2_RECOVERY_REASON ?? ''
+  ).trim();
 
-  const issue = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}`, readToken);
+  const envRecovery = recoveryReason ? {
+    reason: recoveryReason,
+    previousImplementationAttempts: Number.parseInt(
+      String(
+        process.env.DELIVERY_V2_RECOVERY_PREVIOUS_ATTEMPTS ?? ''
+      ),
+      10
+    ),
+    previousControllerHeadSha: String(
+      process.env.DELIVERY_V2_RECOVERY_PREVIOUS_CONTROLLER_SHA ?? ''
+    ).trim(),
+    currentControllerHeadSha: requiredEnv(
+      'DELIVERY_V2_RECOVERY_CURRENT_CONTROLLER_SHA'
+    )
+  } : null;
+
+  const issue = await api(
+    `https://api.github.com/repos/${repository}/issues/${issueNumber}`,
+    readToken
+  );
+
+  const comments = await api(
+    `https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=100`,
+    readToken
+  );
+
+  const trustedLogin = trustedCommentAuthorForRepository(repository);
+
+  const persistedBootstrapLease = parseBootstrapLease(
+    comments,
+    { trustedLogin }
+  );
+
+  let bootstrapControllerHeadSha = null;
+
+  if (
+    persistedBootstrapLease?.status
+      === 'escalated-initial-budget-exhausted'
+  ) {
+    const previousControllerRunId = positiveInteger(
+      persistedBootstrapLease.controllerRunId,
+      'bootstrap controllerRunId'
+    );
+
+    const previousControllerRun = await api(
+      `https://api.github.com/repos/${orchestratorRepository}/actions/runs/${previousControllerRunId}`,
+      actionsToken
+    );
+
+    bootstrapControllerHeadSha =
+      await resolveBootstrapControllerHeadShaFromRun({
+        bootstrapLease: persistedBootstrapLease,
+        controllerRun: previousControllerRun,
+        orchestratorRepository,
+        trustedRef: orchestratorRef,
+        actionsToken
+      });
+  }
+
+  const recovery = resolveRecoveryForReservation({
+    persistedBootstrapLease,
+    currentControllerHeadSha: controllerHeadSha,
+    priorImplementationAttempts,
+    envRecovery,
+    bootstrapControllerHeadSha
+  });
   const explicitChangedPaths = splitPaths(process.env.DELIVERY_CHANGED_PATHS);
   let changedPaths = explicitChangedPaths;
   if (changedPaths.length === 0) changedPaths = await deterministicIssuePaths(repository, baseBranch, issue.body, readToken);
@@ -148,13 +344,18 @@ async function main() {
     runId,
     priorImplementationAttempts,
     workerWorkflow: plan.implementation.workflow,
-    scopeBinding
+    scopeBinding,
+    controllerHeadSha,
+    recovery
   });
 
   if (lease) {
     const body = `${BOOTSTRAP_MARKER}\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify(lease, null, 2)}\n\`\`\``;
-    const comments = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=100`, readToken);
-    const existing = selectTrustedMarkerComment(comments, { marker: BOOTSTRAP_MARKER, label: 'Delivery V2 bootstrap state', trustedLogin: trustedCommentAuthorForRepository(repository) });
+    const existing = selectTrustedMarkerComment(comments, {
+      marker: BOOTSTRAP_MARKER,
+      label: 'Delivery V2 bootstrap state',
+      trustedLogin
+    });
     if (existing) await api(`https://api.github.com/repos/${repository}/issues/comments/${existing.id}`, writeToken, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
     else await postJson(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`, writeToken, { body });
   }

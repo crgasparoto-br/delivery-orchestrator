@@ -321,9 +321,29 @@ Baseline policy:
 - max audit-remediation attempts: 2;
 - max AI turns: 80;
 - max AI credits: 500;
-- human escalation when budgets are exhausted.
+- human escalation when ordinary attempt budgets are exhausted or recovery provenance is insufficient.
 
-Budgets are ceilings, not targets.
+Budgets are ceilings, not targets. A pre-material control-plane recovery does not raise these ceilings and cannot authorize a fourth material implementation attempt.
+
+### 8.1 Pre-material control-plane recovery
+
+A bootstrap that exhausted its initial reservation budget before producing a usable material candidate remains fail-closed by default. The deterministic controller may grant exactly one recovery dispatch for a control-plane epoch only when all of the following are proven from trusted GitHub/controller evidence:
+
+- the persisted bootstrap status is `escalated-initial-budget-exhausted`;
+- the failure stage is `pre-material`;
+- the failure class is `infrastructure` or `unknown`;
+- the worker conclusion is `failure`, `timed_out`, `startup_failure`, or `cancelled`;
+- the prior controller run is provenance-valid;
+- the prior checked-out control-plane SHA is available either from the persisted bootstrap lease or, only for legacy leases created before that field existed, from the validated historical controller job checkout log;
+- the currently checked-out control-plane `HEAD` is an exact Git SHA and differs from that persisted checked-out control-plane SHA.
+
+The recovery is deterministic controller authority, never AI self-extension. It is represented within the configured implementation-attempt ceiling and is tagged with recovery provenance: the prior implementation-attempt count, the prior/current controller SHAs, the recovery reason, and `grantedImplementationAttempts=1`. The prior exhausted state therefore remains traceable instead of being silently discarded.
+
+The reservation step independently re-derives recovery eligibility from the trusted persisted bootstrap lease and the actually checked-out control-plane SHA. Workflow-provided recovery fields are compatibility cross-checks, not the sole authority. A run that started from older workflow YAML must not silently discard recovery provenance after checking out newer controller scripts; disagreement between workflow-provided recovery data and trusted persisted provenance fails closed.
+
+For a legacy exhausted bootstrap lease that predates `controllerHeadSha`, the prior control-plane SHA may be reconstructed only from the provenance-valid historical controller run by reading the exact SHA emitted by the deterministic checkout's `git log -1 --format=%H`. The workflow-run `head_sha`, dispatch SHA, or another event SHA is not a substitute for the checked-out control-plane identity. Guard and reservation must independently re-derive this legacy evidence, and missing or ambiguous checkout evidence fails closed.
+
+The same control-plane SHA cannot grant a second recovery. If the recovery dispatch also fails before material output, the bootstrap returns to `escalated-initial-budget-exhausted` for that SHA; another recovery requires a later verified control-plane SHA change. Ambiguous provenance, a non-pre-material failure, a material/functional failure, or an ineligible worker conclusion keeps `human-escalation`. Once a usable material candidate exists, normal CI, audit, remediation, exact-head release, and implementation/audit-remediation limits apply unchanged.
 
 ## 9. DV2-005 and DV2-006 — Adaptive CI and safe classification
 
