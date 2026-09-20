@@ -339,6 +339,8 @@ A bootstrap that exhausted its initial reservation budget before producing a usa
 
 The recovery is deterministic controller authority, never AI self-extension. It is represented within the configured implementation-attempt ceiling and is tagged with recovery provenance: the prior implementation-attempt count, the prior/current controller SHAs, the recovery reason, and `grantedImplementationAttempts=1`. The prior exhausted state therefore remains traceable instead of being silently discarded.
 
+The reservation step independently re-derives recovery eligibility from the trusted persisted bootstrap lease and the actually checked-out control-plane SHA. Workflow-provided recovery fields are compatibility cross-checks, not the sole authority. A run that started from older workflow YAML must not silently discard recovery provenance after checking out newer controller scripts; disagreement between workflow-provided recovery data and trusted persisted provenance fails closed.
+
 The same control-plane SHA cannot grant a second recovery. If the recovery dispatch also fails before material output, the bootstrap returns to `escalated-initial-budget-exhausted` for that SHA; another recovery requires a later verified control-plane SHA change. Ambiguous provenance, a non-pre-material failure, a material/functional failure, or an ineligible worker conclusion keeps `human-escalation`. Once a usable material candidate exists, normal CI, audit, remediation, exact-head release, and implementation/audit-remediation limits apply unchanged.
 
 ## 9. DV2-005 and DV2-006 — Adaptive CI and safe classification

@@ -4,10 +4,14 @@ import test from 'node:test';
 
 import {
   evaluateReentry,
+  recoveryContextForExhaustedBootstrap,
   resolveCheckedOutControlPlaneHeadSha,
   terminalBootstrapLease
 } from '../scripts/guard-delivery-v2-reentry.mjs';
-import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
+import {
+  bootstrapLeaseForDecision,
+  resolveRecoveryForReservation
+} from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
 
 const CONTROL_PLANE_A = 'a'.repeat(40);
 const EVENT_REF_B = 'b'.repeat(40);
@@ -69,7 +73,12 @@ test('recovery propagates the checked-out control-plane SHA instead of GITHUB_SH
 
   assert.match(
     reserve,
-    /currentControllerHeadSha: requiredEnv\('DELIVERY_V2_RECOVERY_CURRENT_CONTROLLER_SHA'\)/
+    /currentControllerHeadSha:\s*requiredEnv\(\s*'DELIVERY_V2_RECOVERY_CURRENT_CONTROLLER_SHA'\s*\)/
+  );
+
+  assert.match(
+    reserve,
+    /resolveRecoveryForReservation\(\{/
   );
 
   assert.doesNotMatch(
@@ -84,6 +93,124 @@ test('invalid checked-out HEAD fails closed', () => {
       readHead: () => 'not-a-git-sha'
     }),
     /checked-out control-plane HEAD must be an exact Git commit SHA/
+  );
+});
+
+test('reserve reconstructs recovery provenance when older workflow YAML omits recovery env', () => {
+  const exhaustedLease = {
+    repository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    implementationAttempts: 3,
+    status: 'escalated-initial-budget-exhausted',
+    effectiveRisk: 'critical',
+    failureClass: 'infrastructure',
+    failureStage: 'pre-material',
+    workerConclusion: 'timed_out',
+    controllerHeadSha: CONTROL_PLANE_A
+  };
+
+  const recovery = resolveRecoveryForReservation({
+    persistedBootstrapLease: exhaustedLease,
+    currentControllerHeadSha: CONTROL_PLANE_B,
+    priorImplementationAttempts: 2,
+    envRecovery: null
+  });
+
+  assert.deepEqual(recovery, {
+    reason: 'control-plane-changed-after-pre-material-exhaustion',
+    previousImplementationAttempts: 3,
+    previousControllerHeadSha: CONTROL_PLANE_A,
+    currentControllerHeadSha: CONTROL_PLANE_B,
+    grantedImplementationAttempts: 1
+  });
+
+  const lease = bootstrapLeaseForDecision({
+    decision: {
+      dispatchAllowed: true,
+      securityProfile: 'critical'
+    },
+    repository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    requestedRisk: 'critical',
+    runId: 202,
+    priorImplementationAttempts: 2,
+    workerWorkflow: 'worker.yml',
+    dispatchNonce: 'legacy-workflow-recovery',
+    controllerHeadSha: CONTROL_PLANE_B,
+    recovery
+  });
+
+  assert.equal(lease.implementationAttempts, 3);
+  assert.equal(lease.controllerHeadSha, CONTROL_PLANE_B);
+  assert.deepEqual(lease.recovery, recovery);
+});
+
+test('reserve rejects recovery env that disagrees with trusted persisted provenance', () => {
+  const exhaustedLease = {
+    repository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    implementationAttempts: 3,
+    status: 'escalated-initial-budget-exhausted',
+    effectiveRisk: 'critical',
+    failureClass: 'unknown',
+    failureStage: 'pre-material',
+    workerConclusion: 'failure',
+    controllerHeadSha: CONTROL_PLANE_A
+  };
+
+  assert.throws(
+    () => resolveRecoveryForReservation({
+      persistedBootstrapLease: exhaustedLease,
+      currentControllerHeadSha: CONTROL_PLANE_B,
+      priorImplementationAttempts: 2,
+      envRecovery: {
+        reason: 'control-plane-changed-after-pre-material-exhaustion',
+        previousImplementationAttempts: 3,
+        previousControllerHeadSha: CONTROL_PLANE_A,
+        currentControllerHeadSha: CONTROL_PLANE_C
+      }
+    }),
+    /recovery environment does not match trusted bootstrap provenance/
+  );
+});
+
+test('reserve fails closed when exhausted bootstrap is not eligible for the current epoch', () => {
+  const exhaustedLease = {
+    repository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    implementationAttempts: 3,
+    status: 'escalated-initial-budget-exhausted',
+    effectiveRisk: 'critical',
+    failureClass: 'infrastructure',
+    failureStage: 'pre-material',
+    workerConclusion: 'timed_out',
+    controllerHeadSha: CONTROL_PLANE_A
+  };
+
+  assert.equal(
+    recoveryContextForExhaustedBootstrap({
+      bootstrapLease: exhaustedLease,
+      currentControllerHeadSha: CONTROL_PLANE_A
+    }),
+    null
+  );
+
+  assert.throws(
+    () => resolveRecoveryForReservation({
+      persistedBootstrapLease: exhaustedLease,
+      currentControllerHeadSha: CONTROL_PLANE_A,
+      priorImplementationAttempts: 2,
+      envRecovery: null
+    }),
+    /trusted exhausted bootstrap lease is not eligible for recovery/
   );
 });
 
@@ -340,6 +467,10 @@ test('canonical documentation defines bounded pre-material recovery without weak
   assert.match(master, /exactly one recovery dispatch for a control-plane epoch/);
   assert.match(master, /cannot authorize a fourth material implementation attempt/);
   assert.match(master, /same control-plane SHA cannot grant a second recovery/i);
+  assert.match(
+    master,
+    /reservation step independently re-derives recovery eligibility/
+  );
 
   assert.match(operations, /exactly one recovery dispatch per verified control-plane SHA epoch/);
   assert.match(operations, /same control-plane SHA remains `human-escalation`/);

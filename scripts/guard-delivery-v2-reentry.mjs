@@ -33,25 +33,47 @@ export function resolveCheckedOutControlPlaneHeadSha({
   return sha;
 }
 
-function exhaustedBootstrapCanRearm({
+export function recoveryContextForExhaustedBootstrap({
   bootstrapLease,
   currentControllerHeadSha
-}) {
+} = {}) {
   const previousControllerHeadSha = normalizedSha(
     bootstrapLease?.recovery?.currentControllerHeadSha
       ?? bootstrapLease?.controllerHeadSha
   );
-  const currentControlPlaneHeadSha = normalizedSha(currentControllerHeadSha);
-  const failureClass = String(bootstrapLease?.failureClass ?? '').trim().toLowerCase();
-  const workerConclusion = String(bootstrapLease?.workerConclusion ?? '').trim().toLowerCase();
+  const currentControlPlaneHeadSha = normalizedSha(
+    currentControllerHeadSha
+  );
+  const previousImplementationAttempts = Number(
+    bootstrapLease?.implementationAttempts
+  );
+  const failureClass = String(
+    bootstrapLease?.failureClass ?? ''
+  ).trim().toLowerCase();
+  const workerConclusion = String(
+    bootstrapLease?.workerConclusion ?? ''
+  ).trim().toLowerCase();
 
-  return bootstrapLease?.status === 'escalated-initial-budget-exhausted'
+  const eligible =
+    bootstrapLease?.status === 'escalated-initial-budget-exhausted'
     && bootstrapLease?.failureStage === 'pre-material'
     && RECOVERABLE_PRE_MATERIAL_FAILURE_CLASSES.has(failureClass)
     && RECOVERABLE_PRE_MATERIAL_CONCLUSIONS.has(workerConclusion)
+    && Number.isInteger(previousImplementationAttempts)
+    && previousImplementationAttempts >= 1
     && previousControllerHeadSha
     && currentControlPlaneHeadSha
     && previousControllerHeadSha !== currentControlPlaneHeadSha;
+
+  if (!eligible) return null;
+
+  return Object.freeze({
+    reason: 'control-plane-changed-after-pre-material-exhaustion',
+    previousImplementationAttempts,
+    previousControllerHeadSha,
+    currentControllerHeadSha: currentControlPlaneHeadSha,
+    grantedImplementationAttempts: 1
+  });
 }
 
 function requiredEnv(name) {
@@ -236,18 +258,12 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
     // recovery path is an eligible pre-material failure plus a verified
     // checked-out control-plane SHA change.
     if (bootstrapLease.status === 'escalated-initial-budget-exhausted') {
-      if (exhaustedBootstrapCanRearm({
+      const recovery = recoveryContextForExhaustedBootstrap({
         bootstrapLease,
         currentControllerHeadSha
-      })) {
-        const previousControllerHeadSha = normalizedSha(
-          bootstrapLease?.recovery?.currentControllerHeadSha
-            ?? bootstrapLease?.controllerHeadSha
-        );
-        const currentControlPlaneHeadSha = normalizedSha(
-          currentControllerHeadSha
-        );
+      });
 
+      if (recovery) {
         return Object.freeze({
           runController: true,
           resumePr: null,
@@ -259,19 +275,12 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
           nextAction: 'retry-initial-worker',
           priorInitialAttempts: Math.max(
             0,
-            bootstrapLease.implementationAttempts - 1
+            recovery.previousImplementationAttempts - 1
           ),
           attempts: {
-            implementation: bootstrapLease.implementationAttempts
+            implementation: recovery.previousImplementationAttempts
           },
-          recovery: {
-            reason: 'control-plane-changed-after-pre-material-exhaustion',
-            previousImplementationAttempts:
-              bootstrapLease.implementationAttempts,
-            previousControllerHeadSha,
-            currentControllerHeadSha: currentControlPlaneHeadSha,
-            grantedImplementationAttempts: 1
-          }
+          recovery
         });
       }
 

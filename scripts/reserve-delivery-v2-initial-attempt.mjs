@@ -8,7 +8,11 @@ import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { createDispatchDecision } from '../src/v2/dispatch-policy.mjs';
 import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { createDispatchNonce } from '../src/v2/controller-runtime.mjs';
-import { resolveCheckedOutControlPlaneHeadSha } from './guard-delivery-v2-reentry.mjs';
+import {
+  parseBootstrapLease,
+  recoveryContextForExhaustedBootstrap,
+  resolveCheckedOutControlPlaneHeadSha
+} from './guard-delivery-v2-reentry.mjs';
 import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
 
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
@@ -40,6 +44,76 @@ function normalizeRecoveryContext(value) {
     currentControllerHeadSha,
     grantedImplementationAttempts: 1
   });
+}
+
+export function resolveRecoveryForReservation({
+  persistedBootstrapLease = null,
+  currentControllerHeadSha,
+  priorImplementationAttempts = 0,
+  envRecovery = null
+} = {}) {
+  const normalizedEnvRecovery = normalizeRecoveryContext(envRecovery);
+
+  if (
+    persistedBootstrapLease?.status
+      !== 'escalated-initial-budget-exhausted'
+  ) {
+    if (normalizedEnvRecovery) {
+      throw new Error(
+        'recovery environment requires a trusted exhausted bootstrap lease'
+      );
+    }
+    return null;
+  }
+
+  const persistedRecovery = recoveryContextForExhaustedBootstrap({
+    bootstrapLease: persistedBootstrapLease,
+    currentControllerHeadSha
+  });
+
+  if (!persistedRecovery) {
+    throw new Error(
+      'trusted exhausted bootstrap lease is not eligible for recovery '
+      + 'on the checked-out control-plane SHA'
+    );
+  }
+
+  const prior = Number(priorImplementationAttempts);
+  const expectedPrior =
+    persistedRecovery.previousImplementationAttempts - 1;
+
+  if (!Number.isInteger(prior) || prior !== expectedPrior) {
+    throw new Error(
+      'recovery prior implementation attempts do not match '
+      + 'trusted bootstrap provenance'
+    );
+  }
+
+  if (normalizedEnvRecovery) {
+    const keys = [
+      'reason',
+      'previousImplementationAttempts',
+      'previousControllerHeadSha',
+      'currentControllerHeadSha',
+      'grantedImplementationAttempts'
+    ];
+
+    const mismatch = keys.some(
+      (key) =>
+        normalizedEnvRecovery[key] !== persistedRecovery[key]
+    );
+
+    if (mismatch) {
+      throw new Error(
+        'recovery environment does not match trusted bootstrap provenance'
+      );
+    }
+  }
+
+  // Persisted trusted state is authoritative. Environment fields are
+  // compatibility evidence only. This preserves recovery provenance
+  // even when a run started from older workflow YAML.
+  return persistedRecovery;
 }
 
 function requiredEnv(name) {
@@ -176,15 +250,49 @@ async function main() {
   const runId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
   const controllerHeadSha = resolveCheckedOutControlPlaneHeadSha();
   const priorImplementationAttempts = Number.parseInt(String(process.env.DELIVERY_V2_PRIOR_INITIAL_ATTEMPTS ?? '0'), 10);
-  const recoveryReason = String(process.env.DELIVERY_V2_RECOVERY_REASON ?? '').trim();
-  const recovery = recoveryReason ? {
+  const recoveryReason = String(
+    process.env.DELIVERY_V2_RECOVERY_REASON ?? ''
+  ).trim();
+
+  const envRecovery = recoveryReason ? {
     reason: recoveryReason,
-    previousImplementationAttempts: Number.parseInt(String(process.env.DELIVERY_V2_RECOVERY_PREVIOUS_ATTEMPTS ?? ''), 10),
-    previousControllerHeadSha: String(process.env.DELIVERY_V2_RECOVERY_PREVIOUS_CONTROLLER_SHA ?? '').trim(),
-    currentControllerHeadSha: requiredEnv('DELIVERY_V2_RECOVERY_CURRENT_CONTROLLER_SHA')
+    previousImplementationAttempts: Number.parseInt(
+      String(
+        process.env.DELIVERY_V2_RECOVERY_PREVIOUS_ATTEMPTS ?? ''
+      ),
+      10
+    ),
+    previousControllerHeadSha: String(
+      process.env.DELIVERY_V2_RECOVERY_PREVIOUS_CONTROLLER_SHA ?? ''
+    ).trim(),
+    currentControllerHeadSha: requiredEnv(
+      'DELIVERY_V2_RECOVERY_CURRENT_CONTROLLER_SHA'
+    )
   } : null;
 
-  const issue = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}`, readToken);
+  const issue = await api(
+    `https://api.github.com/repos/${repository}/issues/${issueNumber}`,
+    readToken
+  );
+
+  const comments = await api(
+    `https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=100`,
+    readToken
+  );
+
+  const trustedLogin = trustedCommentAuthorForRepository(repository);
+
+  const persistedBootstrapLease = parseBootstrapLease(
+    comments,
+    { trustedLogin }
+  );
+
+  const recovery = resolveRecoveryForReservation({
+    persistedBootstrapLease,
+    currentControllerHeadSha: controllerHeadSha,
+    priorImplementationAttempts,
+    envRecovery
+  });
   const explicitChangedPaths = splitPaths(process.env.DELIVERY_CHANGED_PATHS);
   let changedPaths = explicitChangedPaths;
   if (changedPaths.length === 0) changedPaths = await deterministicIssuePaths(repository, baseBranch, issue.body, readToken);
@@ -210,8 +318,11 @@ async function main() {
 
   if (lease) {
     const body = `${BOOTSTRAP_MARKER}\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify(lease, null, 2)}\n\`\`\``;
-    const comments = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=100`, readToken);
-    const existing = selectTrustedMarkerComment(comments, { marker: BOOTSTRAP_MARKER, label: 'Delivery V2 bootstrap state', trustedLogin: trustedCommentAuthorForRepository(repository) });
+    const existing = selectTrustedMarkerComment(comments, {
+      marker: BOOTSTRAP_MARKER,
+      label: 'Delivery V2 bootstrap state',
+      trustedLogin
+    });
     if (existing) await api(`https://api.github.com/repos/${repository}/issues/comments/${existing.id}`, writeToken, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
     else await postJson(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`, writeToken, { body });
   }
