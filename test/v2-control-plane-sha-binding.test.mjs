@@ -3,8 +3,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  checkedOutControlPlaneHeadShaFromJobLog,
   evaluateReentry,
   recoveryContextForExhaustedBootstrap,
+  resolveBootstrapControllerHeadShaFromRun,
   resolveCheckedOutControlPlaneHeadSha,
   terminalBootstrapLease
 } from '../scripts/guard-delivery-v2-reentry.mjs';
@@ -93,6 +95,111 @@ test('invalid checked-out HEAD fails closed', () => {
       readHead: () => 'not-a-git-sha'
     }),
     /checked-out control-plane HEAD must be an exact Git commit SHA/
+  );
+});
+
+test('legacy exhausted bootstrap without controllerHeadSha recovers the exact checked-out SHA from controller job logs', async () => {
+  const legacyLease = {
+    repository: 'owner/repo',
+    issueNumber: 615,
+    baseBranch: 'main',
+    provider: 'codex',
+    implementationAttempts: 3,
+    status: 'escalated-initial-budget-exhausted',
+    effectiveRisk: 'standard',
+    controllerRunId: 35356774626,
+    failureClass: 'unknown',
+    failureStage: 'pre-material',
+    workerConclusion: 'failure'
+  };
+
+  const controllerRun = {
+    id: 35356774626,
+    repository: {
+      full_name: 'crgasparoto-br/delivery-orchestrator'
+    },
+    event: 'workflow_dispatch',
+    path: '.github/workflows/delivery-v2-dispatch.yml',
+    head_branch: 'main',
+
+    // Deliberately not authoritative. The checkout log below is.
+    head_sha: EVENT_REF_B
+  };
+
+  const jobLog = [
+    '2026-09-18T14:31:44.3230756Z ##[group]Checking out the ref',
+    '2026-09-18T14:31:44.3493326Z [command]/usr/bin/git log -1 --format=%H',
+    `2026-09-18T14:31:44.3522836Z ${CONTROL_PLANE_A}`
+  ].join('\n');
+
+  const previousControllerHeadSha =
+    await resolveBootstrapControllerHeadShaFromRun({
+      bootstrapLease: legacyLease,
+      controllerRun,
+      orchestratorRepository:
+        'crgasparoto-br/delivery-orchestrator',
+      trustedRef: 'main',
+      actionsToken: 'test-token',
+      listJobs: async () => [{
+        id: 105637947578,
+        name: 'Bounded deterministic delivery'
+      }],
+      readJobLog: async () => jobLog
+    });
+
+  assert.equal(
+    previousControllerHeadSha,
+    CONTROL_PLANE_A
+  );
+
+  assert.notEqual(
+    previousControllerHeadSha,
+    controllerRun.head_sha
+  );
+
+  const decision = evaluateReentry({
+    bootstrapLease: legacyLease,
+    targetRepository: 'owner/repo',
+    issueNumber: 615,
+    baseBranch: 'main',
+    provider: 'codex',
+    bootstrapControllerHeadSha:
+      previousControllerHeadSha,
+    currentControllerHeadSha: CONTROL_PLANE_B
+  });
+
+  assert.equal(decision.runController, true);
+  assert.equal(decision.nextAction, 'retry-initial-worker');
+
+  const recovery = resolveRecoveryForReservation({
+    persistedBootstrapLease: legacyLease,
+    currentControllerHeadSha: CONTROL_PLANE_B,
+    priorImplementationAttempts: 2,
+    envRecovery: null,
+    bootstrapControllerHeadSha:
+      previousControllerHeadSha
+  });
+
+  assert.deepEqual(recovery, {
+    reason: 'control-plane-changed-after-pre-material-exhaustion',
+    previousImplementationAttempts: 3,
+    previousControllerHeadSha: CONTROL_PLANE_A,
+    currentControllerHeadSha: CONTROL_PLANE_B,
+    grantedImplementationAttempts: 1
+  });
+});
+
+test('legacy checkout provenance fails closed when controller logs are ambiguous', () => {
+  const log = [
+    '[command]/usr/bin/git log -1 --format=%H',
+    CONTROL_PLANE_A,
+    '[command]/usr/bin/git log -1 --format=%H',
+    CONTROL_PLANE_B
+  ].join('\n');
+
+  assert.throws(
+    () => checkedOutControlPlaneHeadShaFromJobLog(log),
+    /exactly one checked-out control-plane SHA/
   );
 });
 

@@ -11,6 +11,7 @@ import { createDispatchNonce } from '../src/v2/controller-runtime.mjs';
 import {
   parseBootstrapLease,
   recoveryContextForExhaustedBootstrap,
+  resolveBootstrapControllerHeadShaFromRun,
   resolveCheckedOutControlPlaneHeadSha
 } from './guard-delivery-v2-reentry.mjs';
 import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
@@ -50,7 +51,8 @@ export function resolveRecoveryForReservation({
   persistedBootstrapLease = null,
   currentControllerHeadSha,
   priorImplementationAttempts = 0,
-  envRecovery = null
+  envRecovery = null,
+  bootstrapControllerHeadSha = null
 } = {}) {
   const normalizedEnvRecovery = normalizeRecoveryContext(envRecovery);
 
@@ -68,7 +70,8 @@ export function resolveRecoveryForReservation({
 
   const persistedRecovery = recoveryContextForExhaustedBootstrap({
     bootstrapLease: persistedBootstrapLease,
-    currentControllerHeadSha
+    currentControllerHeadSha,
+    bootstrapControllerHeadSha
   });
 
   if (!persistedRecovery) {
@@ -247,6 +250,9 @@ async function main() {
   const requestedRisk = requiredEnv('DELIVERY_RISK_PROFILE').toLowerCase();
   const readToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const writeToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
+  const actionsToken = requiredEnv('GITHUB_TOKEN');
+  const orchestratorRepository = requiredEnv('GITHUB_REPOSITORY');
+  const orchestratorRef = requiredEnv('ORCHESTRATOR_WORKER_REF');
   const runId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
   const controllerHeadSha = resolveCheckedOutControlPlaneHeadSha();
   const priorImplementationAttempts = Number.parseInt(String(process.env.DELIVERY_V2_PRIOR_INITIAL_ATTEMPTS ?? '0'), 10);
@@ -287,11 +293,38 @@ async function main() {
     { trustedLogin }
   );
 
+  let bootstrapControllerHeadSha = null;
+
+  if (
+    persistedBootstrapLease?.status
+      === 'escalated-initial-budget-exhausted'
+  ) {
+    const previousControllerRunId = positiveInteger(
+      persistedBootstrapLease.controllerRunId,
+      'bootstrap controllerRunId'
+    );
+
+    const previousControllerRun = await api(
+      `https://api.github.com/repos/${orchestratorRepository}/actions/runs/${previousControllerRunId}`,
+      actionsToken
+    );
+
+    bootstrapControllerHeadSha =
+      await resolveBootstrapControllerHeadShaFromRun({
+        bootstrapLease: persistedBootstrapLease,
+        controllerRun: previousControllerRun,
+        orchestratorRepository,
+        trustedRef: orchestratorRef,
+        actionsToken
+      });
+  }
+
   const recovery = resolveRecoveryForReservation({
     persistedBootstrapLease,
     currentControllerHeadSha: controllerHeadSha,
     priorImplementationAttempts,
-    envRecovery
+    envRecovery,
+    bootstrapControllerHeadSha
   });
   const explicitChangedPaths = splitPaths(process.env.DELIVERY_CHANGED_PATHS);
   let changedPaths = explicitChangedPaths;

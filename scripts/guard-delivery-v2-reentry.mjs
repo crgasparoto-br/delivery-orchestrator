@@ -35,11 +35,13 @@ export function resolveCheckedOutControlPlaneHeadSha({
 
 export function recoveryContextForExhaustedBootstrap({
   bootstrapLease,
-  currentControllerHeadSha
+  currentControllerHeadSha,
+  bootstrapControllerHeadSha = null
 } = {}) {
   const previousControllerHeadSha = normalizedSha(
     bootstrapLease?.recovery?.currentControllerHeadSha
       ?? bootstrapLease?.controllerHeadSha
+      ?? bootstrapControllerHeadSha
   );
   const currentControlPlaneHeadSha = normalizedSha(
     currentControllerHeadSha
@@ -104,6 +106,158 @@ async function api(url, token, options = {}) {
   );
   if (!response.ok) throw new Error(`GitHub API ${response.status} ${options.method ?? 'GET'} ${url}: ${await response.text()}`);
   return response.json();
+}
+
+function githubLogPayload(line) {
+  const value = String(line ?? '');
+  const timestamped = value.match(
+    /^\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+(.*)$/
+  );
+  return String(timestamped?.[1] ?? value).trim();
+}
+
+export function checkedOutControlPlaneHeadShaFromJobLog(logText) {
+  const lines = String(logText ?? '').split(/\r?\n/);
+  const candidates = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const current = githubLogPayload(lines[index]);
+
+    if (
+      !current.includes(
+        '[command]/usr/bin/git log -1 --format=%H'
+      )
+    ) {
+      continue;
+    }
+
+    for (
+      let candidateIndex = index + 1;
+      candidateIndex < Math.min(lines.length, index + 8);
+      candidateIndex += 1
+    ) {
+      const payload = githubLogPayload(lines[candidateIndex]);
+      const sha = normalizedSha(payload);
+
+      if (sha) {
+        candidates.push(sha);
+        break;
+      }
+    }
+  }
+
+  const unique = [...new Set(candidates)];
+
+  if (unique.length !== 1) {
+    throw new Error(
+      'legacy controller checkout provenance requires exactly one '
+      + 'checked-out control-plane SHA'
+    );
+  }
+
+  return unique[0];
+}
+
+export async function resolveBootstrapControllerHeadShaFromRun({
+  bootstrapLease,
+  controllerRun,
+  orchestratorRepository,
+  trustedRef,
+  actionsToken,
+  listJobs = async ({ repository, runId, token }) => {
+    const payload = await api(
+      `https://api.github.com/repos/${repository}/actions/runs/${runId}/jobs?per_page=100`,
+      token
+    );
+    return payload.jobs ?? [];
+  },
+  readJobLog = async ({ repository, jobId, token }) => {
+    const url =
+      `https://api.github.com/repos/${repository}/actions/jobs/${jobId}/logs`;
+
+    const response = await withTransientFetchRetry(
+      () => fetch(url, { headers: headers(token) }),
+      { label: `legacy controller checkout log ${jobId}` }
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `GitHub API ${response.status} GET ${url}: ${await response.text()}`
+      );
+    }
+
+    return response.text();
+  }
+} = {}) {
+  const persisted = normalizedSha(
+    bootstrapLease?.recovery?.currentControllerHeadSha
+      ?? bootstrapLease?.controllerHeadSha
+  );
+
+  if (persisted) return persisted;
+
+  if (
+    bootstrapLease?.status
+      !== 'escalated-initial-budget-exhausted'
+  ) {
+    return null;
+  }
+
+  const runId = positiveInteger(
+    bootstrapLease?.controllerRunId,
+    'bootstrap controllerRunId'
+  );
+
+  const observedRunId = positiveInteger(
+    controllerRun?.id,
+    'controller workflow run id'
+  );
+
+  if (observedRunId !== runId) {
+    throw new Error(
+      'bootstrap controller run does not match persisted provenance'
+    );
+  }
+
+  validateControllerRunProvenance(controllerRun, {
+    orchestratorRepository,
+    trustedRef
+  });
+
+  const jobs = await listJobs({
+    repository: orchestratorRepository,
+    runId,
+    token: actionsToken
+  });
+
+  if (!Array.isArray(jobs)) {
+    throw new Error('controller workflow jobs must be an array');
+  }
+
+  const matchingJobs = jobs.filter(
+    (job) => String(job?.name ?? '')
+      === 'Bounded deterministic delivery'
+  );
+
+  if (matchingJobs.length !== 1) {
+    throw new Error(
+      'legacy controller checkout provenance requires exactly one '
+      + 'Bounded deterministic delivery job'
+    );
+  }
+
+  const jobId = positiveInteger(
+    matchingJobs[0].id,
+    'controller workflow job id'
+  );
+
+  const logText = await readJobLog({
+    repository: orchestratorRepository,
+    jobId,
+    token: actionsToken
+  });
+
+  return checkedOutControlPlaneHeadShaFromJobLog(logText);
 }
 
 // Preserve the public entrypoint while sharing the exact identity contract with resume.
@@ -260,7 +414,8 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
     if (bootstrapLease.status === 'escalated-initial-budget-exhausted') {
       const recovery = recoveryContextForExhaustedBootstrap({
         bootstrapLease,
-        currentControllerHeadSha
+        currentControllerHeadSha,
+        bootstrapControllerHeadSha
       });
 
       if (recovery) {
@@ -475,6 +630,18 @@ async function main() {
     validateControllerRunProvenance(provenanceControllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
     if (adoptionEnvelope && !stateEnvelope) validateLegacyAdoptionControllerRun(adoptionEnvelope, provenanceControllerRun, { orchestratorRepository, trustedRef: orchestratorRef });
   }
+
+  const bootstrapControllerHeadSha =
+    bootstrapLease && provenanceControllerRun
+      ? await resolveBootstrapControllerHeadShaFromRun({
+          bootstrapLease,
+          controllerRun: provenanceControllerRun,
+          orchestratorRepository,
+          trustedRef: orchestratorRef,
+          actionsToken
+        })
+      : null;
+
   const recoveredWorkerRun = bootstrapLease ? await recoverBootstrapWorkerRun(bootstrapLease, orchestratorRepository, orchestratorRef, actionsToken) : null;
   const effectiveRisk = stateEnvelope?.persistent?.effectiveRisk ?? bootstrapLease?.effectiveRisk ?? 'critical';
   const aiPolicy = loadV2Config({}, process.env).aiPolicy;
@@ -490,6 +657,7 @@ async function main() {
     provider: expectedImplementer.provider,
     model: expectedImplementer.model,
     recoveredWorkerRun,
+    bootstrapControllerHeadSha,
     currentControllerHeadSha
   });
   await persistReentryMutation({
