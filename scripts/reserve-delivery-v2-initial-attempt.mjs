@@ -8,6 +8,7 @@ import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { createDispatchDecision } from '../src/v2/dispatch-policy.mjs';
 import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { createDispatchNonce } from '../src/v2/controller-runtime.mjs';
+import { resolveCheckedOutControlPlaneHeadSha } from './guard-delivery-v2-reentry.mjs';
 import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
 
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
@@ -123,10 +124,22 @@ function makePlan({ repository, issueNumber, provider, requestedRisk, changedPat
   }, {}));
 }
 
-export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, model = null, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce(), scopeBinding = null, recovery = null } = {}) {
+export function bootstrapLeaseForDecision({ decision, repository, issueNumber, baseBranch, provider, model = null, requestedRisk, runId, priorImplementationAttempts = 0, workerWorkflow, dispatchNonce = createDispatchNonce(), scopeBinding = null, controllerHeadSha = null, recovery = null } = {}) {
   if (!decision?.dispatchAllowed) return null;
   const policy = executionPolicyFor(decision.securityProfile);
   const recoveryContext = normalizeRecoveryContext(recovery);
+  const resolvedControllerHeadSha = controllerHeadSha == null
+    ? null
+    : String(controllerHeadSha).trim().toLowerCase();
+
+  if (
+    controllerHeadSha != null
+    && !SHA_RE.test(resolvedControllerHeadSha)
+  ) {
+    throw new Error(
+      'controllerHeadSha must be an exact Git commit SHA'
+    );
+  }
   const nextAttempt = Number(priorImplementationAttempts) + 1;
   if (!Number.isInteger(nextAttempt) || nextAttempt < 1 || nextAttempt > policy.maxImplementationAttempts) throw new Error('initial implementation attempt budget exhausted');
   return Object.freeze({
@@ -145,6 +158,9 @@ export function bootstrapLeaseForDecision({ decision, repository, issueNumber, b
     workerWorkflow: String(workerWorkflow ?? ''),
     dispatchNonce: String(dispatchNonce),
     scopeBinding,
+    ...(resolvedControllerHeadSha
+      ? { controllerHeadSha: resolvedControllerHeadSha }
+      : {}),
     ...(recoveryContext ? { recovery: recoveryContext } : {})
   });
 }
@@ -158,6 +174,7 @@ async function main() {
   const readToken = requiredEnv('DELIVERY_GITHUB_READ_TOKEN');
   const writeToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
   const runId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
+  const controllerHeadSha = resolveCheckedOutControlPlaneHeadSha();
   const priorImplementationAttempts = Number.parseInt(String(process.env.DELIVERY_V2_PRIOR_INITIAL_ATTEMPTS ?? '0'), 10);
   const recoveryReason = String(process.env.DELIVERY_V2_RECOVERY_REASON ?? '').trim();
   const recovery = recoveryReason ? {
@@ -187,6 +204,7 @@ async function main() {
     priorImplementationAttempts,
     workerWorkflow: plan.implementation.workflow,
     scopeBinding,
+    controllerHeadSha,
     recovery
   });
 

@@ -98,7 +98,8 @@ test('recovery is one-shot for the same checked-out control-plane epoch after a 
     effectiveRisk: 'critical',
     failureClass: 'infrastructure',
     failureStage: 'pre-material',
-    workerConclusion: 'timed_out'
+    workerConclusion: 'timed_out',
+    controllerHeadSha: CONTROL_PLANE_A
   };
 
   const rearm = evaluateReentry({
@@ -205,6 +206,116 @@ test('recovery is one-shot for the same checked-out control-plane epoch after a 
     nextEpoch.recovery.currentControllerHeadSha,
     CONTROL_PLANE_C
   );
+});
+
+
+test('terminal exhaustion cannot be reopened by increasing the runtime attempt ceiling', () => {
+  const previous = process.env.DELIVERY_CRITICAL_MAX_IMPLEMENTATION_ATTEMPTS;
+  process.env.DELIVERY_CRITICAL_MAX_IMPLEMENTATION_ATTEMPTS = '4';
+
+  try {
+    const decision = evaluateReentry({
+      bootstrapLease: {
+        repository: 'owner/repo',
+        issueNumber: 63,
+        baseBranch: 'main',
+        provider: 'codex',
+        implementationAttempts: 3,
+        status: 'escalated-initial-budget-exhausted',
+        effectiveRisk: 'critical',
+        failureClass: 'infrastructure',
+        failureStage: 'pre-material',
+        workerConclusion: 'timed_out',
+        controllerHeadSha: CONTROL_PLANE_A
+      },
+      targetRepository: 'owner/repo',
+      issueNumber: 63,
+      baseBranch: 'main',
+      provider: 'codex',
+      currentControllerHeadSha: CONTROL_PLANE_A
+    });
+
+    assert.equal(decision.runController, false);
+    assert.equal(
+      decision.status,
+      'escalated-initial-budget-exhausted'
+    );
+    assert.equal(decision.nextAction, 'human-escalation');
+  } finally {
+    if (previous == null) {
+      delete process.env.DELIVERY_CRITICAL_MAX_IMPLEMENTATION_ATTEMPTS;
+    } else {
+      process.env.DELIVERY_CRITICAL_MAX_IMPLEMENTATION_ATTEMPTS = previous;
+    }
+  }
+});
+
+test('recovery binds the previous epoch to the persisted checked-out SHA, not workflow run head_sha', () => {
+  const lease = bootstrapLeaseForDecision({
+    decision: {
+      dispatchAllowed: true,
+      securityProfile: 'critical'
+    },
+    repository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    requestedRisk: 'critical',
+    runId: 202,
+    priorImplementationAttempts: 2,
+    workerWorkflow: 'worker.yml',
+    dispatchNonce: 'checkout-bound-nonce',
+    controllerHeadSha: CONTROL_PLANE_B
+  });
+
+  assert.equal(lease.implementationAttempts, 3);
+  assert.equal(lease.controllerHeadSha, CONTROL_PLANE_B);
+
+  const terminalLease = {
+    ...lease,
+    status: 'escalated-initial-budget-exhausted',
+    failureClass: 'infrastructure',
+    failureStage: 'pre-material',
+    workerConclusion: 'timed_out'
+  };
+
+  const sameCheckedOutEpoch = evaluateReentry({
+    bootstrapLease: terminalLease,
+    targetRepository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+
+    // Deliberately stale/different workflow metadata. It must not
+    // manufacture a control-plane epoch transition.
+    bootstrapControllerHeadSha: CONTROL_PLANE_A,
+    currentControllerHeadSha: CONTROL_PLANE_B
+  });
+
+  assert.equal(sameCheckedOutEpoch.runController, false);
+  assert.equal(sameCheckedOutEpoch.nextAction, 'human-escalation');
+
+  const nextCheckedOutEpoch = evaluateReentry({
+    bootstrapLease: terminalLease,
+    targetRepository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    bootstrapControllerHeadSha: CONTROL_PLANE_A,
+    currentControllerHeadSha: CONTROL_PLANE_C
+  });
+
+  assert.equal(nextCheckedOutEpoch.runController, true);
+  assert.equal(nextCheckedOutEpoch.nextAction, 'retry-initial-worker');
+  assert.equal(
+    nextCheckedOutEpoch.recovery.previousControllerHeadSha,
+    CONTROL_PLANE_B
+  );
+  assert.equal(
+    nextCheckedOutEpoch.recovery.currentControllerHeadSha,
+    CONTROL_PLANE_C
+  );
+  assert.equal(nextCheckedOutEpoch.priorInitialAttempts, 2);
 });
 
 test('canonical documentation defines bounded pre-material recovery without weakening the normal attempt ceiling', () => {

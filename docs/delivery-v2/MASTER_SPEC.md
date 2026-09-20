@@ -333,8 +333,9 @@ A bootstrap that exhausted its initial reservation budget before producing a usa
 - the failure stage is `pre-material`;
 - the failure class is `infrastructure` or `unknown`;
 - the worker conclusion is `failure`, `timed_out`, `startup_failure`, or `cancelled`;
-- the prior controller run is provenance-valid and exposes an exact controller `head_sha`;
-- the currently checked-out control-plane `HEAD` is an exact Git SHA and differs from that prior controller `head_sha`.
+- the prior controller run is provenance-valid;
+- the bootstrap lease persists the exact control-plane SHA actually checked out by the controller that reserved or terminalized the exhausted attempt;
+- the currently checked-out control-plane `HEAD` is an exact Git SHA and differs from that persisted checked-out control-plane SHA.
 
 The recovery is deterministic controller authority, never AI self-extension. It is represented within the configured implementation-attempt ceiling and is tagged with recovery provenance: the prior implementation-attempt count, the prior/current controller SHAs, the recovery reason, and `grantedImplementationAttempts=1`. The prior exhausted state therefore remains traceable instead of being silently discarded.
 

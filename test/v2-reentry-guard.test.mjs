@@ -224,7 +224,8 @@ test('exhausted pre-material bootstrap grants exactly one recovery attempt after
       effectiveRisk: 'critical',
       failureClass: 'unknown',
       failureStage: 'pre-material',
-      workerConclusion: 'failure'
+      workerConclusion: 'failure',
+      controllerHeadSha: CONTROLLER_OLD
     },
     targetRepository: 'owner/repo',
     issueNumber: 63,
@@ -259,7 +260,8 @@ test('exhausted bootstrap remains blocked without a new control-plane epoch or f
     effectiveRisk: 'critical',
     failureClass: 'unknown',
     failureStage: 'pre-material',
-    workerConclusion: 'failure'
+    workerConclusion: 'failure',
+    controllerHeadSha: CONTROLLER_OLD
   };
 
   const sameControlPlane = evaluateReentry({

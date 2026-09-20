@@ -35,10 +35,12 @@ export function resolveCheckedOutControlPlaneHeadSha({
 
 function exhaustedBootstrapCanRearm({
   bootstrapLease,
-  bootstrapControllerHeadSha,
   currentControllerHeadSha
 }) {
-  const previousControllerHeadSha = normalizedSha(bootstrapControllerHeadSha);
+  const previousControllerHeadSha = normalizedSha(
+    bootstrapLease?.recovery?.currentControllerHeadSha
+      ?? bootstrapLease?.controllerHeadSha
+  );
   const currentControlPlaneHeadSha = normalizedSha(currentControllerHeadSha);
   const failureClass = String(bootstrapLease?.failureClass ?? '').trim().toLowerCase();
   const workerConclusion = String(bootstrapLease?.workerConclusion ?? '').trim().toLowerCase();
@@ -228,20 +230,23 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
     if (bootstrapLease.baseBranch !== String(baseBranch ?? '')) throw new Error('bootstrap lease base branch does not match requested delivery');
     assertAiPolicyMatch({ persistedProvider: bootstrapLease.provider, persistedModel: bootstrapLease.model, expectedProvider: resolvedProvider, expectedModel: model, label: 'bootstrap lease' });
     const policy = executionPolicyFor(bootstrapLease.effectiveRisk || 'critical');
-    if (recoveredWorkerRun && !['completed'].includes(String(recoveredWorkerRun.status ?? ''))) {
-      return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
-    }
-    if (recoveredWorkerRun?.status === 'completed' && recoveredWorkerRun?.conclusion === 'success') {
-      return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
-    }
-    if (bootstrapLease.implementationAttempts >= policy.maxImplementationAttempts) {
+
+    // A persisted terminal exhaustion is terminal regardless of a later
+    // runtime increase to MAX_IMPLEMENTATION_ATTEMPTS. Its only automatic
+    // recovery path is an eligible pre-material failure plus a verified
+    // checked-out control-plane SHA change.
+    if (bootstrapLease.status === 'escalated-initial-budget-exhausted') {
       if (exhaustedBootstrapCanRearm({
         bootstrapLease,
-        bootstrapControllerHeadSha,
         currentControllerHeadSha
       })) {
-        const previousControllerHeadSha = normalizedSha(bootstrapControllerHeadSha);
-        const currentControlPlaneHeadSha = normalizedSha(currentControllerHeadSha);
+        const previousControllerHeadSha = normalizedSha(
+          bootstrapLease?.recovery?.currentControllerHeadSha
+            ?? bootstrapLease?.controllerHeadSha
+        );
+        const currentControlPlaneHeadSha = normalizedSha(
+          currentControllerHeadSha
+        );
 
         return Object.freeze({
           runController: true,
@@ -252,11 +257,17 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
           materialHeadSha: null,
           staleStateDetected: false,
           nextAction: 'retry-initial-worker',
-          priorInitialAttempts: Math.max(0, policy.maxImplementationAttempts - 1),
-          attempts: { implementation: bootstrapLease.implementationAttempts },
+          priorInitialAttempts: Math.max(
+            0,
+            bootstrapLease.implementationAttempts - 1
+          ),
+          attempts: {
+            implementation: bootstrapLease.implementationAttempts
+          },
           recovery: {
             reason: 'control-plane-changed-after-pre-material-exhaustion',
-            previousImplementationAttempts: bootstrapLease.implementationAttempts,
+            previousImplementationAttempts:
+              bootstrapLease.implementationAttempts,
             previousControllerHeadSha,
             currentControllerHeadSha: currentControlPlaneHeadSha,
             grantedImplementationAttempts: 1
@@ -264,6 +275,28 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
         });
       }
 
+      return Object.freeze({
+        runController: false,
+        resumePr: null,
+        recoverWorkerRunId: null,
+        status: 'escalated-initial-budget-exhausted',
+        pullRequestNumber: null,
+        materialHeadSha: null,
+        staleStateDetected: false,
+        nextAction: 'human-escalation',
+        priorInitialAttempts: bootstrapLease.implementationAttempts,
+        attempts: {
+          implementation: bootstrapLease.implementationAttempts
+        }
+      });
+    }
+    if (recoveredWorkerRun && !['completed'].includes(String(recoveredWorkerRun.status ?? ''))) {
+      return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
+    }
+    if (recoveredWorkerRun?.status === 'completed' && recoveredWorkerRun?.conclusion === 'success') {
+      return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
+    }
+    if (bootstrapLease.implementationAttempts >= policy.maxImplementationAttempts) {
       return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-budget-exhausted', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
     }
     return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: null, status: 'retry-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'retry-initial-worker', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
@@ -343,20 +376,37 @@ async function writeGithubOutput(decision) {
   await appendFile(outputPath, `${lines}\n`, 'utf8');
 }
 
-export function terminalBootstrapLease(lease, decision, recoveredWorkerRun) {
+export function terminalBootstrapLease(
+  lease,
+  decision,
+  recoveredWorkerRun,
+  currentControllerHeadSha = null
+) {
   if (decision.status !== 'escalated-initial-budget-exhausted') return null;
+
   const { commentId, ...value } = lease;
+  const controllerHeadSha = normalizedSha(
+    value.recovery?.currentControllerHeadSha
+      ?? value.controllerHeadSha
+      ?? currentControllerHeadSha
+  );
+
   return {
-    ...value, status: decision.status,
+    ...value,
+    ...(controllerHeadSha ? { controllerHeadSha } : {}),
+    status: decision.status,
     workerRunId: recoveredWorkerRun?.id ?? value.workerRunId,
-    failureClass: ['timed_out', 'startup_failure', 'cancelled'].includes(recoveredWorkerRun?.conclusion) ? 'infrastructure' : 'unknown',
-    failureStage: 'pre-material', workerConclusion: recoveredWorkerRun?.conclusion ?? null
+    failureClass: ['timed_out', 'startup_failure', 'cancelled'].includes(
+      recoveredWorkerRun?.conclusion
+    ) ? 'infrastructure' : 'unknown',
+    failureStage: 'pre-material',
+    workerConclusion: recoveredWorkerRun?.conclusion ?? null
   };
 }
 
 // Resolve write capability only after a concrete mutation has been selected.
 export async function persistReentryMutation({ decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository, controller,
-  getWriteToken = () => requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'), mutate = api }) {
+  currentControllerHeadSha = null, getWriteToken = () => requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'), mutate = api }) {
   let url;
   let method;
   let body;
@@ -367,7 +417,12 @@ export async function persistReentryMutation({ decision, adoptionEnvelope, boots
     method = adoptionEnvelope ? 'PATCH' : 'POST';
     body = legacyAdoptionComment(decision.adoption, controller);
   } else {
-    const terminal = bootstrapLease && terminalBootstrapLease(bootstrapLease, decision, recoveredWorkerRun);
+    const terminal = bootstrapLease && terminalBootstrapLease(
+      bootstrapLease,
+      decision,
+      recoveredWorkerRun,
+      currentControllerHeadSha
+    );
     if (!terminal || bootstrapLease.status === terminal.status) return false;
     if (bootstrapLease.repository !== repository) throw new Error('bootstrap mutation repository mismatch');
     url = `https://api.github.com/repos/${repository}/issues/comments/${positiveInteger(bootstrapLease.commentId, 'bootstrap commentId')}`;
@@ -426,11 +481,11 @@ async function main() {
     provider: expectedImplementer.provider,
     model: expectedImplementer.model,
     recoveredWorkerRun,
-    bootstrapControllerHeadSha: provenanceControllerRun?.head_sha ?? null,
     currentControllerHeadSha
   });
   await persistReentryMutation({
     decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository: targetRepository,
+    currentControllerHeadSha,
     controller: decision.adoption ? {
       controllerRunId: positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID'),
       controllerRepository: orchestratorRepository, controllerRef: orchestratorRef,
