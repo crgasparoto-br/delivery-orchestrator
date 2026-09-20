@@ -31,10 +31,11 @@ for (const provider of ['copilot', 'codex', 'claude']) {
 
       const prefix = risk.toUpperCase();
 
+      const turnsFallback = provider === 'claude' ? String(policy[risk].turns) : `'${policy[risk].turns}'`;
       assert.match(
         body,
         new RegExp(
-          `max-turns:\\s*\\$\\{\\{\\s*vars\\.DELIVERY_${prefix}_MAX_AI_TURNS\\s*\\|\\|\\s*'${policy[risk].turns}'\\s*\\}\\}`
+          `max-turns:\\s*\\$\\{\\{\\s*vars\\.DELIVERY_${prefix}_MAX_AI_TURNS\\s*\\|\\|\\s*${turnsFallback}\\s*\\}\\}`
         )
       );
 
@@ -132,3 +133,36 @@ test('evidence-only technical hygiene mode is non-mutating by contract', async (
   assert.match(body, /non-material `noop` safe output/);
   assert.match(body, /stop fail-closed/);
 });
+
+// Issue #175: gh-aw v0.89.15 shell-quotes Claude's inline --max-turns
+// argument. Shell escapes inside Actions expressions fail before any job starts.
+function assertNoShellEscapedExpressions(lockBody) {
+  const expressions = [...lockBody.matchAll(/\$\{\{([\s\S]*?)\}\}/g)];
+  assert.ok(expressions.length > 0, 'compiled workflow must contain Actions expressions');
+  for (const [, expression] of expressions) {
+    assert.ok(!expression.includes("'\\''"),
+      `shell quote escape inside GitHub Actions expression: ${expression}`);
+  }
+}
+
+test('startup regression guard rejects the original Claude max-turns expression', () => {
+  const rejected = "--max-turns \"${{ vars.DELIVERY_FAST_MAX_AI_TURNS || '\\''20'\\'' }}\"";
+  assert.throws(() => assertNoShellEscapedExpressions(rejected),
+    /shell quote escape inside GitHub Actions expression/);
+});
+
+for (const provider of ['claude', 'copilot', 'codex']) {
+  for (const [risk, { turns }] of Object.entries(policy)) {
+    test(`compiled expressions remain valid before job creation ${provider}/${risk}`, async () => {
+      const lock = await readFile(`.github/workflows/delivery-v2-worker-${provider}-${risk}.lock.yml`, 'utf8');
+      assertNoShellEscapedExpressions(lock);
+      if (provider === 'claude') {
+        const expression = '${{ vars.DELIVERY_' + risk.toUpperCase() + '_MAX_AI_TURNS || ' + turns + ' }}';
+        assert.ok(lock.includes('--max-turns "' + expression + '"'),
+          'Claude CLI must retain the configurable turn limit with a numeric fallback');
+        assert.ok(lock.includes('GH_AW_MAX_TURNS: ' + expression),
+          'Claude environment and CLI must resolve the same turn limit');
+      }
+    });
+  }
+}

@@ -91,3 +91,28 @@ The example is not a forced policy. Repository variables are the operator-contro
 ## Evidence
 
 The deterministic plan records the resolved implementation and audit provider/model. Compiled implementation workers expose the actual selected model in GitHub Actions workflow outputs. Before an independent audit provider is called, the workflow proves that its currently resolved audit provider/model still matches the exact controller state for the target repository, issue, PR head, risk, and audit dispatch nonce. The audit artifact persists the same identity in both top-level `auditRuntime` and `result.auditRuntime`, so the authoritative result consumed by the controller retains the provider/model that actually ran.
+
+## Claude workflow startup validation (issue #175)
+
+With the pinned `gh-aw v0.89.15`, Claude's `max-turns` expression is embedded
+in the single-quoted sandbox command. A string fallback such as
+`${{ vars.DELIVERY_FAST_MAX_AI_TURNS || '20' }}` is shell-escaped by the compiler
+into `${{ vars.DELIVERY_FAST_MAX_AI_TURNS || '\''20'\'' }}`. That is invalid
+GitHub Actions expression syntax: GitHub evaluates expressions before the shell
+runs, so the workflow is rejected before any job is created. The six recorded
+zero-job runs are consistent with this generated defect; missing API credentials
+or Node cannot explain this expression validation failure.
+
+The three canonical Claude worker Markdown files therefore use numeric fallbacks
+(`20`, `40`, `80`). The risk-specific Variables still override those defaults.
+Copilot and Codex do not produce the offending shell escape and remain unchanged.
+Sandboxing, threat detection, safe outputs, token isolation and remediation policy
+are unaffected. Regenerate locks only with `gh aw compile --strict`; compilation
+alone did not detect the invalid expression. `test/v2-worker-contract.test.mjs`
+now rejects shell quote escapes inside generated Actions expressions across all
+nine workers and checks Claude's CLI/environment turn-limit expressions.
+
+GitHub documents number literals and the separate Actions string-quoting rules in
+[Evaluate expressions](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions).
+A fresh GitHub run remains the deployment confirmation; local compilation and
+regression tests do not constitute a remotely observed successful startup.

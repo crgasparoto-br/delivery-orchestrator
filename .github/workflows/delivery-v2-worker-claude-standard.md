@@ -55,7 +55,8 @@ engine:
   model: ${{ vars.DELIVERY_STANDARD_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'claude-sonnet-5' }}
   env:
     GH_AW_MAX_AI_CREDITS: ${{ vars.DELIVERY_STANDARD_MAX_AI_CREDITS || '250' }}
-max-turns: ${{ vars.DELIVERY_STANDARD_MAX_AI_TURNS || '40' }}
+# Numeric fallback avoids gh-aw v0.89.15 shell-escaping quotes inside Actions expressions.
+max-turns: ${{ vars.DELIVERY_STANDARD_MAX_AI_TURNS || 40 }}
 timeout-minutes: 35
 network:
   allowed: [defaults, node, binaries.prisma.sh]
