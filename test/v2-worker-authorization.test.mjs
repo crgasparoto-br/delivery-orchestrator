@@ -74,6 +74,57 @@ test('remediation authorization binds exact PR head worker run and active action
   assert.throws(() => validateAuthorizationEnvelope({ ...authInput, envelope: remediationEnvelope({ controller: { nextAction: 'dispatch-remediation' } }) }), /not the active authorized action/);
 });
 
+test('technical hygiene authorization binds hygiene run nonce and active action', () => {
+  const envelope = remediationEnvelope({
+    controller: {
+      workerRunId: null,
+      workerDispatchNonce: null,
+      nextAction: 'observe-technical-hygiene',
+      hygieneRunId: 701,
+      hygieneDispatchNonce: 'nonce-1'
+    }
+  });
+
+  const result = validateAuthorizationEnvelope({ ...authInput, envelope });
+  assert.equal(result.mode, 'technical-hygiene');
+  assert.equal(result.workerRunId, 701);
+  assert.equal(result.pullRequestNumber, 88);
+
+  assert.throws(
+    () => validateAuthorizationEnvelope({
+      ...authInput,
+      currentRunId: 702,
+      envelope
+    }),
+    /technical-hygiene worker run mismatch/
+  );
+
+  assert.throws(
+    () => validateAuthorizationEnvelope({
+      ...authInput,
+      dispatchNonce: 'other',
+      envelope
+    }),
+    /technical-hygiene nonce mismatch/
+  );
+
+  assert.throws(
+    () => validateAuthorizationEnvelope({
+      ...authInput,
+      envelope: remediationEnvelope({
+        controller: {
+          workerRunId: null,
+          workerDispatchNonce: null,
+          nextAction: 'technical-hygiene-worker-failed',
+          hygieneRunId: 701,
+          hygieneDispatchNonce: 'nonce-1'
+        }
+      })
+    }),
+    /not the active authorized action/
+  );
+});
+
 test('correlated worker run must be unique and current', () => {
   assert.equal(validateUniqueCorrelatedWorkerRun([workerRun], { currentRunId: 701, dispatchNonce: 'nonce-1', defaultBranch: 'main' }), true);
   assert.throws(() => validateUniqueCorrelatedWorkerRun([workerRun, { ...workerRun, id: 702 }], { currentRunId: 701, dispatchNonce: 'nonce-1', defaultBranch: 'main' }), /exactly one correlated run/);
