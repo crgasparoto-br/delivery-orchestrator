@@ -37,6 +37,7 @@ import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-ar
 import { attachLegacyAdoptionAuditRun, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
 import { fetchImmutableCompareEvidence } from '../src/v2/github-audit-evidence.mjs';
+import { resolveCheckedOutControlPlaneHeadSha } from './guard-delivery-v2-reentry.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
@@ -53,6 +54,90 @@ function positiveInteger(value, label) {
   const result = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isInteger(result) || result < 1) throw new Error(`${label} must be a positive integer`);
   return result;
+}
+
+export function shouldRearmFailedTechnicalHygiene({
+  nextAction,
+  runConclusion,
+  runHeadSha,
+  currentControllerSha
+} = {}) {
+  const previousSha = String(runHeadSha ?? '').trim().toLowerCase();
+  const currentSha = String(currentControllerSha ?? '').trim().toLowerCase();
+
+  return (
+    String(nextAction ?? '') === 'technical-hygiene-worker-failed' &&
+    String(runConclusion ?? '') !== 'success' &&
+    /^[0-9a-f]{40}$/.test(previousSha) &&
+    /^[0-9a-f]{40}$/.test(currentSha) &&
+    previousSha !== currentSha
+  );
+}
+
+const RECOVERABLE_UNKNOWN_HYGIENE_CODES = new Set([
+  'VALIDATION_TOOLCHAIN_MISSING',
+  'SAFEOUTPUT_TOOL_MISSING',
+  'GIT_TOOL_MISSING',
+  'NODE_TOOL_MISSING',
+  'NPM_TOOL_MISSING',
+  'PNPM_TOOL_MISSING'
+]);
+
+export function shouldRearmUnknownTechnicalHygiene({
+  technicalHygiene,
+  runConclusion,
+  runHeadSha,
+  currentControllerSha
+} = {}) {
+  const previousSha = String(runHeadSha ?? '').trim().toLowerCase();
+  const currentSha = String(currentControllerSha ?? '').trim().toLowerCase();
+  const result = String(technicalHygiene?.result ?? '')
+    .trim()
+    .toUpperCase();
+
+  const missingEvidence = Array.isArray(technicalHygiene?.missingEvidence)
+    ? technicalHygiene.missingEvidence
+    : [];
+
+  const materialMissingEvidence = missingEvidence.filter(
+    (item) => item?.material === true
+  );
+
+  const hasOnlyRecoverableToolchainMaterialEvidence =
+    materialMissingEvidence.length > 0 &&
+    materialMissingEvidence.every((item) =>
+      RECOVERABLE_UNKNOWN_HYGIENE_CODES.has(
+        String(item?.code ?? '').trim().toUpperCase()
+      )
+    );
+
+  return (
+    result === 'UNKNOWN' &&
+    String(runConclusion ?? '').trim().toLowerCase() === 'success' &&
+    hasOnlyRecoverableToolchainMaterialEvidence &&
+    /^[0-9a-f]{40}$/.test(previousSha) &&
+    /^[0-9a-f]{40}$/.test(currentSha) &&
+    previousSha !== currentSha
+  );
+}
+
+const TECHNICAL_HYGIENE_RESUME_ACTIONS = new Set([
+  'dispatch-technical-hygiene',
+  'observe-technical-hygiene',
+  'technical-hygiene-worker-failed'
+]);
+
+export function resumeEntryNextAction({
+  stateStatus,
+  controllerNextAction
+} = {}) {
+  const persistedAction = String(controllerNextAction ?? '').trim();
+
+  if (TECHNICAL_HYGIENE_RESUME_ACTIONS.has(persistedAction)) {
+    return persistedAction;
+  }
+
+  return String(stateStatus ?? '').trim();
 }
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -276,11 +361,20 @@ async function auditResultFromArtifact({ orchestratorRepository, orchestratorRef
 
 function higherRisk(next, current) { return RISK_RANK[next] > RISK_RANK[current]; }
 
-async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber, materialHeadSha, baselineSha, previousMaterialSha = null, actionsToken, targetReadToken }) {
+async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber, materialHeadSha, baselineSha, previousMaterialSha = null, actionsToken, targetReadToken, authorizePromotion }) {
   if (!hygiene?.promotionRequired) return { hygiene, state, plan, promotionRun: null };
   const promotedPlan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk: 'standard', changedPaths, repositoryPolicy });
   let promotedState = applyOperationalEvent(state, { type: 'promote-risk', plan: promotedPlan });
   const dispatchNonce = createDispatchNonce();
+  if (typeof authorizePromotion !== 'function') {
+    throw new Error('technical hygiene promotion authorization publisher is required');
+  }
+  await authorizePromotion({
+    phase: 'dispatch',
+    dispatchNonce,
+    runId: null,
+    promotedState
+  });
   let promotionRun = await dispatchWorker({
     orchestratorRepository,
     orchestratorRef,
@@ -294,6 +388,12 @@ async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repository
     remediationContext: JSON.stringify({ kind: 'technical-hygiene-evidence-promotion', evidenceOnly: true, materialSha: materialHeadSha, missingEvidence: hygiene.missingEvidence }),
     token: actionsToken,
     dispatchNonce
+  });
+  await authorizePromotion({
+    phase: 'observe',
+    dispatchNonce,
+    runId: promotionRun.id,
+    promotedState
   });
   promotionRun = await waitWorkflowRun(orchestratorRepository, promotionRun.id, actionsToken);
   if (promotionRun.conclusion !== 'success') throw new Error(`technical hygiene STANDARD promotion worker failed: ${promotionRun.html_url}`);
@@ -792,8 +892,65 @@ export async function main() {
       remoteHeadSha: materialHeadSha
     });
     state = operationalStateFromPersistent(reconciled.state);
-    if (!reconciled.staleStateDetected && stateEnvelope.controller?.technicalHygiene) {
-      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: stateEnvelope.controller.technicalHygiene });
+    if (!reconciled.staleStateDetected && controller.technicalHygiene) {
+      let reusePersistedTechnicalHygiene = true;
+
+      const persistedHygieneRunId = Number(
+        controller.hygieneRunId ?? 0
+      );
+
+      if (
+        String(controller.technicalHygiene?.result ?? '')
+          .trim()
+          .toUpperCase() === 'UNKNOWN' &&
+        Number.isInteger(persistedHygieneRunId) &&
+        persistedHygieneRunId > 0
+      ) {
+        const persistedHygieneRun = await api(
+          `https://api.github.com/repos/${orchestratorRepository}/actions/runs/${persistedHygieneRunId}`,
+          actionsToken
+        );
+
+        const currentControllerSha =
+          resolveCheckedOutControlPlaneHeadSha();
+
+        if (
+          shouldRearmUnknownTechnicalHygiene({
+            technicalHygiene: controller.technicalHygiene,
+            runConclusion: persistedHygieneRun.conclusion,
+            runHeadSha: persistedHygieneRun.head_sha,
+            currentControllerSha
+          })
+        ) {
+          const previousControllerSha = String(
+            persistedHygieneRun.head_sha ?? ''
+          ).trim().toLowerCase();
+
+          controller = {
+            ...controller,
+            nextAction: 'dispatch-technical-hygiene',
+            hygieneDispatchNonce: createDispatchNonce(),
+            hygieneRunId: null,
+            technicalHygiene: null,
+            hygieneRecovery: {
+              schemaVersion: 1,
+              reason: 'control-plane-changed-after-unknown-technical-hygiene',
+              previousRunId: persistedHygieneRun.id,
+              previousControllerSha,
+              currentControllerSha
+            }
+          };
+
+          reusePersistedTechnicalHygiene = false;
+        }
+      }
+
+      if (reusePersistedTechnicalHygiene) {
+        state = applyOperationalEvent(state, {
+          type: 'technical-hygiene-result',
+          result: controller.technicalHygiene
+        });
+      }
     }
     if (reconciled.staleStateDetected || ['queued', 'classified', 'ci-failed-remediable'].includes(state.status)) {
       state = rebuildCiPendingState({ plan, materialHeadSha, previousState: state });
@@ -824,12 +981,12 @@ export async function main() {
 
   const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
 
-  const persist = async (extra = {}) => {
+  const persist = async (extra = {}, stateOverride = state) => {
     controller = { ...controller, observability, observabilityHistoryComplete, ...extra };
     return upsertStateComment({
       repository: targetRepository,
       prNumber: resumePr,
-      state,
+      state: stateOverride,
       identity: identity(),
       classifier,
       latestCheck,
@@ -850,7 +1007,12 @@ export async function main() {
   };
 
   await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 resumed evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
-  await persist({ nextAction: state.status });
+  await persist({
+    nextAction: resumeEntryNextAction({
+      stateStatus: state.status,
+      controllerNextAction: controller.nextAction
+    })
+  });
 
   for (let cycle = 0; cycle < 8; cycle += 1) {
     if (['ready-for-human-merge', 'escalated', 'terminal'].includes(state.status)) break;
@@ -894,7 +1056,15 @@ export async function main() {
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
       let technicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: run.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });
       state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: technicalHygiene });
-      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken });
+      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, promotedState }) => {
+        await persist({
+          nextAction: phase === 'observe'
+            ? 'observe-technical-hygiene'
+            : 'dispatch-technical-hygiene',
+          hygieneDispatchNonce: dispatchNonce,
+          hygieneRunId: runId
+        }, promotedState);
+      } });
       if (hygienePromotion.promotionRun) {
         await recordWorkerUsage(hygienePromotion.promotionRun);
         state = hygienePromotion.state;
@@ -1016,7 +1186,15 @@ export async function main() {
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
       let technicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });
       state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: technicalHygiene });
-      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken });
+      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, promotedState }) => {
+        await persist({
+          nextAction: phase === 'observe'
+            ? 'observe-technical-hygiene'
+            : 'dispatch-technical-hygiene',
+          hygieneDispatchNonce: dispatchNonce,
+          hygieneRunId: runId
+        }, promotedState);
+      } });
       if (hygienePromotion.promotionRun) {
         await recordWorkerUsage(hygienePromotion.promotionRun);
         state = hygienePromotion.state;
@@ -1364,7 +1542,43 @@ export async function main() {
           persistedHygieneRunId,
           actionsToken
         );
-      } else {
+
+        const currentControllerSha =
+          resolveCheckedOutControlPlaneHeadSha();
+
+        if (
+          shouldRearmFailedTechnicalHygiene({
+            nextAction: controller.nextAction,
+            runConclusion: hygieneRun.conclusion,
+            runHeadSha: hygieneRun.head_sha,
+            currentControllerSha
+          })
+        ) {
+          const previousHygieneRunId = hygieneRun.id;
+          const previousControllerSha = String(
+            hygieneRun.head_sha ?? ''
+          ).trim().toLowerCase();
+
+          hygieneDispatchNonce = createDispatchNonce();
+
+          await persist({
+            nextAction: 'dispatch-technical-hygiene',
+            hygieneDispatchNonce,
+            hygieneRunId: null,
+            hygieneRecovery: {
+              schemaVersion: 1,
+              reason: 'control-plane-changed-after-technical-hygiene-failure',
+              previousRunId: previousHygieneRunId,
+              previousControllerSha,
+              currentControllerSha
+            }
+          });
+
+          hygieneRun = null;
+        }
+      }
+
+      if (!hygieneRun) {
         const recovered = selectCorrelatedWorkflowRun(
           await listWorkflowRuns(
             orchestratorRepository,

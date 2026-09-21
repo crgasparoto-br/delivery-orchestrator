@@ -8,8 +8,8 @@ on:
       target_issue: {description: Target issue number, required: true, type: string}
       base_branch: {description: Target base branch, required: true, default: main, type: string}
       target_ref: {description: Exact base or PR-head ref to inspect, required: false, default: '', type: string}
-      target_pr: {description: Existing managed PR number for bounded remediation, required: false, default: '', type: string}
-      remediation_context: {description: Controller-provided CI/audit findings for bounded remediation, required: false, default: '', type: string}
+      target_pr: {description: Existing managed PR number for bounded remediation or evidence-only technical hygiene, required: false, default: '', type: string}
+      remediation_context: {description: Controller-provided remediation or evidence-only technical-hygiene context, required: false, default: '', type: string}
       dispatch_nonce: {description: Deterministic controller dispatch correlation nonce, required: true, type: string}
       controller_run_id: {description: Authoritative Delivery V2 controller workflow run id, required: true, type: string}
 run-name: "Delivery V2 worker ${{ github.event.inputs.dispatch_nonce }}"
@@ -55,7 +55,8 @@ engine:
   model: ${{ vars.DELIVERY_CRITICAL_IMPLEMENTER_MODEL || vars.DELIVERY_IMPLEMENTER_MODEL || 'claude-sonnet-5' }}
   env:
     GH_AW_MAX_AI_CREDITS: ${{ vars.DELIVERY_CRITICAL_MAX_AI_CREDITS || '500' }}
-max-turns: ${{ vars.DELIVERY_CRITICAL_MAX_AI_TURNS || '80' }}
+# Numeric fallback avoids gh-aw v0.89.15 shell-escaping quotes inside Actions expressions.
+max-turns: ${{ vars.DELIVERY_CRITICAL_MAX_AI_TURNS || 80 }}
 timeout-minutes: 55
 network:
   allowed: [defaults, node, binaries.prisma.sh]
@@ -108,6 +109,7 @@ Context hygiene: do not inventory retired or generated delivery snapshots, `.gen
 The deterministic controller owns orchestration, risk, budgets, CI/audit state and retries. You are only the bounded material worker for this attempt.
 
 - **Initial mode** (`target_pr` is empty): read the target issue and local repository instructions; identify the concrete cause; implement the smallest complete fix; add regression coverage; run the strongest relevant local validation that is practical. Deterministic CI remains the full-regression authority. Create exactly one PR whose title starts with `[delivery-v2] ` and whose body contains `Closes #${{ github.event.inputs.target_issue }}`. List only validations actually executed.
-- **Remediation mode** (`target_pr` is non-empty): treat `remediation_context` as the only requested correction scope unless the current diff exposes a new safety boundary. Work on the exact checked-out PR head from `target_ref`; inspect the existing PR/diff as needed, apply the smallest correction, commit it, and use `push-to-pull-request-branch` for exactly PR #${{ github.event.inputs.target_pr }}. Do **not** create a replacement PR. If the remediation would require a broader risk surface, unrelated refactor, provider substitution or protected-file bypass, stop and report the blocker instead of broadening scope.
+- **Evidence-only mode** (`remediation_context` is valid JSON with `evidenceOnly: true`): this mode has priority over `target_pr`. Do not edit repository files, create commits, create or update pull requests, invoke `push-to-pull-request-branch`, or invoke any other material safe output. Emit only the required technical-hygiene evidence and use the non-material `noop` safe output. If sufficient evidence cannot be collected without mutation, stop fail-closed.
+- **Remediation mode** (`target_pr` is non-empty and `remediation_context.evidenceOnly` is not `true`): treat `remediation_context` as the only requested correction scope unless the current diff exposes a new safety boundary. Work on the exact checked-out PR head from `target_ref`; inspect the existing PR/diff as needed, apply the smallest correction, commit it, and use `push-to-pull-request-branch` for exactly PR #${{ github.event.inputs.target_pr }}. Do **not** create a replacement PR. If the remediation would require a broader risk surface, unrelated refactor, provider substitution or protected-file bypass, stop and report the blocker instead of broadening scope.
 
 Never weaken workflow security, expose credentials, bypass the protected-file policy, broaden repository access, merge a PR, close the issue directly, or orchestrate another AI worker.

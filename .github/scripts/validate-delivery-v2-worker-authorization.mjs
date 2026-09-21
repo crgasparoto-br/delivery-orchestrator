@@ -157,10 +157,27 @@ export function validateAuthorizationEnvelope({
   const prNumber = requiredPositiveInteger(pr, 'targetPr');
   const persistent = envelope.persistent;
   const controller = envelope.controller;
-  if (!persistent || !controller) throw new Error('remediation authorization requires persistent state and controller metadata');
-  if (Number(controller.controllerRunId) !== controllerId) throw new Error('remediation controller run mismatch');
-  if (Number(controller.workerRunId) !== runId) throw new Error('remediation worker run mismatch');
-  if (String(controller.nextAction ?? '') !== 'observe-remediation') throw new Error('remediation worker is not the active authorized action');
+  if (!persistent || !controller) throw new Error('PR worker authorization requires persistent state and controller metadata');
+  if (Number(controller.controllerRunId) !== controllerId) throw new Error('PR worker controller run mismatch');
+
+  const nextAction = String(controller.nextAction ?? '');
+  let mode;
+  let authorizedRunId;
+  let authorizedNonce;
+
+  if (nextAction === 'observe-remediation') {
+    mode = 'remediation';
+    authorizedRunId = controller.workerRunId;
+    authorizedNonce = controller.workerDispatchNonce;
+  } else if (nextAction === 'observe-technical-hygiene') {
+    mode = 'technical-hygiene';
+    authorizedRunId = controller.hygieneRunId;
+    authorizedNonce = controller.hygieneDispatchNonce;
+  } else {
+    throw new Error('PR worker is not the active authorized action');
+  }
+
+  if (Number(authorizedRunId) !== runId) throw new Error(`${mode} worker run mismatch`);
   if (Number(persistent.issueNumber) !== issueNumber) throw new Error('persistent issue mismatch');
   if (Number(persistent.pullRequestNumber) !== prNumber) throw new Error('persistent PR mismatch');
   if (String(persistent.repository ?? '') !== repository) throw new Error('persistent repository mismatch');
@@ -168,9 +185,15 @@ export function validateAuthorizationEnvelope({
   if (String(persistent.provider ?? '').toLowerCase() !== providerName) throw new Error('persistent provider mismatch');
   if (modelName != null && String(persistent.model ?? '') !== modelName) throw new Error('persistent model mismatch');
   if (String(persistent.effectiveRisk ?? '').toLowerCase() !== risk) throw new Error('persistent risk mismatch');
-  if (String(persistent.materialHeadSha ?? '').toLowerCase() !== String(targetRef ?? '').toLowerCase()) throw new Error('remediation target_ref mismatch');
-  if (String(controller.workerDispatchNonce ?? '') !== nonce) throw new Error('remediation nonce mismatch');
-  return Object.freeze({ mode: 'remediation', workerRunId: runId, controllerRunId: controllerId, pullRequestNumber: prNumber });
+  if (String(persistent.materialHeadSha ?? '').toLowerCase() !== String(targetRef ?? '').toLowerCase()) throw new Error('PR worker target_ref mismatch');
+  if (String(authorizedNonce ?? '') !== nonce) throw new Error(`${mode} nonce mismatch`);
+
+  return Object.freeze({
+    mode,
+    workerRunId: runId,
+    controllerRunId: controllerId,
+    pullRequestNumber: prNumber
+  });
 }
 
 async function listComments(repository, issueNumber, token) {

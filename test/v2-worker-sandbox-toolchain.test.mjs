@@ -83,16 +83,82 @@ test('findBinDirs discovers a node-style setup-node layout used inside the sandb
   }
 });
 
+
+test('findBinDirs discovers the dedicated pnpm toolcache layout used by the sandbox', () => {
+  const toolCache = mkdtempSync(join(tmpdir(), 'delivery-v2-toolcache-'));
+  const pnpmBinDir = join(toolCache, 'pnpm', '9', 'x64', 'bin');
+  const pnpmPath = join(pnpmBinDir, 'pnpm');
+  makeFakeExecutable(pnpmPath);
+
+  try {
+    const binDirs = findBinDirs(toolCache);
+
+    assert.ok(
+      binDirs.includes(pnpmBinDir),
+      'pnpm prefix bin directory must be discoverable by the sandbox scan'
+    );
+
+    assert.equal(
+      resolveInBinDirs('pnpm', binDirs),
+      pnpmPath
+    );
+  } finally {
+    rmSync(toolCache, { recursive: true, force: true });
+  }
+});
+
 for (const risk of ['fast', 'standard', 'critical']) {
   test(`codex ${risk} worker declares the sandbox toolchain contract`, async () => {
     const body = await readFile(`.github/workflows/delivery-v2-worker-codex-${risk}.md`, 'utf8');
     assert.match(body, /runtimes:\s*\n\s+node:\s*\n\s+version: "22"/);
+    assert.match(body, /name: Install pnpm 9 for Delivery V2 sandbox/);
+    assert.match(body, /PNPM_TOOLCACHE_PREFIX=/);
+    assert.match(body, /--prefix "\$PNPM_TOOLCACHE_PREFIX" pnpm@9/);
+    assert.match(body, /"\$PNPM_TOOLCACHE_PREFIX\/bin\/pnpm" --version/);
+    assert.doesNotMatch(body, /if ! command -v pnpm/);
     assert.match(body, /name: Prove Delivery V2 sandbox toolchain before Codex execution/);
     assert.match(body, /node \.delivery-v2-sandbox-toolchain\/\.github\/scripts\/ensure-delivery-v2-worker-sandbox-toolchain\.mjs/);
     const lockBody = await readFile(`.github/workflows/delivery-v2-worker-codex-${risk}.lock.yml`, 'utf8');
+    assert.match(lockBody, /Install pnpm 9 for Delivery V2 sandbox/);
     assert.match(lockBody, /Prove Delivery V2 sandbox toolchain before Codex execution/);
     const preflightIndex = lockBody.indexOf('Prove Delivery V2 sandbox toolchain before Codex execution');
     const executeIndex = lockBody.indexOf('name: Execute Codex CLI');
     assert.ok(preflightIndex > -1 && executeIndex > -1 && preflightIndex < executeIndex, 'preflight must run before Codex CLI execution');
   });
 }
+
+
+test('codex command environment receives the validated sandbox PATH', async () => {
+  const wrapper = await readFile(
+    '.github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh',
+    'utf8'
+  );
+
+  assert.match(
+    wrapper,
+    /CODEX_SHELL_PATH="\$PATH"/
+  );
+
+  assert.match(
+    wrapper,
+    /shell_environment_policy\.set\.PATH/
+  );
+
+  assert.match(
+    wrapper,
+    /safeoutputs/
+  );
+
+  assert.match(
+    wrapper,
+    /pnpm/
+  );
+
+  const captureIndex = wrapper.indexOf('CODEX_SHELL_PATH="$PATH"');
+  const execIndex = wrapper.indexOf('exec codex');
+
+  assert.ok(
+    captureIndex >= 0 && execIndex > captureIndex,
+    'validated PATH must be captured before Codex starts'
+  );
+});

@@ -9,7 +9,12 @@ import {
   createWorkerScopeBinding,
   validateWorkerScopeBinding
 } from '../.github/scripts/delivery-v2-worker-scope-contract.mjs';
-import { changedPathsFromPatchFile } from '../.github/scripts/validate-delivery-v2-worker-scope.mjs';
+import {
+  assertEvidenceOnlyNoMaterialPatch,
+  changedPathsFromPatchFile,
+  isEvidenceOnlyContext,
+  validateCandidatePatchScope
+} from '../.github/scripts/validate-delivery-v2-worker-scope.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
 
 const REPOSITORY = 'crgasparoto-br/training-system';
@@ -123,8 +128,62 @@ test('all implementation workers import deterministic issue context and scope gu
   assert.match(shared, /authoritative task contract/);
   assert.match(shared, /Validate controller-authorized material scope/);
   assert.match(shared, /find \/tmp\/gh-aw\/threat-detection -maxdepth 1 -type f -name '\*\.patch'/);
-  assert.match(shared, /expected exactly one candidate patch/);
+  assert.match(shared, /expected at most one candidate patch/);
+  assert.ok(shared.includes('if [ "${#patch_files[@]}" -gt 1 ]; then'));
+  assert.ok(shared.includes('if [ "${#patch_files[@]}" -eq 1 ]; then'));
+  assert.match(shared, /unset PATCH_PATH/);
   assert.match(shared, /export PATCH_PATH="\$\{patch_files\[0\]\}"/);
   assert.doesNotMatch(shared, /PATCH_PATH: \/tmp\/gh-aw\/threat-detection\/aw\.patch/);
   assert.match(shared, /persist-credentials: false/);
+});
+
+
+test('evidence-only technical hygiene accepts zero patch while material mode remains fail-closed', async () => {
+  const evidenceOnly = JSON.stringify({
+    kind: 'technical-hygiene-evidence-promotion',
+    evidenceOnly: true
+  });
+
+  const zeroPatch = await validateCandidatePatchScope({
+    remediationContext: evidenceOnly,
+    patchPath: '',
+    binding: binding()
+  });
+
+  assert.equal(zeroPatch.evidenceOnly, true);
+  assert.deepEqual(zeroPatch.changedPaths, []);
+  assert.deepEqual(zeroPatch.authorizedPaths, [AUTHORIZED_FILE]);
+
+  await assert.rejects(
+    () => validateCandidatePatchScope({
+      remediationContext: '',
+      patchPath: '',
+      binding: binding()
+    }),
+    /candidate patch is missing; worker produced no material patch to authorize/
+  );
+});
+
+test('evidence-only technical hygiene rejects every material patch before safe outputs', () => {
+  const evidenceOnly = JSON.stringify({
+    kind: 'technical-hygiene-evidence-promotion',
+    evidenceOnly: true
+  });
+
+  assert.equal(isEvidenceOnlyContext(evidenceOnly), true);
+  assert.equal(isEvidenceOnlyContext('{invalid-json'), false);
+  assert.equal(isEvidenceOnlyContext(JSON.stringify({ evidenceOnly: false })), false);
+
+  assert.throws(
+    () => assertEvidenceOnlyNoMaterialPatch(evidenceOnly, [AUTHORIZED_FILE]),
+    /evidence-only worker produced material patch/
+  );
+
+  assert.equal(
+    assertEvidenceOnlyNoMaterialPatch(
+      JSON.stringify({ evidenceOnly: false }),
+      [AUTHORIZED_FILE]
+    ),
+    true
+  );
 });

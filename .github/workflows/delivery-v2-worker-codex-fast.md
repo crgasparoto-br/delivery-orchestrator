@@ -8,8 +8,8 @@ on:
       target_issue: {description: Target issue number, required: true, type: string}
       base_branch: {description: Target base branch, required: true, default: main, type: string}
       target_ref: {description: Exact base or PR-head ref to inspect, required: false, default: '', type: string}
-      target_pr: {description: Existing managed PR number for bounded remediation, required: false, default: '', type: string}
-      remediation_context: {description: Controller-provided CI/audit findings for bounded remediation, required: false, default: '', type: string}
+      target_pr: {description: Existing managed PR number for bounded remediation or evidence-only technical hygiene, required: false, default: '', type: string}
+      remediation_context: {description: Controller-provided remediation or evidence-only technical-hygiene context, required: false, default: '', type: string}
       dispatch_nonce: {description: Deterministic controller dispatch correlation nonce, required: true, type: string}
       controller_run_id: {description: Authoritative Delivery V2 controller workflow run id, required: true, type: string}
 run-name: "Delivery V2 worker ${{ github.event.inputs.dispatch_nonce }}"
@@ -65,6 +65,14 @@ steps:
   - name: Install pinned Codex CLI for Delivery V2 sandbox
     shell: bash
     run: npm install --ignore-scripts -g @openai/codex@0.150.1
+  - name: Install pnpm 9 for Delivery V2 sandbox
+    shell: bash
+    run: |
+      set -euo pipefail
+      PNPM_TOOLCACHE_PREFIX="${RUNNER_TOOL_CACHE:?RUNNER_TOOL_CACHE must be set}/pnpm/9/x64"
+      mkdir -p "$PNPM_TOOLCACHE_PREFIX"
+      npm install --ignore-scripts -g --prefix "$PNPM_TOOLCACHE_PREFIX" pnpm@9
+      "$PNPM_TOOLCACHE_PREFIX/bin/pnpm" --version
   - name: Checkout trusted sandbox toolchain preflight
     uses: actions/checkout@v7
     with:
@@ -144,6 +152,7 @@ Context hygiene: do not inventory retired or generated delivery snapshots, `.gen
 The deterministic controller owns orchestration, risk, budgets, CI/audit state and retries. You are only the bounded material worker for this attempt.
 
 - **Initial mode** (`target_pr` is empty): read the target issue and local repository instructions; implement the smallest cohesive fix, add regression coverage when testable, and run only focused checks related to the issue. Do not run the full repository suite. Create exactly one PR whose title starts with `[delivery-v2] ` and whose body contains `Closes #${{ github.event.inputs.target_issue }}`. List only validations actually executed.
-- **Remediation mode** (`target_pr` is non-empty): treat `remediation_context` as the only requested correction scope unless the current diff exposes a new safety boundary. Work on the exact checked-out PR head from `target_ref`; inspect the existing PR/diff as needed, apply the smallest correction, commit it, and use `push-to-pull-request-branch` for exactly PR #${{ github.event.inputs.target_pr }}. Do **not** create a replacement PR. If the remediation would require a broader risk surface, unrelated refactor, provider substitution or protected-file bypass, stop and report the blocker instead of broadening scope.
+- **Evidence-only mode** (`remediation_context` is valid JSON with `evidenceOnly: true`): this mode has priority over `target_pr`. Do not edit repository files, create commits, create or update pull requests, invoke `push-to-pull-request-branch`, or invoke any other material safe output. Emit only the required technical-hygiene evidence and use the non-material `noop` safe output. If sufficient evidence cannot be collected without mutation, stop fail-closed.
+- **Remediation mode** (`target_pr` is non-empty and `remediation_context.evidenceOnly` is not `true`): treat `remediation_context` as the only requested correction scope unless the current diff exposes a new safety boundary. Work on the exact checked-out PR head from `target_ref`; inspect the existing PR/diff as needed, apply the smallest correction, commit it, and use `push-to-pull-request-branch` for exactly PR #${{ github.event.inputs.target_pr }}. Do **not** create a replacement PR. If the remediation would require a broader risk surface, unrelated refactor, provider substitution or protected-file bypass, stop and report the blocker instead of broadening scope.
 
 Never weaken workflow security, expose credentials, bypass the FAST file envelope, broaden repository access, merge a PR, close the issue directly, or orchestrate another AI worker.

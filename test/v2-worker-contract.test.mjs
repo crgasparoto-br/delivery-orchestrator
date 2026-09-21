@@ -31,10 +31,11 @@ for (const provider of ['copilot', 'codex', 'claude']) {
 
       const prefix = risk.toUpperCase();
 
+      const turnsFallback = provider === 'claude' ? String(policy[risk].turns) : `'${policy[risk].turns}'`;
       assert.match(
         body,
         new RegExp(
-          `max-turns:\\s*\\$\\{\\{\\s*vars\\.DELIVERY_${prefix}_MAX_AI_TURNS\\s*\\|\\|\\s*'${policy[risk].turns}'\\s*\\}\\}`
+          `max-turns:\\s*\\$\\{\\{\\s*vars\\.DELIVERY_${prefix}_MAX_AI_TURNS\\s*\\|\\|\\s*${turnsFallback}\\s*\\}\\}`
         )
       );
 
@@ -133,6 +134,158 @@ test('evidence-only technical hygiene mode is non-mutating by contract', async (
   assert.match(body, /stop fail-closed/);
 });
 
+// Issue #175: gh-aw v0.89.15 shell-quotes Claude's inline --max-turns
+// argument. Shell escapes inside Actions expressions fail before any job starts.
+function assertNoShellEscapedExpressions(lockBody) {
+  const expressions = [...lockBody.matchAll(/\$\{\{([\s\S]*?)\}\}/g)];
+  assert.ok(expressions.length > 0, 'compiled workflow must contain Actions expressions');
+  for (const [, expression] of expressions) {
+    assert.ok(!expression.includes("'\\''"),
+      `shell quote escape inside GitHub Actions expression: ${expression}`);
+  }
+}
+
+test('startup regression guard rejects the original Claude max-turns expression', () => {
+  const rejected = "--max-turns \"${{ vars.DELIVERY_FAST_MAX_AI_TURNS || '\\''20'\\'' }}\"";
+  assert.throws(() => assertNoShellEscapedExpressions(rejected),
+    /shell quote escape inside GitHub Actions expression/);
+});
+
+for (const provider of ['claude', 'copilot', 'codex']) {
+  for (const [risk, { turns }] of Object.entries(policy)) {
+    test(`compiled expressions remain valid before job creation ${provider}/${risk}`, async () => {
+      const lock = await readFile(`.github/workflows/delivery-v2-worker-${provider}-${risk}.lock.yml`, 'utf8');
+      assertNoShellEscapedExpressions(lock);
+      if (provider === 'claude') {
+        const expression = '${{ vars.DELIVERY_' + risk.toUpperCase() + '_MAX_AI_TURNS || ' + turns + ' }}';
+        assert.ok(lock.includes('--max-turns "' + expression + '"'),
+          'Claude CLI must retain the configurable turn limit with a numeric fallback');
+        assert.ok(lock.includes('GH_AW_MAX_TURNS: ' + expression),
+          'Claude environment and CLI must resolve the same turn limit');
+      }
+    });
+  }
+}
+
+test('all worker prompts give evidence-only mode precedence over PR remediation', async () => {
+  for (const provider of ['copilot', 'codex', 'claude']) {
+    for (const risk of ['fast', 'standard', 'critical']) {
+      const body = await readFile(
+        `.github/workflows/delivery-v2-worker-${provider}-${risk}.md`,
+        'utf8'
+      );
+
+      const evidenceIndex = body.indexOf('- **Evidence-only mode**');
+      const remediationIndex = body.indexOf('- **Remediation mode**');
+
+      assert.ok(evidenceIndex >= 0, `${provider}/${risk} must declare evidence-only mode`);
+      assert.ok(remediationIndex >= 0, `${provider}/${risk} must declare remediation mode`);
+      assert.ok(
+        evidenceIndex < remediationIndex,
+        `${provider}/${risk} evidence-only mode must have precedence`
+      );
+
+      assert.match(body, /evidenceOnly: true/);
+      assert.match(body, /priority over `target_pr`/);
+      assert.match(body, /Do not edit repository files/);
+      assert.match(body, /push-to-pull-request-branch/);
+      assert.match(body, /non-material `noop` safe output/);
+      assert.match(
+        body,
+        /target_pr` is non-empty and `remediation_context\.evidenceOnly` is not `true`/
+      );
+    }
+  }
+
+  const shared = await readFile(
+    '.github/workflows/shared/delivery-v2-worker-scope-guard.md',
+    'utf8'
+  );
+
+  assert.match(
+    shared,
+    /REMEDIATION_CONTEXT: \$\{\{ github\.event\.inputs\.remediation_context \}\}/
+  );
+});
+
+
+test('trusted remediation context selects evidence-only mode before agent work', async () => {
+  const shared = await readFile(
+    '.github/workflows/shared/delivery-v2-worker-scope-guard.md',
+    'utf8'
+  );
+
+
+  const materializeStepStart = shared.indexOf(
+    '- name: Materialize trusted target issue context'
+  );
+  const materializeStepEnd = shared.indexOf(
+    '\nsafe-outputs:',
+    materializeStepStart
+  );
+
+  assert.ok(
+    materializeStepStart >= 0 &&
+      materializeStepEnd > materializeStepStart,
+    'trusted context materialization step must exist'
+  );
+
+  const materializeStep = shared.slice(
+    materializeStepStart,
+    materializeStepEnd
+  );
+
+  assert.match(
+    materializeStep,
+    /env:[\s\S]*REMEDIATION_CONTEXT: \$\{\{ github\.event\.inputs\.remediation_context \}\}/,
+    'materialization step must receive remediation_context through its own env'
+  );
+
+  assert.match(
+    materializeStep,
+    /if \[ -n "\$\{REMEDIATION_CONTEXT:-\}" \]/
+  );
+
+  assert.match(
+    shared,
+    /REMEDIATION_CONTEXT: \$\{\{ github\.event\.inputs\.remediation_context \}\}/
+  );
+
+  assert.match(
+    shared,
+    /delivery-v2-remediation-context\.json/
+  );
+
+  assert.match(
+    shared,
+    /authoritative source for worker mode selection/
+  );
+
+  assert.match(
+    shared,
+    /evidenceOnly: true/
+  );
+
+  assert.match(
+    shared,
+    /Evidence-only mode immediately/
+  );
+
+  assert.match(
+    shared,
+    /Invoke the non-material `noop` safe output exactly once/
+  );
+
+  assert.match(
+    shared,
+    /The `noop` call is mandatory/
+  );
+
+  assert.match(
+    shared,
+    /TECHNICAL_HYGIENE_JSON/
+  );
+});
 
 test('Copilot PAT workers reject the old env pseudo-permission and preserve token auth', async () => {
   for (const risk of ['fast', 'standard', 'critical']) {
@@ -170,3 +323,4 @@ test('Copilot PAT workers reject the old env pseudo-permission and preserve toke
     );
   }
 });
+
