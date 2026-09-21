@@ -55,6 +55,24 @@ function positiveInteger(value, label) {
   return result;
 }
 
+export function shouldRearmFailedTechnicalHygiene({
+  nextAction,
+  runConclusion,
+  runHeadSha,
+  currentControllerSha
+} = {}) {
+  const previousSha = String(runHeadSha ?? '').trim().toLowerCase();
+  const currentSha = String(currentControllerSha ?? '').trim().toLowerCase();
+
+  return (
+    String(nextAction ?? '') === 'technical-hygiene-worker-failed' &&
+    String(runConclusion ?? '') !== 'success' &&
+    /^[0-9a-f]{40}$/.test(previousSha) &&
+    /^[0-9a-f]{40}$/.test(currentSha) &&
+    previousSha !== currentSha
+  );
+}
+
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function headers(token) {
   return {
@@ -1395,7 +1413,44 @@ export async function main() {
           persistedHygieneRunId,
           actionsToken
         );
-      } else {
+
+        const currentControllerSha = String(
+          process.env.GITHUB_SHA ?? ''
+        ).trim().toLowerCase();
+
+        if (
+          shouldRearmFailedTechnicalHygiene({
+            nextAction: controller.nextAction,
+            runConclusion: hygieneRun.conclusion,
+            runHeadSha: hygieneRun.head_sha,
+            currentControllerSha
+          })
+        ) {
+          const previousHygieneRunId = hygieneRun.id;
+          const previousControllerSha = String(
+            hygieneRun.head_sha ?? ''
+          ).trim().toLowerCase();
+
+          hygieneDispatchNonce = createDispatchNonce();
+
+          await persist({
+            nextAction: 'dispatch-technical-hygiene',
+            hygieneDispatchNonce,
+            hygieneRunId: null,
+            hygieneRecovery: {
+              schemaVersion: 1,
+              reason: 'control-plane-changed-after-technical-hygiene-failure',
+              previousRunId: previousHygieneRunId,
+              previousControllerSha,
+              currentControllerSha
+            }
+          });
+
+          hygieneRun = null;
+        }
+      }
+
+      if (!hygieneRun) {
         const recovered = selectCorrelatedWorkflowRun(
           await listWorkflowRuns(
             orchestratorRepository,
