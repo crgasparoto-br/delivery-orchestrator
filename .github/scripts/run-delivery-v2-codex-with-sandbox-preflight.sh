@@ -54,9 +54,10 @@ for tool in git sed node npm pnpm safeoutputs; do
 done
 
 # npm itself uses /usr/bin/env node. Running npm here proves that node remains
-# resolvable after the exact bash -lc boundary used by Codex command execution.
+# resolvable through the compatibility login-shell probe. Actual Codex command
+# shells are forced to non-login mode below.
 /bin/bash -lc 'git --version >/dev/null && node --version >/dev/null && npm --version >/dev/null && pnpm --version >/dev/null' ||
-  fail "git/node/npm execution failed inside Codex child bash shells"
+  fail "git/node/npm/pnpm execution failed inside sandbox child-shell probe"
 
 echo "Delivery V2 Codex child-shell toolchain preflight: PASS"
 

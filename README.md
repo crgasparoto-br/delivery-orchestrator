@@ -83,8 +83,10 @@ The `codex` FAST/STANDARD/CRITICAL workers execute inside an isolated `gh-aw` ag
 
 - declares `runtimes.node` so `node`/`npm` are provisioned through `gh-aw`'s own compiler-managed mechanism instead of an ambient host assumption;
 - registers the host `git` executable into the `RUNNER_TOOL_CACHE` toolcache bin-directory convention (`.github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs`), the same discovery mechanism the sandbox uses to build its `PATH`;
-- preserves the verified sandbox `PATH` through a trusted `BASH_ENV` bootstrap so the non-interactive/login Bash shells created by Codex keep access to `git`, `node`, `npm`, system tools and `safeoutputs`;
-- runs preflight checks both at the outer sandbox boundary and through the same `bash -lc` child-shell boundary used by Codex, failing before AI budget is spent when either environment cannot execute the required toolchain.
+- installs `pnpm 9` before the sandbox preflight and requires it alongside `git`, `node`, `npm` and `safeoutputs` in the effective toolchain;
+- preserves the curated sandbox `PATH` through the trusted bootstrap and starts Codex with `allow_login_shell=false`, preventing login profiles from replacing that `PATH` in commands executed by the agent;
+- validates the required `safeoutputs` operations, including the non-material `noop` used by evidence-only technical hygiene;
+- keeps a `bash -lc` compatibility probe in the preflight, while regression coverage explicitly proves that a destructive login profile loses the toolchain and the corresponding non-login shell preserves it.
 
 This closes the sandbox-toolchain regressions tracked by issues #151 and #166 against the original fix in #108/#112. The earlier protection proved tools at the outer sandbox boundary; #166 additionally requires proving that the Codex child command shells preserve the same effective toolchain.
 

@@ -2,7 +2,7 @@
 // Registers the host git executable into RUNNER_TOOL_CACHE using the same
 // toolcache bin-directory convention the Delivery V2 agent sandbox (awf)
 // scans to build PATH inside the isolated Codex worker container, then
-// verifies that git, node and npm all resolve through that exact mechanism
+// verifies that git, node, npm and pnpm all resolve through that exact mechanism
 // before the "Execute Codex CLI" step (and its AI budget) runs.
 //
 // Root cause (issue #151, regression on #108 / PR #112): installing git on
@@ -144,7 +144,7 @@ function main() {
   }
 
   console.log(
-    'Delivery V2 sandbox toolchain preflight passed: git, node and npm all resolve via the RUNNER_TOOL_CACHE bin-directory scan used inside the agent sandbox.'
+    'Delivery V2 sandbox toolchain preflight passed: git, node, npm and pnpm all resolve via the RUNNER_TOOL_CACHE bin-directory scan used inside the agent sandbox.'
   );
 }
 

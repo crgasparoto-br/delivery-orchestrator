@@ -104,6 +104,55 @@ echo "9.0.0"
     await chmod(codex, 0o755);
     await chmod(pnpm, 0o755);
 
+    const shellProbe =
+      'git --version >/dev/null && ' +
+      'node --version >/dev/null && ' +
+      'npm --version >/dev/null && ' +
+      'pnpm --version >/dev/null && ' +
+      'safeoutputs noop --help >/dev/null';
+
+    const shellProbeEnv = {
+      ...process.env,
+      HOME: loginHome,
+      RUNNER_TEMP: runTemp,
+      GH_AW_SAFE_OUTPUTS: manifest,
+      PATH: `${fakeBin}:${mcpBin}:/usr/local/bin:/usr/bin:/bin`
+    };
+
+    // Controle negativo discriminante: o login shell carrega
+    // .bash_profile, substitui o PATH e deve perder o toolchain.
+    const loginShell = spawnSync('/bin/bash', ['-lc', shellProbe], {
+      encoding: 'utf8',
+      env: shellProbeEnv
+    });
+
+    assert.notEqual(
+      loginShell.status,
+      0,
+      `login shell deveria perder o PATH curado
+stdout:
+${loginShell.stdout}
+stderr:
+${loginShell.stderr}`
+    );
+
+    // Caso corrigido: o non-login shell deve preservar exatamente
+    // o PATH herdado do worker/AWF.
+    const nonLoginShell = spawnSync('/bin/bash', ['-c', shellProbe], {
+      encoding: 'utf8',
+      env: shellProbeEnv
+    });
+
+    assert.equal(
+      nonLoginShell.status,
+      0,
+      `non-login shell deveria preservar o PATH curado
+stdout:
+${nonLoginShell.stdout}
+stderr:
+${nonLoginShell.stderr}`
+    );
+
     const result = spawnSync(wrapper, [], {
       encoding: 'utf8',
       env: {
