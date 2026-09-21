@@ -207,3 +207,82 @@ test('all worker prompts give evidence-only mode precedence over PR remediation'
     /REMEDIATION_CONTEXT: \$\{\{ github\.event\.inputs\.remediation_context \}\}/
   );
 });
+
+
+test('trusted remediation context selects evidence-only mode before agent work', async () => {
+  const shared = await readFile(
+    '.github/workflows/shared/delivery-v2-worker-scope-guard.md',
+    'utf8'
+  );
+
+
+  const materializeStepStart = shared.indexOf(
+    '- name: Materialize trusted target issue context'
+  );
+  const materializeStepEnd = shared.indexOf(
+    '\nsafe-outputs:',
+    materializeStepStart
+  );
+
+  assert.ok(
+    materializeStepStart >= 0 &&
+      materializeStepEnd > materializeStepStart,
+    'trusted context materialization step must exist'
+  );
+
+  const materializeStep = shared.slice(
+    materializeStepStart,
+    materializeStepEnd
+  );
+
+  assert.match(
+    materializeStep,
+    /env:[\s\S]*REMEDIATION_CONTEXT: \$\{\{ github\.event\.inputs\.remediation_context \}\}/,
+    'materialization step must receive remediation_context through its own env'
+  );
+
+  assert.match(
+    materializeStep,
+    /if \[ -n "\$\{REMEDIATION_CONTEXT:-\}" \]/
+  );
+
+  assert.match(
+    shared,
+    /REMEDIATION_CONTEXT: \$\{\{ github\.event\.inputs\.remediation_context \}\}/
+  );
+
+  assert.match(
+    shared,
+    /delivery-v2-remediation-context\.json/
+  );
+
+  assert.match(
+    shared,
+    /authoritative source for worker mode selection/
+  );
+
+  assert.match(
+    shared,
+    /evidenceOnly: true/
+  );
+
+  assert.match(
+    shared,
+    /Evidence-only mode immediately/
+  );
+
+  assert.match(
+    shared,
+    /Invoke the non-material `noop` safe output exactly once/
+  );
+
+  assert.match(
+    shared,
+    /The `noop` call is mandatory/
+  );
+
+  assert.match(
+    shared,
+    /TECHNICAL_HYGIENE_JSON/
+  );
+});

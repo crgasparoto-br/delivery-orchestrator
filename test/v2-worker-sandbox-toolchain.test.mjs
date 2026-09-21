@@ -126,3 +126,39 @@ for (const risk of ['fast', 'standard', 'critical']) {
     assert.ok(preflightIndex > -1 && executeIndex > -1 && preflightIndex < executeIndex, 'preflight must run before Codex CLI execution');
   });
 }
+
+
+test('codex command environment receives the validated sandbox PATH', async () => {
+  const wrapper = await readFile(
+    '.github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh',
+    'utf8'
+  );
+
+  assert.match(
+    wrapper,
+    /CODEX_SHELL_PATH="\$PATH"/
+  );
+
+  assert.match(
+    wrapper,
+    /shell_environment_policy\.set\.PATH/
+  );
+
+  assert.match(
+    wrapper,
+    /safeoutputs/
+  );
+
+  assert.match(
+    wrapper,
+    /pnpm/
+  );
+
+  const captureIndex = wrapper.indexOf('CODEX_SHELL_PATH="$PATH"');
+  const execIndex = wrapper.indexOf('exec codex');
+
+  assert.ok(
+    captureIndex >= 0 && execIndex > captureIndex,
+    'validated PATH must be captured before Codex starts'
+  );
+});
