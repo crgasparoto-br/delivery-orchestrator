@@ -12,7 +12,8 @@ import {
 import {
   assertEvidenceOnlyNoMaterialPatch,
   changedPathsFromPatchFile,
-  isEvidenceOnlyContext
+  isEvidenceOnlyContext,
+  validateCandidatePatchScope
 } from '../.github/scripts/validate-delivery-v2-worker-scope.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
 
@@ -127,10 +128,40 @@ test('all implementation workers import deterministic issue context and scope gu
   assert.match(shared, /authoritative task contract/);
   assert.match(shared, /Validate controller-authorized material scope/);
   assert.match(shared, /find \/tmp\/gh-aw\/threat-detection -maxdepth 1 -type f -name '\*\.patch'/);
-  assert.match(shared, /expected exactly one candidate patch/);
+  assert.match(shared, /expected at most one candidate patch/);
+  assert.ok(shared.includes('if [ "${#patch_files[@]}" -gt 1 ]; then'));
+  assert.ok(shared.includes('if [ "${#patch_files[@]}" -eq 1 ]; then'));
+  assert.match(shared, /unset PATCH_PATH/);
   assert.match(shared, /export PATCH_PATH="\$\{patch_files\[0\]\}"/);
   assert.doesNotMatch(shared, /PATCH_PATH: \/tmp\/gh-aw\/threat-detection\/aw\.patch/);
   assert.match(shared, /persist-credentials: false/);
+});
+
+
+test('evidence-only technical hygiene accepts zero patch while material mode remains fail-closed', async () => {
+  const evidenceOnly = JSON.stringify({
+    kind: 'technical-hygiene-evidence-promotion',
+    evidenceOnly: true
+  });
+
+  const zeroPatch = await validateCandidatePatchScope({
+    remediationContext: evidenceOnly,
+    patchPath: '',
+    binding: binding()
+  });
+
+  assert.equal(zeroPatch.evidenceOnly, true);
+  assert.deepEqual(zeroPatch.changedPaths, []);
+  assert.deepEqual(zeroPatch.authorizedPaths, [AUTHORIZED_FILE]);
+
+  await assert.rejects(
+    () => validateCandidatePatchScope({
+      remediationContext: '',
+      patchPath: '',
+      binding: binding()
+    }),
+    /candidate patch is missing; worker produced no material patch to authorize/
+  );
 });
 
 test('evidence-only technical hygiene rejects every material patch before safe outputs', () => {

@@ -52,12 +52,16 @@ safe-outputs:
           set -euo pipefail
           trap 'rm -rf .delivery-v2-scope-guard' EXIT
           mapfile -t patch_files < <(find /tmp/gh-aw/threat-detection -maxdepth 1 -type f -name '*.patch' -print | sort)
-          if [ "${#patch_files[@]}" -ne 1 ]; then
-            printf 'expected exactly one candidate patch, found %s\n' "${#patch_files[@]}" >&2
+          if [ "${#patch_files[@]}" -gt 1 ]; then
+            printf 'expected at most one candidate patch, found %s\n' "${#patch_files[@]}" >&2
             printf '%s\n' "${patch_files[@]}" >&2
             exit 1
           fi
-          export PATCH_PATH="${patch_files[0]}"
+          if [ "${#patch_files[@]}" -eq 1 ]; then
+            export PATCH_PATH="${patch_files[0]}"
+          else
+            unset PATCH_PATH
+          fi
           node .delivery-v2-scope-guard/.github/scripts/validate-delivery-v2-worker-scope.mjs
 ---
 ## Trusted Delivery V2 target issue contract

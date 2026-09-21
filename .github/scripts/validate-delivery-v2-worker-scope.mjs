@@ -52,6 +52,47 @@ export function assertEvidenceOnlyNoMaterialPatch(remediationContext, changedPat
   return true;
 }
 
+export async function validateCandidatePatchScope({
+  remediationContext,
+  patchPath,
+  binding
+} = {}) {
+  const candidatePath = String(patchPath ?? '').trim();
+  const evidenceOnly = isEvidenceOnlyContext(remediationContext);
+
+  // Evidence-only Technical Hygiene is explicitly non-material. A legitimate
+  // noop therefore has no candidate patch. Normal material workers remain
+  // fail-closed when no patch is available.
+  if (!candidatePath) {
+    if (!evidenceOnly) {
+      throw new Error(
+        'candidate patch is missing; worker produced no material patch to authorize'
+      );
+    }
+
+    return Object.freeze({
+      evidenceOnly: true,
+      changedPaths: [],
+      authorizedPaths:
+        binding?.enforcement === 'explicit-exclusive'
+          ? [...(binding.authorizedPaths ?? [])]
+          : []
+    });
+  }
+
+  const changedPaths = await changedPathsFromPatchFile(candidatePath);
+
+  // If evidence-only ever produces a real patch, preserve the strict
+  // fail-closed behavior.
+  assertEvidenceOnlyNoMaterialPatch(remediationContext, changedPaths);
+
+  const result = assertChangedPathsAuthorized(changedPaths, binding);
+
+  return Object.freeze({
+    evidenceOnly,
+    ...result
+  });
+}
 function headers(token) {
   return {
     Accept: 'application/vnd.github+json',
@@ -130,7 +171,7 @@ export async function main() {
   const dispatchNonce = requiredString(process.env.DISPATCH_NONCE, 'DISPATCH_NONCE');
   const remediationContext = String(process.env.REMEDIATION_CONTEXT ?? '');
   const token = requiredString(process.env.DELIVERY_GITHUB_READ_TOKEN, 'DELIVERY_GITHUB_READ_TOKEN');
-  const patchPath = requiredString(process.env.PATCH_PATH || '/tmp/gh-aw/threat-detection/aw.patch', 'PATCH_PATH');
+  const patchPath = String(process.env.PATCH_PATH ?? '').trim();
 
   const issue = await fetchJson(`https://api.github.com/repos/${repository}/issues/${issueNumber}`, token);
   const comments = await listComments(repository, issueNumber, token);
@@ -153,9 +194,11 @@ export async function main() {
   }
 
   const verified = validateWorkerScopeBinding(binding, { repository, issue });
-  const changedPaths = await changedPathsFromPatchFile(patchPath);
-  assertEvidenceOnlyNoMaterialPatch(remediationContext, changedPaths);
-  const result = assertChangedPathsAuthorized(changedPaths, verified);
+  const result = await validateCandidatePatchScope({
+    remediationContext,
+    patchPath,
+    binding: verified
+  });
   process.stdout.write(`${JSON.stringify({ authorized: true, source, enforcement: verified.enforcement, ...result })}\n`);
 }
 
