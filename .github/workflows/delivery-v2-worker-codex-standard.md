@@ -72,10 +72,10 @@ steps:
     shell: bash
     run: |
       set -euo pipefail
-      if ! command -v pnpm >/dev/null 2>&1; then
-        npm install --ignore-scripts -g pnpm@9
-      fi
-      pnpm --version
+      PNPM_TOOLCACHE_PREFIX="${RUNNER_TOOL_CACHE:?RUNNER_TOOL_CACHE must be set}/pnpm/9/x64"
+      mkdir -p "$PNPM_TOOLCACHE_PREFIX"
+      npm install --ignore-scripts -g --prefix "$PNPM_TOOLCACHE_PREFIX" pnpm@9
+      "$PNPM_TOOLCACHE_PREFIX/bin/pnpm" --version
   - name: Checkout trusted sandbox toolchain preflight
     uses: actions/checkout@v7
     with:
