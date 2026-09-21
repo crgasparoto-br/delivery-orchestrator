@@ -74,6 +74,57 @@ test('remediation authorization binds exact PR head worker run and active action
   assert.throws(() => validateAuthorizationEnvelope({ ...authInput, envelope: remediationEnvelope({ controller: { nextAction: 'dispatch-remediation' } }) }), /not the active authorized action/);
 });
 
+test('technical hygiene authorization binds hygiene run nonce and active action', () => {
+  const envelope = remediationEnvelope({
+    controller: {
+      workerRunId: null,
+      workerDispatchNonce: null,
+      nextAction: 'observe-technical-hygiene',
+      hygieneRunId: 701,
+      hygieneDispatchNonce: 'nonce-1'
+    }
+  });
+
+  const result = validateAuthorizationEnvelope({ ...authInput, envelope });
+  assert.equal(result.mode, 'technical-hygiene');
+  assert.equal(result.workerRunId, 701);
+  assert.equal(result.pullRequestNumber, 88);
+
+  assert.throws(
+    () => validateAuthorizationEnvelope({
+      ...authInput,
+      currentRunId: 702,
+      envelope
+    }),
+    /technical-hygiene worker run mismatch/
+  );
+
+  assert.throws(
+    () => validateAuthorizationEnvelope({
+      ...authInput,
+      dispatchNonce: 'other',
+      envelope
+    }),
+    /technical-hygiene nonce mismatch/
+  );
+
+  assert.throws(
+    () => validateAuthorizationEnvelope({
+      ...authInput,
+      envelope: remediationEnvelope({
+        controller: {
+          workerRunId: null,
+          workerDispatchNonce: null,
+          nextAction: 'technical-hygiene-worker-failed',
+          hygieneRunId: 701,
+          hygieneDispatchNonce: 'nonce-1'
+        }
+      })
+    }),
+    /not the active authorized action/
+  );
+});
+
 test('correlated worker run must be unique and current', () => {
   assert.equal(validateUniqueCorrelatedWorkerRun([workerRun], { currentRunId: 701, dispatchNonce: 'nonce-1', defaultBranch: 'main' }), true);
   assert.throws(() => validateUniqueCorrelatedWorkerRun([workerRun, { ...workerRun, id: 702 }], { currentRunId: 701, dispatchNonce: 'nonce-1', defaultBranch: 'main' }), /exactly one correlated run/);
@@ -101,5 +152,36 @@ test('all provider/risk worker sources bootstrap and delegate authorization to o
       assert.match(body, /TARGET_REF: \$\{\{ github\.event\.inputs\.target_ref \|\| github\.event\.inputs\.base_branch \}\}/);
       assert.doesNotMatch(body, /node <<'PROVENANCE'/);
     }
+  }
+});
+
+test('technical hygiene promotion persists exact authorization before waiting for the worker', async () => {
+  for (const path of [
+    'scripts/run-delivery-v2-controller.mjs',
+    'scripts/resume-delivery-v2-controller.mjs'
+  ]) {
+    const body = await readFile(path, 'utf8');
+
+    const calls = (body.match(/await ensurePromotedTechnicalHygiene\(\{/g) ?? []).length;
+    const callbacks = (body.match(/authorizePromotion: async/g) ?? []).length;
+
+    assert.ok(calls > 0, `${path} must contain technical hygiene promotion calls`);
+    assert.equal(callbacks, calls, `${path} must authorize every promotion dispatch`);
+
+    assert.match(body, /nextAction: phase === 'observe'[\s\S]*?'observe-technical-hygiene'[\s\S]*?'dispatch-technical-hygiene'/);
+    assert.match(body, /hygieneDispatchNonce: dispatchNonce/);
+    assert.match(body, /hygieneRunId: runId/);
+
+    const observeAuthorization = body.indexOf("phase: 'observe'");
+    const waitForWorker = body.indexOf(
+      'promotionRun = await waitWorkflowRun(orchestratorRepository, promotionRun.id, actionsToken)'
+    );
+
+    assert.ok(observeAuthorization >= 0, `${path} must persist observe authorization`);
+    assert.ok(waitForWorker >= 0, `${path} must wait for promotion worker`);
+    assert.ok(
+      observeAuthorization < waitForWorker,
+      `${path} must persist exact hygiene run authorization before waiting`
+    );
   }
 });

@@ -276,11 +276,20 @@ async function auditResultFromArtifact({ orchestratorRepository, orchestratorRef
 
 function higherRisk(next, current) { return RISK_RANK[next] > RISK_RANK[current]; }
 
-async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber, materialHeadSha, baselineSha, previousMaterialSha = null, actionsToken, targetReadToken }) {
+async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber, materialHeadSha, baselineSha, previousMaterialSha = null, actionsToken, targetReadToken, authorizePromotion }) {
   if (!hygiene?.promotionRequired) return { hygiene, state, plan, promotionRun: null };
   const promotedPlan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk: 'standard', changedPaths, repositoryPolicy });
   let promotedState = applyOperationalEvent(state, { type: 'promote-risk', plan: promotedPlan });
   const dispatchNonce = createDispatchNonce();
+  if (typeof authorizePromotion !== 'function') {
+    throw new Error('technical hygiene promotion authorization publisher is required');
+  }
+  await authorizePromotion({
+    phase: 'dispatch',
+    dispatchNonce,
+    runId: null,
+    promotedState
+  });
   let promotionRun = await dispatchWorker({
     orchestratorRepository,
     orchestratorRef,
@@ -294,6 +303,12 @@ async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repository
     remediationContext: JSON.stringify({ kind: 'technical-hygiene-evidence-promotion', evidenceOnly: true, materialSha: materialHeadSha, missingEvidence: hygiene.missingEvidence }),
     token: actionsToken,
     dispatchNonce
+  });
+  await authorizePromotion({
+    phase: 'observe',
+    dispatchNonce,
+    runId: promotionRun.id,
+    promotedState
   });
   promotionRun = await waitWorkflowRun(orchestratorRepository, promotionRun.id, actionsToken);
   if (promotionRun.conclusion !== 'success') throw new Error(`technical hygiene STANDARD promotion worker failed: ${promotionRun.html_url}`);
@@ -824,12 +839,12 @@ export async function main() {
 
   const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
 
-  const persist = async (extra = {}) => {
+  const persist = async (extra = {}, stateOverride = state) => {
     controller = { ...controller, observability, observabilityHistoryComplete, ...extra };
     return upsertStateComment({
       repository: targetRepository,
       prNumber: resumePr,
-      state,
+      state: stateOverride,
       identity: identity(),
       classifier,
       latestCheck,
@@ -894,7 +909,15 @@ export async function main() {
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
       let technicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: run.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });
       state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: technicalHygiene });
-      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken });
+      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, promotedState }) => {
+        await persist({
+          nextAction: phase === 'observe'
+            ? 'observe-technical-hygiene'
+            : 'dispatch-technical-hygiene',
+          hygieneDispatchNonce: dispatchNonce,
+          hygieneRunId: runId
+        }, promotedState);
+      } });
       if (hygienePromotion.promotionRun) {
         await recordWorkerUsage(hygienePromotion.promotionRun);
         state = hygienePromotion.state;
@@ -1016,7 +1039,15 @@ export async function main() {
       state = applyOperationalEvent(state, { type: 'publish-material', materialHeadSha });
       let technicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });
       state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: technicalHygiene });
-      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken });
+      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, promotedState }) => {
+        await persist({
+          nextAction: phase === 'observe'
+            ? 'observe-technical-hygiene'
+            : 'dispatch-technical-hygiene',
+          hygieneDispatchNonce: dispatchNonce,
+          hygieneRunId: runId
+        }, promotedState);
+      } });
       if (hygienePromotion.promotionRun) {
         await recordWorkerUsage(hygienePromotion.promotionRun);
         state = hygienePromotion.state;
