@@ -10,6 +10,8 @@ import {
   validateUniqueCorrelatedWorkerRun
 } from '../.github/scripts/validate-delivery-v2-worker-authorization.mjs';
 
+import { shouldRearmFailedTechnicalHygiene } from '../scripts/resume-delivery-v2-controller.mjs';
+
 const controllerRun = {
   id: 700,
   path: '.github/workflows/delivery-v2-dispatch.yml',
@@ -184,4 +186,91 @@ test('technical hygiene promotion persists exact authorization before waiting fo
       `${path} must persist exact hygiene run authorization before waiting`
     );
   }
+});
+
+
+test('failed technical hygiene rearms only after a control-plane change', () => {
+  const previousControllerSha = 'a'.repeat(40);
+  const currentControllerSha = 'b'.repeat(40);
+
+  assert.equal(
+    shouldRearmFailedTechnicalHygiene({
+      nextAction: 'technical-hygiene-worker-failed',
+      runConclusion: 'failure',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldRearmFailedTechnicalHygiene({
+      nextAction: 'technical-hygiene-worker-failed',
+      runConclusion: 'failure',
+      runHeadSha: currentControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'the same control-plane SHA must not create an automatic retry loop'
+  );
+
+  assert.equal(
+    shouldRearmFailedTechnicalHygiene({
+      nextAction: 'observe-technical-hygiene',
+      runConclusion: 'failure',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'only the persisted terminal failure state may be rearmed'
+  );
+
+  assert.equal(
+    shouldRearmFailedTechnicalHygiene({
+      nextAction: 'technical-hygiene-worker-failed',
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'a successful worker must never be replaced'
+  );
+
+  assert.equal(
+    shouldRearmFailedTechnicalHygiene({
+      nextAction: 'technical-hygiene-worker-failed',
+      runConclusion: 'failure',
+      runHeadSha: '',
+      currentControllerSha
+    }),
+    false,
+    'missing provenance must fail closed'
+  );
+});
+
+test('resume controller clears stale hygiene run before redispatch', async () => {
+  const body = await readFile(
+    'scripts/resume-delivery-v2-controller.mjs',
+    'utf8'
+  );
+
+  assert.match(
+    body,
+    /shouldRearmFailedTechnicalHygiene\(\{[\s\S]*?hygieneRun = null;/
+  );
+
+  assert.match(
+    body,
+    /reason: 'control-plane-changed-after-technical-hygiene-failure'/
+  );
+
+  assert.match(
+    body,
+    /nextAction: 'dispatch-technical-hygiene'[\s\S]*?hygieneRunId: null/
+  );
+
+  assert.match(
+    body,
+    /if \(!hygieneRun\) \{[\s\S]*?dispatchWorker\(\{/
+  );
 });

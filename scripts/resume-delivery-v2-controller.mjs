@@ -37,6 +37,7 @@ import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-ar
 import { attachLegacyAdoptionAuditRun, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
 import { fetchImmutableCompareEvidence } from '../src/v2/github-audit-evidence.mjs';
+import { resolveCheckedOutControlPlaneHeadSha } from './guard-delivery-v2-reentry.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
@@ -53,6 +54,24 @@ function positiveInteger(value, label) {
   const result = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isInteger(result) || result < 1) throw new Error(`${label} must be a positive integer`);
   return result;
+}
+
+export function shouldRearmFailedTechnicalHygiene({
+  nextAction,
+  runConclusion,
+  runHeadSha,
+  currentControllerSha
+} = {}) {
+  const previousSha = String(runHeadSha ?? '').trim().toLowerCase();
+  const currentSha = String(currentControllerSha ?? '').trim().toLowerCase();
+
+  return (
+    String(nextAction ?? '') === 'technical-hygiene-worker-failed' &&
+    String(runConclusion ?? '') !== 'success' &&
+    /^[0-9a-f]{40}$/.test(previousSha) &&
+    /^[0-9a-f]{40}$/.test(currentSha) &&
+    previousSha !== currentSha
+  );
 }
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -1395,7 +1414,43 @@ export async function main() {
           persistedHygieneRunId,
           actionsToken
         );
-      } else {
+
+        const currentControllerSha =
+          resolveCheckedOutControlPlaneHeadSha();
+
+        if (
+          shouldRearmFailedTechnicalHygiene({
+            nextAction: controller.nextAction,
+            runConclusion: hygieneRun.conclusion,
+            runHeadSha: hygieneRun.head_sha,
+            currentControllerSha
+          })
+        ) {
+          const previousHygieneRunId = hygieneRun.id;
+          const previousControllerSha = String(
+            hygieneRun.head_sha ?? ''
+          ).trim().toLowerCase();
+
+          hygieneDispatchNonce = createDispatchNonce();
+
+          await persist({
+            nextAction: 'dispatch-technical-hygiene',
+            hygieneDispatchNonce,
+            hygieneRunId: null,
+            hygieneRecovery: {
+              schemaVersion: 1,
+              reason: 'control-plane-changed-after-technical-hygiene-failure',
+              previousRunId: previousHygieneRunId,
+              previousControllerSha,
+              currentControllerSha
+            }
+          });
+
+          hygieneRun = null;
+        }
+      }
+
+      if (!hygieneRun) {
         const recovered = selectCorrelatedWorkflowRun(
           await listWorkflowRuns(
             orchestratorRepository,
