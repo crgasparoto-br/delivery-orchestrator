@@ -19,7 +19,6 @@ permissions:
   issues: read
 env:
   GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "${{ github.event.inputs.target_pr == '' && 'true' || 'false' }}"
-  copilot-requests: write
 pre-steps:
   - name: Checkout trusted authorization guard
     uses: actions/checkout@v7

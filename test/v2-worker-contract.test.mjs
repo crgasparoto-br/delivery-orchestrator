@@ -286,3 +286,41 @@ test('trusted remediation context selects evidence-only mode before agent work',
     /TECHNICAL_HYGIENE_JSON/
   );
 });
+
+test('Copilot PAT workers reject the old env pseudo-permission and preserve token auth', async () => {
+  for (const risk of ['fast', 'standard', 'critical']) {
+    const sourceFile = `.github/workflows/delivery-v2-worker-copilot-${risk}.md`;
+    const lockFile = `.github/workflows/delivery-v2-worker-copilot-${risk}.lock.yml`;
+
+    const source = await readFile(sourceFile, 'utf8');
+    const lock = await readFile(lockFile, 'utf8');
+
+    const envBlock = source.match(/\nenv:\n([\s\S]*?)\npre-steps:/);
+    assert.ok(envBlock, `${risk}: worker source must expose the top-level env block`);
+
+    assert.doesNotMatch(
+      envBlock[1],
+      /copilot-requests:\s*write/,
+      `${risk}: copilot-requests is a GitHub permission and must never be declared as an env variable`
+    );
+
+    assert.match(
+      lock,
+      /name: Validate COPILOT_GITHUB_TOKEN secret[\s\S]{0,500}COPILOT_GITHUB_TOKEN: \$\{\{ secrets\.COPILOT_GITHUB_TOKEN \}\}/,
+      `${risk}: compiled worker must validate COPILOT_GITHUB_TOKEN`
+    );
+
+    assert.match(
+      lock,
+      /COPILOT_AGENT_RUNNER_TYPE: STANDALONE[\s\S]{0,1000}COPILOT_GITHUB_TOKEN: \$\{\{ secrets\.COPILOT_GITHUB_TOKEN \}\}/,
+      `${risk}: compiled Copilot agent must receive COPILOT_GITHUB_TOKEN`
+    );
+
+    assert.match(
+      lock,
+      /"compiler_version":"v0\.89\.15"/,
+      `${risk}: compiled lock must remain bound to gh-aw v0.89.15`
+    );
+  }
+});
+
