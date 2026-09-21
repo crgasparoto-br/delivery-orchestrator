@@ -25,6 +25,33 @@ function requiredPositiveInteger(value, label) {
   return result;
 }
 
+export function isEvidenceOnlyContext(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    return Boolean(
+      parsed &&
+      !Array.isArray(parsed) &&
+      typeof parsed === 'object' &&
+      parsed.evidenceOnly === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function assertEvidenceOnlyNoMaterialPatch(remediationContext, changedPaths) {
+  if (!isEvidenceOnlyContext(remediationContext)) return true;
+  const paths = Array.isArray(changedPaths) ? changedPaths : [];
+  if (paths.length > 0) {
+    throw new Error(
+      `evidence-only worker produced material patch: ${paths.join(', ')}`
+    );
+  }
+  return true;
+}
+
 function headers(token) {
   return {
     Accept: 'application/vnd.github+json',
@@ -101,6 +128,7 @@ export async function main() {
   const targetPr = String(process.env.TARGET_PR ?? '').trim();
   const controllerRunId = requiredPositiveInteger(process.env.CONTROLLER_RUN_ID, 'CONTROLLER_RUN_ID');
   const dispatchNonce = requiredString(process.env.DISPATCH_NONCE, 'DISPATCH_NONCE');
+  const remediationContext = String(process.env.REMEDIATION_CONTEXT ?? '');
   const token = requiredString(process.env.DELIVERY_GITHUB_READ_TOKEN, 'DELIVERY_GITHUB_READ_TOKEN');
   const patchPath = requiredString(process.env.PATCH_PATH || '/tmp/gh-aw/threat-detection/aw.patch', 'PATCH_PATH');
 
@@ -126,6 +154,7 @@ export async function main() {
 
   const verified = validateWorkerScopeBinding(binding, { repository, issue });
   const changedPaths = await changedPathsFromPatchFile(patchPath);
+  assertEvidenceOnlyNoMaterialPatch(remediationContext, changedPaths);
   const result = assertChangedPathsAuthorized(changedPaths, verified);
   process.stdout.write(`${JSON.stringify({ authorized: true, source, enforcement: verified.enforcement, ...result })}\n`);
 }

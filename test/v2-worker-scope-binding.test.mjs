@@ -9,7 +9,11 @@ import {
   createWorkerScopeBinding,
   validateWorkerScopeBinding
 } from '../.github/scripts/delivery-v2-worker-scope-contract.mjs';
-import { changedPathsFromPatchFile } from '../.github/scripts/validate-delivery-v2-worker-scope.mjs';
+import {
+  assertEvidenceOnlyNoMaterialPatch,
+  changedPathsFromPatchFile,
+  isEvidenceOnlyContext
+} from '../.github/scripts/validate-delivery-v2-worker-scope.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
 
 const REPOSITORY = 'crgasparoto-br/training-system';
@@ -127,4 +131,28 @@ test('all implementation workers import deterministic issue context and scope gu
   assert.match(shared, /export PATCH_PATH="\$\{patch_files\[0\]\}"/);
   assert.doesNotMatch(shared, /PATCH_PATH: \/tmp\/gh-aw\/threat-detection\/aw\.patch/);
   assert.match(shared, /persist-credentials: false/);
+});
+
+test('evidence-only technical hygiene rejects every material patch before safe outputs', () => {
+  const evidenceOnly = JSON.stringify({
+    kind: 'technical-hygiene-evidence-promotion',
+    evidenceOnly: true
+  });
+
+  assert.equal(isEvidenceOnlyContext(evidenceOnly), true);
+  assert.equal(isEvidenceOnlyContext('{invalid-json'), false);
+  assert.equal(isEvidenceOnlyContext(JSON.stringify({ evidenceOnly: false })), false);
+
+  assert.throws(
+    () => assertEvidenceOnlyNoMaterialPatch(evidenceOnly, [AUTHORIZED_FILE]),
+    /evidence-only worker produced material patch/
+  );
+
+  assert.equal(
+    assertEvidenceOnlyNoMaterialPatch(
+      JSON.stringify({ evidenceOnly: false }),
+      [AUTHORIZED_FILE]
+    ),
+    true
+  );
 });

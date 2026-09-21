@@ -166,3 +166,44 @@ for (const provider of ['claude', 'copilot', 'codex']) {
     });
   }
 }
+
+test('all worker prompts give evidence-only mode precedence over PR remediation', async () => {
+  for (const provider of ['copilot', 'codex', 'claude']) {
+    for (const risk of ['fast', 'standard', 'critical']) {
+      const body = await readFile(
+        `.github/workflows/delivery-v2-worker-${provider}-${risk}.md`,
+        'utf8'
+      );
+
+      const evidenceIndex = body.indexOf('- **Evidence-only mode**');
+      const remediationIndex = body.indexOf('- **Remediation mode**');
+
+      assert.ok(evidenceIndex >= 0, `${provider}/${risk} must declare evidence-only mode`);
+      assert.ok(remediationIndex >= 0, `${provider}/${risk} must declare remediation mode`);
+      assert.ok(
+        evidenceIndex < remediationIndex,
+        `${provider}/${risk} evidence-only mode must have precedence`
+      );
+
+      assert.match(body, /evidenceOnly: true/);
+      assert.match(body, /priority over `target_pr`/);
+      assert.match(body, /Do not edit repository files/);
+      assert.match(body, /push-to-pull-request-branch/);
+      assert.match(body, /non-material `noop` safe output/);
+      assert.match(
+        body,
+        /target_pr` is non-empty and `remediation_context\.evidenceOnly` is not `true`/
+      );
+    }
+  }
+
+  const shared = await readFile(
+    '.github/workflows/shared/delivery-v2-worker-scope-guard.md',
+    'utf8'
+  );
+
+  assert.match(
+    shared,
+    /REMEDIATION_CONTEXT: \$\{\{ github\.event\.inputs\.remediation_context \}\}/
+  );
+});

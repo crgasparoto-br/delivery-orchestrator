@@ -154,3 +154,34 @@ test('all provider/risk worker sources bootstrap and delegate authorization to o
     }
   }
 });
+
+test('technical hygiene promotion persists exact authorization before waiting for the worker', async () => {
+  for (const path of [
+    'scripts/run-delivery-v2-controller.mjs',
+    'scripts/resume-delivery-v2-controller.mjs'
+  ]) {
+    const body = await readFile(path, 'utf8');
+
+    const calls = (body.match(/await ensurePromotedTechnicalHygiene\(\{/g) ?? []).length;
+    const callbacks = (body.match(/authorizePromotion: async/g) ?? []).length;
+
+    assert.ok(calls > 0, `${path} must contain technical hygiene promotion calls`);
+    assert.equal(callbacks, calls, `${path} must authorize every promotion dispatch`);
+
+    assert.match(body, /nextAction: phase === 'observe'[\s\S]*?'observe-technical-hygiene'[\s\S]*?'dispatch-technical-hygiene'/);
+    assert.match(body, /hygieneDispatchNonce: dispatchNonce/);
+    assert.match(body, /hygieneRunId: runId/);
+
+    const observeAuthorization = body.indexOf("phase: 'observe'");
+    const waitForWorker = body.indexOf(
+      'promotionRun = await waitWorkflowRun(orchestratorRepository, promotionRun.id, actionsToken)'
+    );
+
+    assert.ok(observeAuthorization >= 0, `${path} must persist observe authorization`);
+    assert.ok(waitForWorker >= 0, `${path} must wait for promotion worker`);
+    assert.ok(
+      observeAuthorization < waitForWorker,
+      `${path} must persist exact hygiene run authorization before waiting`
+    );
+  }
+});
