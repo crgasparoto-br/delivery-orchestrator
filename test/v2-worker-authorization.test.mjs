@@ -12,7 +12,8 @@ import {
 
 import {
   resumeEntryNextAction,
-  shouldRearmFailedTechnicalHygiene
+  shouldRearmFailedTechnicalHygiene,
+  shouldRearmUnknownTechnicalHygiene
 } from '../scripts/resume-delivery-v2-controller.mjs';
 
 const controllerRun = {
@@ -248,6 +249,156 @@ test('failed technical hygiene rearms only after a control-plane change', () => 
     }),
     false,
     'missing provenance must fail closed'
+  );
+});
+
+test('UNKNOWN technical hygiene rearms only for stale toolchain evidence after control-plane change', () => {
+  const previousControllerSha = 'a'.repeat(40);
+  const currentControllerSha = 'b'.repeat(40);
+
+  const toolchainUnknown = {
+    result: 'UNKNOWN',
+    missingEvidence: [
+      {
+        code: 'VALIDATION_TOOLCHAIN_MISSING',
+        detail: 'validation tools were unavailable',
+        material: true
+      }
+    ]
+  };
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene: toolchainUnknown,
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    true,
+    'toolchain UNKNOWN from an older control plane must be recollected'
+  );
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene: toolchainUnknown,
+      runConclusion: 'success',
+      runHeadSha: currentControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'the same control-plane SHA must not create an automatic retry loop'
+  );
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene: {
+        result: 'UNKNOWN',
+        missingEvidence: [
+          {
+            code: 'SEMANTIC_EQUIVALENCE_UNKNOWN',
+            detail: 'semantic equivalence was not proven',
+            material: true
+          }
+        ]
+      },
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'semantic UNKNOWN must remain release-blocking'
+  );
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene: {
+        result: 'UNKNOWN',
+        missingEvidence: [
+          {
+            code: 'VALIDATION_TOOLCHAIN_MISSING',
+            detail: 'validation tools were unavailable',
+            material: true
+          },
+          {
+            code: 'SEMANTIC_EQUIVALENCE_UNKNOWN',
+            detail: 'semantic equivalence was not proven',
+            material: true
+          }
+        ]
+      },
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'mixed toolchain and semantic material UNKNOWN must remain release-blocking'
+  );
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene: {
+        result: 'UNKNOWN',
+        missingEvidence: [
+          {
+            code: 'VALIDATION_TOOLCHAIN_MISSING',
+            detail: 'validation tools were unavailable',
+            material: true
+          },
+          {
+            code: 'SEMANTIC_EQUIVALENCE_UNKNOWN',
+            detail: 'non-material semantic telemetry',
+            material: false
+          }
+        ]
+      },
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    true,
+    'non-material unrelated evidence must not prevent stale toolchain recollection'
+  );
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene: {
+        result: 'PASS',
+        missingEvidence: []
+      },
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'successful hygiene evidence must never be discarded'
+  );
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene: toolchainUnknown,
+      runConclusion: 'failure',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'failed workflows remain owned by the existing failed-worker recovery path'
+  );
+});
+
+test('resume controller clears stale UNKNOWN toolchain hygiene before recollection', async () => {
+  const body = await readFile(
+    'scripts/resume-delivery-v2-controller.mjs',
+    'utf8'
+  );
+
+  assert.match(
+    body,
+    /shouldRearmUnknownTechnicalHygiene\(\{[\s\S]*?technicalHygiene: controller\.technicalHygiene[\s\S]*?currentControllerSha/
+  );
+
+  assert.match(
+    body,
+    /nextAction: 'dispatch-technical-hygiene'[\s\S]*?hygieneRunId: null,[\s\S]*?technicalHygiene: null,[\s\S]*?reason: 'control-plane-changed-after-unknown-technical-hygiene'/
   );
 });
 

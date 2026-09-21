@@ -74,6 +74,53 @@ export function shouldRearmFailedTechnicalHygiene({
   );
 }
 
+const RECOVERABLE_UNKNOWN_HYGIENE_CODES = new Set([
+  'VALIDATION_TOOLCHAIN_MISSING',
+  'SAFEOUTPUT_TOOL_MISSING',
+  'GIT_TOOL_MISSING',
+  'NODE_TOOL_MISSING',
+  'NPM_TOOL_MISSING',
+  'PNPM_TOOL_MISSING'
+]);
+
+export function shouldRearmUnknownTechnicalHygiene({
+  technicalHygiene,
+  runConclusion,
+  runHeadSha,
+  currentControllerSha
+} = {}) {
+  const previousSha = String(runHeadSha ?? '').trim().toLowerCase();
+  const currentSha = String(currentControllerSha ?? '').trim().toLowerCase();
+  const result = String(technicalHygiene?.result ?? '')
+    .trim()
+    .toUpperCase();
+
+  const missingEvidence = Array.isArray(technicalHygiene?.missingEvidence)
+    ? technicalHygiene.missingEvidence
+    : [];
+
+  const materialMissingEvidence = missingEvidence.filter(
+    (item) => item?.material === true
+  );
+
+  const hasOnlyRecoverableToolchainMaterialEvidence =
+    materialMissingEvidence.length > 0 &&
+    materialMissingEvidence.every((item) =>
+      RECOVERABLE_UNKNOWN_HYGIENE_CODES.has(
+        String(item?.code ?? '').trim().toUpperCase()
+      )
+    );
+
+  return (
+    result === 'UNKNOWN' &&
+    String(runConclusion ?? '').trim().toLowerCase() === 'success' &&
+    hasOnlyRecoverableToolchainMaterialEvidence &&
+    /^[0-9a-f]{40}$/.test(previousSha) &&
+    /^[0-9a-f]{40}$/.test(currentSha) &&
+    previousSha !== currentSha
+  );
+}
+
 const TECHNICAL_HYGIENE_RESUME_ACTIONS = new Set([
   'dispatch-technical-hygiene',
   'observe-technical-hygiene',
@@ -845,8 +892,65 @@ export async function main() {
       remoteHeadSha: materialHeadSha
     });
     state = operationalStateFromPersistent(reconciled.state);
-    if (!reconciled.staleStateDetected && stateEnvelope.controller?.technicalHygiene) {
-      state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: stateEnvelope.controller.technicalHygiene });
+    if (!reconciled.staleStateDetected && controller.technicalHygiene) {
+      let reusePersistedTechnicalHygiene = true;
+
+      const persistedHygieneRunId = Number(
+        controller.hygieneRunId ?? 0
+      );
+
+      if (
+        String(controller.technicalHygiene?.result ?? '')
+          .trim()
+          .toUpperCase() === 'UNKNOWN' &&
+        Number.isInteger(persistedHygieneRunId) &&
+        persistedHygieneRunId > 0
+      ) {
+        const persistedHygieneRun = await api(
+          `https://api.github.com/repos/${orchestratorRepository}/actions/runs/${persistedHygieneRunId}`,
+          actionsToken
+        );
+
+        const currentControllerSha =
+          resolveCheckedOutControlPlaneHeadSha();
+
+        if (
+          shouldRearmUnknownTechnicalHygiene({
+            technicalHygiene: controller.technicalHygiene,
+            runConclusion: persistedHygieneRun.conclusion,
+            runHeadSha: persistedHygieneRun.head_sha,
+            currentControllerSha
+          })
+        ) {
+          const previousControllerSha = String(
+            persistedHygieneRun.head_sha ?? ''
+          ).trim().toLowerCase();
+
+          controller = {
+            ...controller,
+            nextAction: 'dispatch-technical-hygiene',
+            hygieneDispatchNonce: createDispatchNonce(),
+            hygieneRunId: null,
+            technicalHygiene: null,
+            hygieneRecovery: {
+              schemaVersion: 1,
+              reason: 'control-plane-changed-after-unknown-technical-hygiene',
+              previousRunId: persistedHygieneRun.id,
+              previousControllerSha,
+              currentControllerSha
+            }
+          };
+
+          reusePersistedTechnicalHygiene = false;
+        }
+      }
+
+      if (reusePersistedTechnicalHygiene) {
+        state = applyOperationalEvent(state, {
+          type: 'technical-hygiene-result',
+          result: controller.technicalHygiene
+        });
+      }
     }
     if (reconciled.staleStateDetected || ['queued', 'classified', 'ci-failed-remediable'].includes(state.status)) {
       state = rebuildCiPendingState({ plan, materialHeadSha, previousState: state });
