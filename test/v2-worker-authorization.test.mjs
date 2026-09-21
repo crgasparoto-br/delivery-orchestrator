@@ -10,7 +10,10 @@ import {
   validateUniqueCorrelatedWorkerRun
 } from '../.github/scripts/validate-delivery-v2-worker-authorization.mjs';
 
-import { shouldRearmFailedTechnicalHygiene } from '../scripts/resume-delivery-v2-controller.mjs';
+import {
+  resumeEntryNextAction,
+  shouldRearmFailedTechnicalHygiene
+} from '../scripts/resume-delivery-v2-controller.mjs';
 
 const controllerRun = {
   id: 700,
@@ -245,6 +248,38 @@ test('failed technical hygiene rearms only after a control-plane change', () => 
     }),
     false,
     'missing provenance must fail closed'
+  );
+});
+
+test('resume entry preserves technical hygiene recovery state before release evaluation', () => {
+  for (const nextAction of [
+    'dispatch-technical-hygiene',
+    'observe-technical-hygiene',
+    'technical-hygiene-worker-failed'
+  ]) {
+    assert.equal(
+      resumeEntryNextAction({
+        stateStatus: 'ready-for-human-merge',
+        controllerNextAction: nextAction
+      }),
+      nextAction
+    );
+  }
+
+  assert.equal(
+    resumeEntryNextAction({
+      stateStatus: 'ready-for-human-merge',
+      controllerNextAction: 'observe-ci'
+    }),
+    'ready-for-human-merge'
+  );
+
+  assert.equal(
+    resumeEntryNextAction({
+      stateStatus: 'audit-pending',
+      controllerNextAction: ''
+    }),
+    'audit-pending'
   );
 });
 

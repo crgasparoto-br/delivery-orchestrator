@@ -74,6 +74,25 @@ export function shouldRearmFailedTechnicalHygiene({
   );
 }
 
+const TECHNICAL_HYGIENE_RESUME_ACTIONS = new Set([
+  'dispatch-technical-hygiene',
+  'observe-technical-hygiene',
+  'technical-hygiene-worker-failed'
+]);
+
+export function resumeEntryNextAction({
+  stateStatus,
+  controllerNextAction
+} = {}) {
+  const persistedAction = String(controllerNextAction ?? '').trim();
+
+  if (TECHNICAL_HYGIENE_RESUME_ACTIONS.has(persistedAction)) {
+    return persistedAction;
+  }
+
+  return String(stateStatus ?? '').trim();
+}
+
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function headers(token) {
   return {
@@ -884,7 +903,12 @@ export async function main() {
   };
 
   await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 resumed evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
-  await persist({ nextAction: state.status });
+  await persist({
+    nextAction: resumeEntryNextAction({
+      stateStatus: state.status,
+      controllerNextAction: controller.nextAction
+    })
+  });
 
   for (let cycle = 0; cycle < 8; cycle += 1) {
     if (['ready-for-human-merge', 'escalated', 'terminal'].includes(state.status)) break;
