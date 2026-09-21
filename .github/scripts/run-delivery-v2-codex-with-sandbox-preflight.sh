@@ -100,4 +100,13 @@ require_tool codex
 # re-runs the login profile and replaces the curated PATH assembled above,
 # hiding the toolcache and safeoutputs CLI from the actual commands executed
 # by the agent. Force non-login command shells so the proven PATH is preserved.
-exec codex -c allow_login_shell=false "$@"
+# Codex may construct a restricted command PATH containing only its internal
+# vendor command shim. Bind the already-validated Delivery V2 toolchain PATH
+# explicitly into every Codex command subprocess. This keeps safeoutputs,
+# pnpm, node, npm and git discoverable even if the model invokes bash -lc.
+CODEX_SHELL_PATH="$PATH"
+
+exec codex \
+  -c allow_login_shell=false \
+  -c "shell_environment_policy.set.PATH=\"${CODEX_SHELL_PATH}\"" \
+  "$@"
