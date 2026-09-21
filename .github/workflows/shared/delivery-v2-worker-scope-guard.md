@@ -6,6 +6,7 @@ steps:
       GH_TOKEN: ${{ secrets.DELIVERY_GITHUB_READ_TOKEN }}
       TARGET_REPOSITORY: ${{ github.event.inputs.target_repository }}
       TARGET_ISSUE: ${{ github.event.inputs.target_issue }}
+      REMEDIATION_CONTEXT: ${{ github.event.inputs.remediation_context }}
     run: |
       set -euo pipefail
       issue_path="/tmp/gh-aw/agent/delivery-v2-target-issue.json"

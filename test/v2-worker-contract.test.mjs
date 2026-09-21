@@ -215,6 +215,37 @@ test('trusted remediation context selects evidence-only mode before agent work',
     'utf8'
   );
 
+
+  const materializeStepStart = shared.indexOf(
+    '- name: Materialize trusted target issue context'
+  );
+  const materializeStepEnd = shared.indexOf(
+    '\nsafe-outputs:',
+    materializeStepStart
+  );
+
+  assert.ok(
+    materializeStepStart >= 0 &&
+      materializeStepEnd > materializeStepStart,
+    'trusted context materialization step must exist'
+  );
+
+  const materializeStep = shared.slice(
+    materializeStepStart,
+    materializeStepEnd
+  );
+
+  assert.match(
+    materializeStep,
+    /env:[\s\S]*REMEDIATION_CONTEXT: \$\{\{ github\.event\.inputs\.remediation_context \}\}/,
+    'materialization step must receive remediation_context through its own env'
+  );
+
+  assert.match(
+    materializeStep,
+    /if \[ -n "\$\{REMEDIATION_CONTEXT:-\}" \]/
+  );
+
   assert.match(
     shared,
     /REMEDIATION_CONTEXT: \$\{\{ github\.event\.inputs\.remediation_context \}\}/
