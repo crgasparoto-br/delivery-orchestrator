@@ -87,9 +87,12 @@ for (const risk of ['fast', 'standard', 'critical']) {
   test(`codex ${risk} worker declares the sandbox toolchain contract`, async () => {
     const body = await readFile(`.github/workflows/delivery-v2-worker-codex-${risk}.md`, 'utf8');
     assert.match(body, /runtimes:\s*\n\s+node:\s*\n\s+version: "22"/);
+    assert.match(body, /name: Install pnpm 9 for Delivery V2 sandbox/);
+    assert.match(body, /npm install --ignore-scripts -g pnpm@9/);
     assert.match(body, /name: Prove Delivery V2 sandbox toolchain before Codex execution/);
     assert.match(body, /node \.delivery-v2-sandbox-toolchain\/\.github\/scripts\/ensure-delivery-v2-worker-sandbox-toolchain\.mjs/);
     const lockBody = await readFile(`.github/workflows/delivery-v2-worker-codex-${risk}.lock.yml`, 'utf8');
+    assert.match(lockBody, /Install pnpm 9 for Delivery V2 sandbox/);
     assert.match(lockBody, /Prove Delivery V2 sandbox toolchain before Codex execution/);
     const preflightIndex = lockBody.indexOf('Prove Delivery V2 sandbox toolchain before Codex execution');
     const executeIndex = lockBody.indexOf('name: Execute Codex CLI');

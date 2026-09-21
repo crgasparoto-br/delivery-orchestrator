@@ -30,7 +30,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 
-const REQUIRED_TOOLS = ['git', 'node', 'npm'];
+const REQUIRED_TOOLS = ['git', 'node', 'npm', 'pnpm'];
 const MAX_SCAN_DEPTH = 5;
 
 function fail(message) {
