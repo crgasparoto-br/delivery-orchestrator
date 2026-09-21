@@ -11,6 +11,9 @@ import {
   terminalBootstrapLease
 } from '../scripts/guard-delivery-v2-reentry.mjs';
 import {
+  shouldRearmFailedTechnicalHygiene
+} from '../scripts/resume-delivery-v2-controller.mjs';
+import {
   bootstrapLeaseForDecision,
   resolveRecoveryForReservation
 } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
@@ -19,6 +22,61 @@ const CONTROL_PLANE_A = 'a'.repeat(40);
 const EVENT_REF_B = 'b'.repeat(40);
 const CONTROL_PLANE_B = 'c'.repeat(40);
 const CONTROL_PLANE_C = 'd'.repeat(40);
+
+
+test('technical hygiene recovery uses checked-out control-plane HEAD instead of workflow event SHA', () => {
+  const failedWorkerControllerSha = CONTROL_PLANE_A;
+
+  // Deliberately different from the checkout. The workflow event SHA is not
+  // authoritative for the control-plane epoch.
+  const workflowEventSha = CONTROL_PLANE_B;
+
+  const checkedOutControllerSha =
+    resolveCheckedOutControlPlaneHeadSha({
+      readHead: () => `${failedWorkerControllerSha}\n`
+    });
+
+  assert.notEqual(workflowEventSha, checkedOutControllerSha);
+
+  assert.equal(
+    shouldRearmFailedTechnicalHygiene({
+      nextAction: 'technical-hygiene-worker-failed',
+      runConclusion: 'failure',
+      runHeadSha: failedWorkerControllerSha,
+      currentControllerSha: checkedOutControllerSha
+    }),
+    false,
+    'a different workflow event SHA must not fabricate a control-plane epoch change'
+  );
+
+  assert.equal(
+    shouldRearmFailedTechnicalHygiene({
+      nextAction: 'technical-hygiene-worker-failed',
+      runConclusion: 'failure',
+      runHeadSha: failedWorkerControllerSha,
+      currentControllerSha: CONTROL_PLANE_C
+    }),
+    true,
+    'a genuinely different checked-out control-plane HEAD may rearm the failed hygiene worker'
+  );
+});
+
+test('resume technical hygiene recovery resolves the checked-out control-plane HEAD', () => {
+  const source = readFileSync(
+    new URL('../scripts/resume-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(
+    source,
+    /const currentControllerSha\s*=\s*resolveCheckedOutControlPlaneHeadSha\(\);/
+  );
+
+  assert.doesNotMatch(
+    source,
+    /process\.env\.GITHUB_SHA/
+  );
+});
 
 test('workflow event SHA cannot fabricate a control-plane epoch change', () => {
   const currentControllerHeadSha = resolveCheckedOutControlPlaneHeadSha({

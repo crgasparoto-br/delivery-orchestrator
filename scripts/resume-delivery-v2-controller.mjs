@@ -37,6 +37,7 @@ import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-ar
 import { attachLegacyAdoptionAuditRun, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
 import { fetchImmutableCompareEvidence } from '../src/v2/github-audit-evidence.mjs';
+import { resolveCheckedOutControlPlaneHeadSha } from './guard-delivery-v2-reentry.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
@@ -1414,9 +1415,8 @@ export async function main() {
           actionsToken
         );
 
-        const currentControllerSha = String(
-          process.env.GITHUB_SHA ?? ''
-        ).trim().toLowerCase();
+        const currentControllerSha =
+          resolveCheckedOutControlPlaneHeadSha();
 
         if (
           shouldRearmFailedTechnicalHygiene({
