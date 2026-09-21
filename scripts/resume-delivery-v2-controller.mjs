@@ -99,17 +99,22 @@ export function shouldRearmUnknownTechnicalHygiene({
     ? technicalHygiene.missingEvidence
     : [];
 
-  const hasRecoverableToolchainEvidence = missingEvidence.some((item) =>
-    item?.material === true &&
-    RECOVERABLE_UNKNOWN_HYGIENE_CODES.has(
-      String(item?.code ?? '').trim().toUpperCase()
-    )
+  const materialMissingEvidence = missingEvidence.filter(
+    (item) => item?.material === true
   );
+
+  const hasOnlyRecoverableToolchainMaterialEvidence =
+    materialMissingEvidence.length > 0 &&
+    materialMissingEvidence.every((item) =>
+      RECOVERABLE_UNKNOWN_HYGIENE_CODES.has(
+        String(item?.code ?? '').trim().toUpperCase()
+      )
+    );
 
   return (
     result === 'UNKNOWN' &&
     String(runConclusion ?? '').trim().toLowerCase() === 'success' &&
-    hasRecoverableToolchainEvidence &&
+    hasOnlyRecoverableToolchainMaterialEvidence &&
     /^[0-9a-f]{40}$/.test(previousSha) &&
     /^[0-9a-f]{40}$/.test(currentSha) &&
     previousSha !== currentSha

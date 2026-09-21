@@ -312,6 +312,56 @@ test('UNKNOWN technical hygiene rearms only for stale toolchain evidence after c
   assert.equal(
     shouldRearmUnknownTechnicalHygiene({
       technicalHygiene: {
+        result: 'UNKNOWN',
+        missingEvidence: [
+          {
+            code: 'VALIDATION_TOOLCHAIN_MISSING',
+            detail: 'validation tools were unavailable',
+            material: true
+          },
+          {
+            code: 'SEMANTIC_EQUIVALENCE_UNKNOWN',
+            detail: 'semantic equivalence was not proven',
+            material: true
+          }
+        ]
+      },
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'mixed toolchain and semantic material UNKNOWN must remain release-blocking'
+  );
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene: {
+        result: 'UNKNOWN',
+        missingEvidence: [
+          {
+            code: 'VALIDATION_TOOLCHAIN_MISSING',
+            detail: 'validation tools were unavailable',
+            material: true
+          },
+          {
+            code: 'SEMANTIC_EQUIVALENCE_UNKNOWN',
+            detail: 'non-material semantic telemetry',
+            material: false
+          }
+        ]
+      },
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    true,
+    'non-material unrelated evidence must not prevent stale toolchain recollection'
+  );
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene: {
         result: 'PASS',
         missingEvidence: []
       },
