@@ -68,6 +68,14 @@ steps:
   - name: Install pinned Codex CLI for Delivery V2 sandbox
     shell: bash
     run: npm install --ignore-scripts -g @openai/codex@0.150.1
+  - name: Install pnpm 9 for Delivery V2 sandbox
+    shell: bash
+    run: |
+      set -euo pipefail
+      if ! command -v pnpm >/dev/null 2>&1; then
+        npm install --ignore-scripts -g pnpm@9
+      fi
+      pnpm --version
   - name: Checkout trusted sandbox toolchain preflight
     uses: actions/checkout@v7
     with:

@@ -28,6 +28,7 @@ require_tool git
 require_tool sed
 require_tool node
 require_tool npm
+require_tool pnpm
 require_tool safeoutputs
 require_tool mktemp
 
@@ -48,25 +49,28 @@ require_child_tool() {
     fail "$tool is not available inside Codex child bash shells"
 }
 
-for tool in git sed node npm safeoutputs; do
+for tool in git sed node npm pnpm safeoutputs; do
   require_child_tool "$tool"
 done
 
 # npm itself uses /usr/bin/env node. Running npm here proves that node remains
-# resolvable after the exact bash -lc boundary used by Codex command execution.
-/bin/bash -lc 'git --version >/dev/null && node --version >/dev/null && npm --version >/dev/null' ||
-  fail "git/node/npm execution failed inside Codex child bash shells"
+# resolvable through the compatibility login-shell probe. Actual Codex command
+# shells are forced to non-login mode below.
+/bin/bash -lc 'git --version >/dev/null && node --version >/dev/null && npm --version >/dev/null && pnpm --version >/dev/null' ||
+  fail "git/node/npm/pnpm execution failed inside sandbox child-shell probe"
 
 echo "Delivery V2 Codex child-shell toolchain preflight: PASS"
 
 echo "git=$(command -v git)"
 echo "node=$(command -v node)"
 echo "npm=$(command -v npm)"
+echo "pnpm=$(command -v pnpm)"
 echo "safeoutputs=$(command -v safeoutputs)"
 
 git --version
 node --version
 npm --version
+pnpm --version
 
 require_safeoutput() {
   local tool="$1"
@@ -78,8 +82,9 @@ require_safeoutput() {
 
 require_safeoutput create_pull_request
 require_safeoutput push_to_pull_request_branch
+require_safeoutput noop
 
-/bin/bash -lc 'safeoutputs create_pull_request --help >/dev/null 2>&1 && safeoutputs push_to_pull_request_branch --help >/dev/null 2>&1' ||
+/bin/bash -lc 'safeoutputs create_pull_request --help >/dev/null 2>&1 && safeoutputs push_to_pull_request_branch --help >/dev/null 2>&1 && safeoutputs noop --help >/dev/null 2>&1' ||
   fail "safeoutputs commands are not executable inside Codex child bash shells"
 
 echo "Delivery V2 effective sandbox toolchain preflight: PASS"
@@ -91,4 +96,8 @@ fi
 
 require_tool codex
 
-exec codex "$@"
+# Codex shell tools default to login shells. Inside the AWF worker this
+# re-runs the login profile and replaces the curated PATH assembled above,
+# hiding the toolcache and safeoutputs CLI from the actual commands executed
+# by the agent. Force non-login command shells so the proven PATH is preserved.
+exec codex -c allow_login_shell=false "$@"
