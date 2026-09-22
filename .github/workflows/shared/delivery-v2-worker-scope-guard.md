@@ -117,14 +117,22 @@ For remediation, compare the proposed correction both with the delivery's initia
 
 The final worker result must include exactly one single-line machine-readable marker `TECHNICAL_HYGIENE_JSON={...}`. The canonical payload schema is:
 
-- `reuseDiscovery`: array of objects `{symbol, decision, evidence, existingOwnerEvidence?, justificationEvidence?}`. `decision` is one of `REUSE_EXISTING`, `EXTEND_EXISTING`, `LOCAL_REFACTOR`, `CREATE_NEW`, `KEEP_SEPARATE`, `UNKNOWN`.
+- `reuseDiscovery`: array of objects `{symbol, decision, evidence, existingOwnerEvidence?, justificationEvidence?}`. `decision` is one of `REUSE_EXISTING`, `EXTEND_EXISTING`, `LOCAL_REFACTOR`, `CREATE_NEW`, `KEEP_SEPARATE`, `UNKNOWN`. `evidence`, `existingOwnerEvidence` and `justificationEvidence` MUST always be arrays of non-empty strings; never emit a scalar evidence string.
 - `createdFiles`: array of repository-relative file paths created by the current worker.
-- `structuralFindings`: array of finding objects; use `[]` when none exist.
+- `structuralFindings`: array of canonical finding objects containing mandatory `kind`, plus `evidence` as an array of non-empty strings. `kind` MUST be exactly one of `file-growth`, `fallback`, `workaround`, `duplication`, `parallel-abstraction`, `dead-code`, `responsibility-growth`, `avoidable-complexity`, `created-files`, or `textual-similarity`. `material`, `preexisting`, `newResponsibilities`, `complexityIncreased`, and `cohesive`, when present, MUST be JSON booleans, never strings. `ordinal`, when present, MUST be an integer >= 1. Use `[]` when none exist. Never substitute free-form `claim`, `impact`, `description`, `reason`, or a synonym for the mandatory canonical `kind` field.
 - `semanticJudgments`: array of objects containing at least `claim`, `decision`, and evidence for every material judgment; use `[]` when none exist.
 - `deterministicReferences`: array of objects `{symbol, referenced, evidence}`; use `[]` when none exist.
 - `missingEvidence`: array of objects `{code, detail, material?}`; use `[]` when none exist.
 - `semanticCalls`: non-negative integer count, never a textual list.
 
+Before reporting `PNPM_TOOL_MISSING`, `LOCAL_DEPENDENCIES_UNAVAILABLE`, `SAFEOUTPUTS_UNAVAILABLE`, `SAFE_OUTPUT_TOOL_UNAVAILABLE`, `TEST_EXECUTION_UNAVAILABLE`, or an equivalent infrastructure failure:
+
+1. Run `command -v pnpm && pnpm --version`.
+2. Run `command -v safeoutputs && safeoutputs noop --help`.
+3. Do not substitute `corepack pnpm` when the workflow-provided `pnpm` executable is already present.
+4. The trusted sandbox preflight already validates the effective toolchain before model execution; absence from an MCP/tool listing alone does not prove the CLI is unavailable.
+5. In evidence-only mode, use the provisioned non-material `safeoutputs noop` transport instead of searching for an alternate transport.
+
 Minimal valid example: `TECHNICAL_HYGIENE_JSON={"reuseDiscovery":[],"createdFiles":[],"structuralFindings":[],"semanticJudgments":[],"deterministicReferences":[],"missingEvidence":[],"semanticCalls":0}`.
 
-For compatibility with already-produced worker artifacts, the controller may normalize only deterministic shorthand that preserves evidence; malformed or evidence-free shorthand must remain fail-closed. Do not include authoritative SHAs or a self-declared gate result in this payload: the deterministic controller binds `base_sha`, current `material_sha`, previous remediation SHA and risk profile, then computes `PASS`, `PASS_WITH_DEBT`, `BLOCK`, or `UNKNOWN`. Material `UNKNOWN` is never approval.
+For compatibility with already-produced worker artifacts, the controller may normalize only deterministic shorthand that preserves evidence; malformed or evidence-free shorthand must remain fail-closed. Any worker payload contract violation that cannot be normalized without inventing semantics must become material `UNKNOWN`; it must never crash the controller and must never be silently interpreted as `PASS`. Do not include authoritative SHAs or a self-declared gate result in this payload: the deterministic controller binds `base_sha`, current `material_sha`, previous remediation SHA and risk profile, then computes `PASS`, `PASS_WITH_DEBT`, `BLOCK`, or `UNKNOWN`. Material `UNKNOWN` is never approval.

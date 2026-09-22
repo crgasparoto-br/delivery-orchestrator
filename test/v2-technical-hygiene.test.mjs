@@ -28,3 +28,77 @@ test('material semantic claim without evidence becomes UNKNOWN',()=>assert.equal
 
 
 test('compact structural register preserves created files and symbols',()=>{const r=evaluateTechnicalHygiene(base({createdFiles:['src/new-helper.mjs'],reuseDiscovery:[{symbol:'NewHelper',decision:'CREATE_NEW',material:true,evidence:ev('new'),justificationEvidence:ev('owner')}]}));assert.deepEqual(r.createdFiles,['src/new-helper.mjs']);assert.deepEqual(r.createdSymbols,['NewHelper'])});
+
+
+test('unknown structural finding kind fails closed as UNKNOWN', () => {
+  const result = evaluateTechnicalHygiene(
+    base({
+      structuralFindings: [
+        {
+          kind: 'parallel-implementation',
+          material: true,
+          evidence: ev('parallel')
+        }
+      ]
+    })
+  );
+
+  assert.equal(result.result, 'UNKNOWN');
+  assert.equal(result.releaseAllowed, false);
+
+  assert.ok(
+    result.missingEvidence.some(
+      (entry) => entry.code === 'structural-unknown-kind'
+    )
+  );
+});
+
+test('malformed structural ordinal fails closed instead of neutralizing fallback rule', () => {
+  const result = evaluateTechnicalHygiene(
+    base({
+      structuralFindings: [
+        {
+          kind: 'fallback',
+          ordinal: 'two',
+          material: true,
+          evidence: ev('fallback')
+        }
+      ]
+    })
+  );
+
+  assert.equal(result.result, 'UNKNOWN');
+
+  assert.ok(
+    result.missingEvidence.some(
+      (entry) => entry.code === 'structural-malformed-fields'
+    )
+  );
+});
+
+test('string structural booleans fail closed instead of silently coercing semantics', () => {
+  const result = evaluateTechnicalHygiene(
+    base({
+      structuralFindings: [
+        {
+          kind: 'file-growth',
+          material: true,
+          evidence: ev('growth'),
+          newResponsibilities: 'true',
+          complexityIncreased: 'true'
+        }
+      ]
+    })
+  );
+
+  assert.equal(result.result, 'UNKNOWN');
+
+  assert.ok(
+    result.missingEvidence.some(
+      (entry) =>
+        entry.code === 'structural-malformed-fields' &&
+        entry.detail.includes('newResponsibilities') &&
+        entry.detail.includes('complexityIncreased')
+    )
+  );
+});

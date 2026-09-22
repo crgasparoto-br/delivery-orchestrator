@@ -74,6 +74,25 @@ export function shouldRearmFailedTechnicalHygiene({
   );
 }
 
+
+export function shouldRearmStaleUnconsumedTechnicalHygiene({
+  technicalHygiene,
+  runConclusion,
+  runHeadSha,
+  currentControllerSha
+} = {}) {
+  const previousSha = String(runHeadSha ?? '').trim().toLowerCase();
+  const currentSha = String(currentControllerSha ?? '').trim().toLowerCase();
+
+  return (
+    technicalHygiene == null &&
+    String(runConclusion ?? '').trim().toLowerCase() === 'success' &&
+    /^[0-9a-f]{40}$/.test(previousSha) &&
+    /^[0-9a-f]{40}$/.test(currentSha) &&
+    previousSha !== currentSha
+  );
+}
+
 const RECOVERABLE_UNKNOWN_HYGIENE_CODES = new Set([
   'VALIDATION_TOOLCHAIN_MISSING',
   'SAFEOUTPUT_TOOL_MISSING',
@@ -86,7 +105,13 @@ const RECOVERABLE_UNKNOWN_HYGIENE_CODES = new Set([
   // These aliases remain protected by the existing control-plane SHA
   // change guard, so they cannot create a same-SHA automatic retry loop.
   'SAFEOUTPUTS_UNAVAILABLE',
-  'LOCAL_DEPENDENCIES_UNAVAILABLE'
+  'LOCAL_DEPENDENCIES_UNAVAILABLE',
+
+  // Vocabulary observed from current evidence-only workers.
+  // Rearming still requires a control-plane SHA change, so these aliases
+  // cannot create an automatic retry loop on the same controller version.
+  'SAFE_OUTPUT_TOOL_UNAVAILABLE',
+  'TEST_EXECUTION_UNAVAILABLE'
 ]);
 
 export function shouldRearmUnknownTechnicalHygiene({
@@ -1552,13 +1577,25 @@ export async function main() {
         const currentControllerSha =
           resolveCheckedOutControlPlaneHeadSha();
 
-        if (
+        const rearmFailedTechnicalHygiene =
           shouldRearmFailedTechnicalHygiene({
             nextAction: controller.nextAction,
             runConclusion: hygieneRun.conclusion,
             runHeadSha: hygieneRun.head_sha,
             currentControllerSha
-          })
+          });
+
+        const rearmStaleUnconsumedTechnicalHygiene =
+          shouldRearmStaleUnconsumedTechnicalHygiene({
+            technicalHygiene: controller.technicalHygiene,
+            runConclusion: hygieneRun.conclusion,
+            runHeadSha: hygieneRun.head_sha,
+            currentControllerSha
+          });
+
+        if (
+          rearmFailedTechnicalHygiene ||
+          rearmStaleUnconsumedTechnicalHygiene
         ) {
           const previousHygieneRunId = hygieneRun.id;
           const previousControllerSha = String(
@@ -1571,9 +1608,12 @@ export async function main() {
             nextAction: 'dispatch-technical-hygiene',
             hygieneDispatchNonce,
             hygieneRunId: null,
+            technicalHygiene: null,
             hygieneRecovery: {
               schemaVersion: 1,
-              reason: 'control-plane-changed-after-technical-hygiene-failure',
+              reason: rearmStaleUnconsumedTechnicalHygiene
+                ? 'control-plane-changed-before-technical-hygiene-consumption'
+                : 'control-plane-changed-after-technical-hygiene-failure',
               previousRunId: previousHygieneRunId,
               previousControllerSha,
               currentControllerSha

@@ -14,6 +14,25 @@ const SHA_RE = /^[0-9a-f]{40}$/i;
 const PROFILES = new Set(['fast', 'standard', 'critical']);
 const RESULTS = new Set(TECHNICAL_HYGIENE_RESULTS);
 const DECISIONS = new Set(REUSE_DECISIONS);
+const STRUCTURAL_FINDING_KINDS = new Set([
+  'file-growth',
+  'fallback',
+  'workaround',
+  'duplication',
+  'parallel-abstraction',
+  'dead-code',
+  'responsibility-growth',
+  'avoidable-complexity',
+  'created-files',
+  'textual-similarity'
+]);
+const STRUCTURAL_BOOLEAN_FIELDS = Object.freeze([
+  'material',
+  'preexisting',
+  'newResponsibilities',
+  'complexityIncreased',
+  'cohesive'
+]);
 const LOCAL_POLICY_KEYS = new Set(['thresholds', 'tools', 'severityPromotions']);
 
 function object(value, label) {
@@ -73,13 +92,41 @@ function normalizeReuse(entry, index) {
 
 function normalizeFinding(entry, index, label = 'structuralFindings') {
   const value = object(entry, `${label}[${index}]`);
+  const kind = string(value.kind, `${label}[${index}].kind`).toLowerCase();
+
+  const malformedFields = [];
+
+  for (const field of STRUCTURAL_BOOLEAN_FIELDS) {
+    if (
+      value[field] != null &&
+      typeof value[field] !== 'boolean'
+    ) {
+      malformedFields.push(field);
+    }
+  }
+
+  let ordinal = 1;
+
+  if (value.ordinal != null) {
+    ordinal = Number(value.ordinal);
+
+    if (!Number.isInteger(ordinal) || ordinal < 1) {
+      malformedFields.push('ordinal');
+    }
+  }
+
   return Object.freeze({
-    kind: string(value.kind, `${label}[${index}].kind`).toLowerCase(),
+    kind,
+    supportedKind: STRUCTURAL_FINDING_KINDS.has(kind),
+    malformedFields: Object.freeze([...new Set(malformedFields)]),
     material: value.material !== false,
     preexisting: value.preexisting === true,
     evidence: evidence(value.evidence ?? [], `${label}[${index}].evidence`),
-    rootCauseEvidence: evidence(value.rootCauseEvidence ?? [], `${label}[${index}].rootCauseEvidence`),
-    ordinal: value.ordinal == null ? 1 : Number(value.ordinal),
+    rootCauseEvidence: evidence(
+      value.rootCauseEvidence ?? [],
+      `${label}[${index}].rootCauseEvidence`
+    ),
+    ordinal,
     newResponsibilities: value.newResponsibilities === true,
     complexityIncreased: value.complexityIncreased === true,
     cohesive: value.cohesive !== false
@@ -145,6 +192,27 @@ export function evaluateTechnicalHygiene(rawInput) {
 
   for (const finding of structuralFindings) {
     if (!finding.material) continue;
+
+    if (!finding.supportedKind) {
+      missingEvidence.push(
+        missing(
+          'structural-unknown-kind',
+          `unsupported structural finding kind: ${finding.kind}`
+        )
+      );
+      continue;
+    }
+
+    if (finding.malformedFields.length > 0) {
+      missingEvidence.push(
+        missing(
+          'structural-malformed-fields',
+          `${finding.kind}: ${finding.malformedFields.join(', ')}`
+        )
+      );
+      continue;
+    }
+
     if (finding.evidence.length === 0) {
       missingEvidence.push(missing(`structural-${finding.kind}-without-evidence`, finding.kind));
       continue;

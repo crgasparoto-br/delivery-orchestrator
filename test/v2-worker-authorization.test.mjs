@@ -13,6 +13,7 @@ import {
 import {
   resumeEntryNextAction,
   shouldRearmFailedTechnicalHygiene,
+  shouldRearmStaleUnconsumedTechnicalHygiene,
   shouldRearmUnknownTechnicalHygiene
 } from '../scripts/resume-delivery-v2-controller.mjs';
 
@@ -474,7 +475,12 @@ test('resume controller clears stale hygiene run before redispatch', async () =>
 
   assert.match(
     body,
-    /reason: 'control-plane-changed-after-technical-hygiene-failure'/
+    /'control-plane-changed-after-technical-hygiene-failure'/
+  );
+
+  assert.match(
+    body,
+    /'control-plane-changed-before-technical-hygiene-consumption'/
   );
 
   assert.match(
@@ -485,5 +491,118 @@ test('resume controller clears stale hygiene run before redispatch', async () =>
   assert.match(
     body,
     /if \(!hygieneRun\) \{[\s\S]*?dispatchWorker\(\{/
+  );
+});
+
+test('current hygiene infrastructure vocabulary can rearm after a control-plane change', () => {
+  const technicalHygiene = {
+    result: 'UNKNOWN',
+    missingEvidence: [
+      {
+        code: 'SAFE_OUTPUT_TOOL_UNAVAILABLE',
+        detail: 'worker could not locate safeoutputs noop',
+        material: true
+      },
+      {
+        code: 'TEST_EXECUTION_UNAVAILABLE',
+        detail: 'worker could not execute the focused test command',
+        material: true
+      }
+    ]
+  };
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene,
+      runConclusion: 'success',
+      runHeadSha: 'a'.repeat(40),
+      currentControllerSha: 'b'.repeat(40)
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene,
+      runConclusion: 'success',
+      runHeadSha: 'b'.repeat(40),
+      currentControllerSha: 'b'.repeat(40)
+    }),
+    false,
+    'same-SHA retries must remain blocked'
+  );
+});
+
+
+test('successful stale technical hygiene is recollected when it was never consumed', () => {
+  const previousControllerSha = 'a'.repeat(40);
+  const currentControllerSha = 'b'.repeat(40);
+
+  assert.equal(
+    shouldRearmStaleUnconsumedTechnicalHygiene({
+      technicalHygiene: null,
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    true,
+    'a successful artifact from an older control plane must be recollected before first consumption'
+  );
+
+  assert.equal(
+    shouldRearmStaleUnconsumedTechnicalHygiene({
+      technicalHygiene: {
+        result: 'PASS'
+      },
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'already-consumed evidence must not be discarded by this recovery path'
+  );
+
+  assert.equal(
+    shouldRearmStaleUnconsumedTechnicalHygiene({
+      technicalHygiene: null,
+      runConclusion: 'success',
+      runHeadSha: currentControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'same-control-plane evidence must not create a retry loop'
+  );
+
+  assert.equal(
+    shouldRearmStaleUnconsumedTechnicalHygiene({
+      technicalHygiene: null,
+      runConclusion: 'failure',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    false,
+    'failed workers remain owned by failed-worker recovery'
+  );
+});
+
+test('resume controller discards stale successful unconsumed hygiene before parsing it', async () => {
+  const body = await readFile(
+    'scripts/resume-delivery-v2-controller.mjs',
+    'utf8'
+  );
+
+  assert.match(
+    body,
+    /shouldRearmStaleUnconsumedTechnicalHygiene\(\{[\s\S]*?technicalHygiene: controller\.technicalHygiene[\s\S]*?hygieneRun\.head_sha/
+  );
+
+  assert.match(
+    body,
+    /control-plane-changed-before-technical-hygiene-consumption/
+  );
+
+  assert.match(
+    body,
+    /hygieneRunId: null,[\s\S]*?technicalHygiene: null/
   );
 });
