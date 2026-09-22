@@ -50,9 +50,9 @@
       "title": "Risk profiles, hard budgets and bounded provider work",
       "status": "validated",
       "requiredForV2Default": true,
-      "summary": "FAST/STANDARD/CRITICAL define CI depth, audit policy, implementation attempts, turns and AI-credit ceilings.",
-      "implementationRefs": ["file:src/v2/execution-policy.mjs", "file:src/v2/provider-policy.mjs"],
-      "validationRefs": ["file:test/v2-delivery-plan.test.mjs", "file:test/v2-provider-policy.test.mjs", "github:delivery-orchestrator#21"],
+      "summary": "FAST/STANDARD/CRITICAL define CI depth, audit policy, implementation attempts, turns and AI-credit ceilings; deterministic pre-material recovery may replace an eligible lost attempt without increasing those ceilings.",
+      "implementationRefs": ["file:src/v2/execution-policy.mjs", "file:src/v2/provider-policy.mjs", "file:scripts/guard-delivery-v2-reentry.mjs", "file:scripts/reserve-delivery-v2-initial-attempt.mjs"],
+      "validationRefs": ["file:test/v2-delivery-plan.test.mjs", "file:test/v2-provider-policy.test.mjs", "file:test/v2-reentry-bootstrap-recovery.test.mjs", "github:delivery-orchestrator#21"],
       "rolloutRefs": [],
       "trackingIssue": 27
     },

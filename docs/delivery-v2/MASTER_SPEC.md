@@ -327,24 +327,37 @@ Budgets are ceilings, not targets. A pre-material control-plane recovery does no
 
 ### 8.1 Pre-material control-plane recovery
 
-A bootstrap that exhausted its initial reservation budget before producing a usable material candidate remains fail-closed by default. The deterministic controller may grant exactly one recovery dispatch for a control-plane epoch only when all of the following are proven from trusted GitHub/controller evidence:
+Pre-material bootstrap recovery is fail-closed by default and has exactly two deterministic controller-owned paths. Neither path increases the configured implementation-attempt ceiling.
+
+#### Exhausted bootstrap recovery
+
+A bootstrap that exhausted its initial reservation budget before producing a usable material candidate may receive exactly one recovery dispatch for a control-plane epoch only when all of the following are proven from trusted GitHub/controller evidence:
 
 - the persisted bootstrap status is `escalated-initial-budget-exhausted`;
 - the failure stage is `pre-material`;
 - the failure class is `infrastructure` or `unknown`;
 - the worker conclusion is `failure`, `timed_out`, `startup_failure`, or `cancelled`;
 - the prior controller run is provenance-valid;
-- the prior checked-out control-plane SHA is available either from the persisted bootstrap lease or, only for legacy leases created before that field existed, from the validated historical controller job checkout log;
-- the currently checked-out control-plane `HEAD` is an exact Git SHA and differs from that persisted checked-out control-plane SHA.
+- the prior checked-out control-plane SHA is available either from the persisted bootstrap lease or, only for legacy exhausted leases created before that field existed, from the validated historical controller job checkout log;
+- the currently checked-out control-plane `HEAD` is an exact Git SHA and differs from that prior checked-out control-plane SHA.
 
-The recovery is deterministic controller authority, never AI self-extension. It is represented within the configured implementation-attempt ceiling and is tagged with recovery provenance: the prior implementation-attempt count, the prior/current controller SHAs, the recovery reason, and `grantedImplementationAttempts=1`. The prior exhausted state therefore remains traceable instead of being silently discarded.
+#### Successful worker without a material PR
 
-The reservation step independently re-derives recovery eligibility from the trusted persisted bootstrap lease and the actually checked-out control-plane SHA. Workflow-provided recovery fields are compatibility cross-checks, not the sole authority. A run that started from older workflow YAML must not silently discard recovery provenance after checking out newer controller scripts; disagreement between workflow-provided recovery data and trusted persisted provenance fails closed.
+A `reserved-initial-attempt` may be re-armed without charging another implementation attempt only when all of the following are true:
 
-For a legacy exhausted bootstrap lease that predates `controllerHeadSha`, the prior control-plane SHA may be reconstructed only from the provenance-valid historical controller run by reading the exact SHA emitted by the deterministic checkout's `git log -1 --format=%H`. The workflow-run `head_sha`, dispatch SHA, or another event SHA is not a substitute for the checked-out control-plane identity. Guard and reservation must independently re-derive this legacy evidence, and missing or ambiguous checkout evidence fails closed.
+- no managed PR exists for the requested target when the re-entry guard performs fresh GitHub discovery;
+- the persisted bootstrap status is `reserved-initial-attempt`;
+- the correlated worker run is provenance-valid and is terminal `completed/success`;
+- the prior checked-out control-plane SHA is present in trusted persisted bootstrap provenance;
+- the currently checked-out control-plane `HEAD` is an exact Git SHA and differs from that prior SHA.
 
-The same control-plane SHA cannot grant a second recovery. If the recovery dispatch also fails before material output, the bootstrap returns to `escalated-initial-budget-exhausted` for that SHA; another recovery requires a later verified control-plane SHA change. Ambiguous provenance, a non-pre-material failure, a material/functional failure, or an ineligible worker conclusion keeps `human-escalation`. Once a usable material candidate exists, normal CI, audit, remediation, exact-head release, and implementation/audit-remediation limits apply unchanged.
+This path exists for a worker that was technically successful but produced no material PR because of a defect in the prior control plane. A successful worker on the same control-plane SHA continues to be recovered instead of being re-dispatched.
 
+The re-entry guard clears `recoverWorkerRunId` only for an eligible changed-SHA recovery and reports `retry-initial-worker`. It reduces `priorInitialAttempts` by one only as input to reservation. The new reservation then restores the same implementation-attempt number, so the lost pre-material execution does not consume an additional budget slot.
+
+The reservation step independently re-derives recovery eligibility from the trusted persisted bootstrap lease plus the actually checked-out control-plane SHA, and for the successful-worker path it independently re-fetches and validates the correlated worker. Workflow-provided recovery fields are compatibility cross-checks, not sole authority. For exhausted legacy leases, historical checkout-log reconstruction remains allowed as described above; a successful `reserved-initial-attempt` without trusted prior control-plane SHA fails closed.
+
+For both recovery paths, provenance records the prior implementation-attempt count, prior/current controller SHAs, recovery reason and `grantedImplementationAttempts=1`. The same control-plane SHA cannot grant a second recovery. If the recovery dispatch also fails before material output, subsequent recovery requires another verified control-plane SHA change. Ambiguous provenance, an ineligible worker state or conclusion, or any material candidate already present fails closed into the ordinary deterministic continuation/escalation rules.
 ## 9. DV2-005 and DV2-006 — Adaptive CI and safe classification
 
 The classifier is deterministic. It decides **how much validation is required**, while each target repository owns the actual commands for build, test, lint, migrations, browser checks, and domain validation.
