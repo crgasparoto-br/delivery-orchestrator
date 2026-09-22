@@ -243,6 +243,7 @@ function nextActionForStatus(status) {
     case 'audit-pending': return 'run-audit';
     case 'audit-failed-remediable': return 'remediate-audit';
     case 'ready-for-human-merge': return 'evaluate-release-gate';
+    case 'technical-hygiene-pending': return 'resolve-technical-hygiene';
     case 'escalated': return 'human-escalation';
     case 'terminal': return 'done';
     default: throw new Error(`unsupported Delivery V2 status: ${status}`);

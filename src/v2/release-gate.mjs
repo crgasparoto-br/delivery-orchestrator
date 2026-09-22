@@ -256,7 +256,7 @@ export function evaluateReleaseGate(rawInput) {
       if (input.classifier.profile === 'fast' && input.technicalHygiene.promotionRequired && input.technicalHygiene.effectiveProfile !== 'fast') {
         return result(input, { state: 'classified', reasons: [`technical-hygiene-promote:${input.technicalHygiene.effectiveProfile}`], evidenceRefs });
       }
-      return result(input, { state: 'audit-failed-remediable', reasons: ['technical-hygiene-unknown-material'], evidenceRefs });
+      return result(input, { state: 'escalated', reasons: ['technical-hygiene-unknown-material'], evidenceRefs });
     }
     if (!['PASS', 'PASS_WITH_DEBT'].includes(input.technicalHygiene.result)) {
       return result(input, { state: 'ci-failed-remediable', reasons: ['technical-hygiene-not-releasable'], evidenceRefs });

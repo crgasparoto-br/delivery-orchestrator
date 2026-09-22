@@ -549,6 +549,7 @@ ci-pending
 ci-failed-remediable
 audit-pending
 audit-failed-remediable
+technical-hygiene-pending
 ready-for-human-merge
 escalated
 terminal
@@ -566,6 +567,7 @@ Rules:
 6. Exhausted implementation or audit budgets transition to `escalated` with a concise human packet.
 7. The controller never recursively asks an AI to orchestrate another AI.
 8. Every remediation is compared both with the initial delivery baseline and the immediately previous material SHA so incremental and cumulative structural regressions are visible.
+9. CI/audit approval with missing or materially `UNKNOWN` technical hygiene enters `technical-hygiene-pending`, never effective release readiness. Evidence-only hygiene recovery preserves the material identity, valid CI/audit evidence and all attempt counters. Persistent material `UNKNOWN` after the required FAST-to-STANDARD reevaluation escalates to human intervention with its evidence; it does not authorize candidate mutation or consume `implementationAttempts` or `auditRemediationAttempts`. A semantic gap requiring a material correction likewise escalates until an explicit remediation contract authorizes that correction. A proven Technical Hygiene `BLOCK` is not evidence uncertainty: it remains actionable and follows the existing bounded `ci-failed-remediable` implementation-remediation path, carrying the exact-head hygiene evidence into remediation.
 
 ## 14. DV2-010 — Exact-head release gate
 
@@ -839,6 +841,8 @@ The gate has exactly four principal results:
 - `UNKNOWN` — a material decision required for release lacks sufficient evidence.
 
 `UNKNOWN` never equals approval. FAST with material `UNKNOWN` promotes to at least STANDARD for reevaluation; persistent material uncertainty then blocks/escalates. STANDARD/CRITICAL material `UNKNOWN` blocks release until evidence/remediation or human escalation according to budget. Non-material uncertainty may be telemetry only when deterministic evidence proves it cannot affect these invariants.
+
+Stale infrastructure recovery classifies missing evidence separately as recoverable material infrastructure, other material/semantic evidence, and non-material telemetry. At least one recoverable material infrastructure item from a successful hygiene run under a verified different control-plane SHA permits full evidence-only recollection for the same material head, including mixed infrastructure/semantic results. The prior complete result remains in recovery provenance and is supplied to recollection; no semantic finding is deleted or presumed resolved. The same control-plane SHA cannot automatically rearm the collection. Fresh `PASS`/`PASS_WITH_DEBT` resumes normal gating; persistent material `UNKNOWN` follows the explicit escalation rule in DV2-009. Persisted historical `ready-for-human-merge` is reconciled through `technical-hygiene-pending` before it can become releasable.
 
 A compact machine result is bound to the candidate and contains at least:
 

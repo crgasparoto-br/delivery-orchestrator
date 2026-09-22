@@ -36,6 +36,8 @@ test('STANDARD audit policy suppresses the LLM audit when repository policy disa
   let state = createOperationalDelivery({ plan, materialHeadSha: SHA });
   assert.equal(state.auditRequired, false);
   state = applyOperationalEvent(state, { type: 'ci-result', result: { candidateSha: SHA, conclusion: 'success', evidenceRef: 'run:green' } });
+  assert.equal(state.status, 'technical-hygiene-pending');
+  state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: { schemaVersion: 1, baselineSha: 'b'.repeat(40), materialSha: SHA, result: 'PASS', effectiveProfile: 'standard', evidenceRef: 'artifact:hygiene' } });
   assert.equal(state.status, 'ready-for-human-merge');
   assert.equal(state.auditAttempts, 0);
 });
@@ -48,6 +50,45 @@ test('CRITICAL audit cannot be disabled by the STANDARD repository switch', () =
   const plan = createDeliveryPlan(planConfig('critical', false));
   assert.equal(plan.audit.required, true);
   assert.equal(plan.audit.mode, 'independent');
+});
+
+test('controllers never dispatch remediation after start-implementation escalates', async () => {
+  const controller = await readFile(
+    new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
+  const resume = await readFile(
+    new URL('../scripts/resume-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
+
+  const unsafePattern =
+    /state = applyOperationalEvent\(state, \{ type: 'start-implementation' \}\);\s*const workerDispatchNonce = createDispatchNonce\(\);/g;
+
+  const guardedPattern =
+    /state = applyOperationalEvent\(state, \{ type: 'start-implementation' \}\);\s*if \(state\.status === 'escalated'\) \{/g;
+
+  assert.equal(
+    (controller.match(unsafePattern) ?? []).length,
+    0,
+    'initial controller must not dispatch immediately after start-implementation without checking escalation'
+  );
+
+  assert.equal(
+    (resume.match(unsafePattern) ?? []).length,
+    0,
+    'resume controller must not dispatch immediately after start-implementation without checking escalation'
+  );
+
+  assert.ok(
+    (controller.match(guardedPattern) ?? []).length >= 1,
+    'initial controller must guard remediation dispatch'
+  );
+
+  assert.ok(
+    (resume.match(guardedPattern) ?? []).length >= 1,
+    'resume controller must guard remediation dispatch'
+  );
 });
 
 test('platform CI executes one strict completeness scan and one target scan', async () => {

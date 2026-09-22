@@ -19,7 +19,7 @@
 - Requested risk may promote but may never lower observed risk.
 - FAST uses focused/related validation; STANDARD uses affected validation plus build/type/lint; CRITICAL preserves the repository's complete pre-existing PR safety gate.
 - Merge-preview compatibility and exact-head validation are distinct. Expensive suites should not be duplicated without a repository-specific reason.
-- Material Technical Hygiene `UNKNOWN` promotes FAST to at least STANDARD and remains release-blocking if unresolved; STANDARD/CRITICAL material `UNKNOWN` blocks/escalates according to budget.
+- Material Technical Hygiene `UNKNOWN` promotes FAST to at least STANDARD and remains release-blocking if unresolved. Persistent material `UNKNOWN` after the required reevaluation escalates to human intervention without authorizing candidate mutation or consuming implementation/audit-remediation budgets; any future automatic material correction for a semantic hygiene gap requires an explicit remediation-source and budget contract. Proven Technical Hygiene `BLOCK` remains actionable and follows the bounded implementation-remediation path.
 
 ## Technical hygiene evidence
 

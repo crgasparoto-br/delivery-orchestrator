@@ -194,7 +194,63 @@ export function createAdoptedOperationalDelivery({ plan, materialHeadSha, ciEvid
     evidenceRef: requiredString(evidence.evidenceRef, 'ciEvidence.evidenceRef')
   });
 
-  return Object.freeze({ ...state, technicalHygiene: null });
+  return reconcileTechnicalHygieneReadiness(Object.freeze({ ...state, technicalHygiene: null }));
+}
+
+function reconcileTechnicalHygieneReadiness(state) {
+  const hygiene = state.technicalHygiene;
+
+  // A proven hygiene BLOCK is actionable material failure. Preserve the
+  // existing bounded implementation-remediation path instead of converting
+  // it into human escalation. When CI has just completed for an audit-required
+  // candidate, route before allocating an audit run.
+  if (
+    hygiene?.materialSha === state.materialHeadSha &&
+    hygiene.result === 'BLOCK' &&
+    (
+      state.status === 'ready-for-human-merge' ||
+      state.status === 'technical-hygiene-pending' ||
+      (state.status === 'audit-pending' && !state.auditInFlight)
+    )
+  ) {
+    if (
+      state.implementationAttempts >=
+      state.limits.maxImplementationAttempts
+    ) {
+      return escalateDelivery(state, {
+        reason: 'implementation-budget-exhausted',
+        evidenceRef: hygiene.evidenceRef
+      });
+    }
+
+    return Object.freeze({
+      ...state,
+      status: 'ci-failed-remediable',
+      ciFailure: Object.freeze({
+        candidateSha: state.materialHeadSha,
+        failureClass: 'actionable',
+        cause: 'technical-hygiene-block',
+        evidenceRef: hygiene.evidenceRef
+      }),
+      auditInFlight: false
+    });
+  }
+
+  if (!['ready-for-human-merge', 'technical-hygiene-pending'].includes(state.status)) return state;
+
+  const passed = hygiene?.materialSha === state.materialHeadSha &&
+    ['PASS', 'PASS_WITH_DEBT'].includes(hygiene.result) &&
+    !hygiene.promotionRequired &&
+    !hygiene.missingEvidence.some((item) => item.material);
+
+  return Object.freeze({
+    ...state,
+    status: passed
+      ? (state.auditRequired && state.auditEvidence?.decision !== 'approved'
+        ? 'audit-pending'
+        : 'ready-for-human-merge')
+      : 'technical-hygiene-pending'
+  });
 }
 
 export function nextOperationalAction(state) {
@@ -207,6 +263,7 @@ export function nextOperationalAction(state) {
     case 'audit-pending': return state.auditInFlight ? 'observe-audit' : 'dispatch-audit';
     case 'audit-failed-remediable': return 'dispatch-audit-remediation';
     case 'ready-for-human-merge': return 'evaluate-release-gate';
+    case 'technical-hygiene-pending': return 'resolve-technical-hygiene';
     case 'escalated': return 'human-escalation';
     case 'terminal': return 'done';
     default: throw new Error(`unsupported Delivery V2 state: ${state?.status ?? '(missing)'}`);
@@ -223,13 +280,21 @@ export function applyOperationalEvent(state, event) {
     case 'technical-hygiene-result': {
       const technicalHygiene = normalizeTechnicalHygieneResult(value.result);
       if (technicalHygiene.materialSha !== state.materialHeadSha) throw new Error('technical hygiene result is stale for material head');
-      return Object.freeze({ ...state, technicalHygiene });
+      return reconcileTechnicalHygieneReadiness(Object.freeze({ ...state, technicalHygiene }));
     }
-    case 'ci-result': return recordCiResult(state, value.result);
+    case 'resolve-technical-hygiene': {
+      const next = reconcileTechnicalHygieneReadiness(state);
+      if (next.status !== 'technical-hygiene-pending') return next;
+      return escalateDelivery(next, {
+        reason: `technical-hygiene-${next.technicalHygiene?.result?.toLowerCase() ?? 'missing'}`,
+        evidenceRef: next.technicalHygiene?.evidenceRef
+      });
+    }
+    case 'ci-result': return reconcileTechnicalHygieneReadiness(recordCiResult(state, value.result));
     case 'start-audit': return startAudit(state);
     case 'audit-result': {
       const inFlight = state.auditInFlight ? state : startAudit(state);
-      return recordAuditResult(inFlight, value.result);
+      return reconcileTechnicalHygieneReadiness(recordAuditResult(inFlight, value.result));
     }
     case 'head-drift': return Object.freeze({ ...recordHeadDrift(state, { materialHeadSha: value.materialHeadSha }), technicalHygiene: null });
     case 'escalate': return escalateDelivery(state, { reason: value.reason, evidenceRef: value.evidenceRef ?? null });
@@ -239,7 +304,20 @@ export function applyOperationalEvent(state, event) {
 }
 
 export function operationalRemediationInput(state, options = {}) {
-  return remediationInputsFor(state, options);
+  const input = remediationInputsFor(state, options);
+
+  if (
+    state.status === 'ci-failed-remediable' &&
+    state.ciFailure?.cause === 'technical-hygiene-block' &&
+    state.technicalHygiene?.result === 'BLOCK'
+  ) {
+    return Object.freeze({
+      ...input,
+      technicalHygiene: state.technicalHygiene
+    });
+  }
+
+  return input;
 }
 
 export function persistentStateFromOperational({ state, identity, classifier, workflowChecks = [], evidenceRefs = [] } = {}) {
@@ -302,7 +380,7 @@ export function operationalStateFromPersistent(rawPersistentState) {
     schemaVersion: 1,
     repository: persistent.repository,
     workItem: `issue:${persistent.issueNumber ?? 'unknown'}`,
-    status: persistent.status,
+    status: persistent.status === 'ready-for-human-merge' ? 'technical-hygiene-pending' : persistent.status,
     riskProfile: persistent.effectiveRisk,
     materialHeadSha: persistent.materialHeadSha,
     implementerProvider: persistent.provider,

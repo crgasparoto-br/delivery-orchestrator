@@ -9,7 +9,13 @@ import {
   selectManagedPullRequest
 } from '../scripts/guard-delivery-v2-reentry.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
-import { controllerMetadataForNewMaterial, markExistingAuditInFlight, rebuildCiPendingState, shouldStartFreshAudit } from '../scripts/resume-delivery-v2-controller.mjs';
+import {
+  controllerMetadataForNewMaterial,
+  markExistingAuditInFlight,
+  rebuildCiPendingState,
+  shouldRebuildCiPendingStateOnResume,
+  shouldStartFreshAudit
+} from '../scripts/resume-delivery-v2-controller.mjs';
 import { ciFailureClassForEvidence } from '../src/v2/controller-runtime.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { operationalStateFromPersistent } from '../src/v2/operational-controller.mjs';
@@ -170,6 +176,47 @@ test('head drift resumes deterministic classification without resetting attempt 
   assert.equal(decision.materialHeadSha, HEAD_B);
   assert.equal(decision.nextAction, 'classify');
   assert.equal(decision.attempts.implementation, 1);
+});
+
+test('technical hygiene BLOCK remediation survives resume without CI-state rebuild', () => {
+  assert.equal(
+    shouldRebuildCiPendingStateOnResume({
+      staleStateDetected: false,
+      state: {
+        status: 'ci-failed-remediable',
+        ciFailure: {
+          cause: 'technical-hygiene-block'
+        }
+      }
+    }),
+    false
+  );
+
+  assert.equal(
+    shouldRebuildCiPendingStateOnResume({
+      staleStateDetected: false,
+      state: {
+        status: 'ci-failed-remediable',
+        ciFailure: {
+          cause: 'ordinary-ci-failure'
+        }
+      }
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldRebuildCiPendingStateOnResume({
+      staleStateDetected: true,
+      state: {
+        status: 'ci-failed-remediable',
+        ciFailure: {
+          cause: 'technical-hygiene-block'
+        }
+      }
+    }),
+    true
+  );
 });
 
 test('existing PR without canonical state is adopted with unknown budgets instead of resetting them', () => {

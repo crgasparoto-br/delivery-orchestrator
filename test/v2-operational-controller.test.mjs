@@ -51,6 +51,8 @@ test('normal path composes implementation -> CI -> audit -> ready without conver
   assert.equal(nextOperationalAction(state), 'dispatch-audit');
 
   state = applyOperationalEvent(state, { type: 'audit-result', result: { candidateSha: A, decision: 'approved', evidenceRef: 'audit:1' } });
+  assert.equal(state.status, 'technical-hygiene-pending');
+  state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: { schemaVersion: 1, baselineSha: B, materialSha: A, result: 'PASS', effectiveProfile: 'critical', evidenceRef: 'artifact:hygiene' } });
   assert.equal(state.status, 'ready-for-human-merge');
   assert.equal(state.auditAttempts, 1);
 });
@@ -86,6 +88,158 @@ test('actionable CI failure becomes the only bounded remediation input and prese
   state = applyOperationalEvent(state, { type: 'start-implementation' });
   assert.equal(state.implementationAttempts, 2);
   assert.equal(state.status, 'implementing');
+});
+
+test('technical hygiene BLOCK remains bounded implementation remediation instead of human escalation', () => {
+  let state = createOperationalDelivery({
+    plan: planFor('critical'),
+    materialHeadSha: A
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'technical-hygiene-result',
+    result: {
+      schemaVersion: 1,
+      baselineSha: B,
+      materialSha: A,
+      result: 'BLOCK',
+      effectiveProfile: 'critical',
+      promotionRequired: false,
+      missingEvidence: [],
+      structuralFindings: [{
+        kind: 'duplication',
+        material: true,
+        evidence: ['src/v2/example.mjs:1']
+      }],
+      evidenceRef: 'artifact:hygiene-block'
+    }
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'ci-result',
+    result: {
+      candidateSha: A,
+      conclusion: 'success',
+      evidenceRef: 'run:green-before-hygiene-remediation'
+    }
+  });
+
+  assert.equal(state.status, 'ci-failed-remediable');
+  assert.equal(nextOperationalAction(state), 'dispatch-ci-remediation');
+  assert.equal(state.ciFailure.failureClass, 'actionable');
+  assert.equal(state.ciFailure.cause, 'technical-hygiene-block');
+  assert.equal(state.ciFailure.evidenceRef, 'artifact:hygiene-block');
+
+  const remediation = operationalRemediationInput(state);
+  assert.equal(remediation.source, 'ci-failure');
+  assert.equal(remediation.ciFailure.cause, 'technical-hygiene-block');
+  assert.equal(remediation.technicalHygiene.result, 'BLOCK');
+  assert.equal(remediation.technicalHygiene.structuralFindings[0].kind, 'duplication');
+
+  const persistent = persistentStateFromOperational({
+    state,
+    identity: identity(),
+    classifier: { version: 'v1', fingerprint: 'fingerprint' },
+    workflowChecks: [{
+      name: 'required',
+      subjectSha: A,
+      status: 'completed',
+      conclusion: 'success',
+      workflowRunId: 1,
+      evidenceRef: 'run:green-before-hygiene-remediation'
+    }]
+  });
+
+  assert.equal(persistent.status, 'ci-failed-remediable');
+
+  let restored = operationalStateFromPersistent(persistent);
+  restored = applyOperationalEvent(restored, {
+    type: 'technical-hygiene-result',
+    result: state.technicalHygiene
+  });
+
+  assert.equal(restored.status, 'ci-failed-remediable');
+  assert.equal(
+    operationalRemediationInput(restored).technicalHygiene.result,
+    'BLOCK'
+  );
+});
+
+test('technical hygiene BLOCK escalates instead of exceeding implementation budget', () => {
+  let state = createOperationalDelivery({
+    plan: planFor('standard'),
+    materialHeadSha: A
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'ci-result',
+    result: {
+      candidateSha: A,
+      conclusion: 'failure',
+      failureClass: 'actionable',
+      cause: 'first-remediation',
+      evidenceRef: 'run:first-remediation'
+    }
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'start-implementation'
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'publish-material',
+    materialHeadSha: B
+  });
+
+  // Exercise BLOCK exactly at the configured implementation limit.
+  state = Object.freeze({
+    ...state,
+    implementationAttempts: state.limits.maxImplementationAttempts
+  });
+
+  assert.equal(
+    state.implementationAttempts,
+    state.limits.maxImplementationAttempts
+  );
+
+  state = applyOperationalEvent(state, {
+    type: 'technical-hygiene-result',
+    result: {
+      schemaVersion: 1,
+      baselineSha: A,
+      materialSha: B,
+      result: 'BLOCK',
+      effectiveProfile: 'standard',
+      promotionRequired: false,
+      missingEvidence: [],
+      structuralFindings: [{
+        kind: 'duplication',
+        material: true,
+        evidence: ['src/v2/example.mjs:1']
+      }],
+      evidenceRef: 'artifact:hygiene-budget-block'
+    }
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'ci-result',
+    result: {
+      candidateSha: B,
+      conclusion: 'success',
+      evidenceRef: 'run:green-at-budget-limit'
+    }
+  });
+
+  assert.equal(state.status, 'escalated');
+  assert.equal(
+    state.terminalReason,
+    'implementation-budget-exhausted'
+  );
+  assert.equal(nextOperationalAction(state), 'human-escalation');
+  assert.throws(
+    () => operationalRemediationInput(state),
+    /no remediation input/
+  );
 });
 
 test('persistent projection binds state, evidence and effective AI identity to the exact material head', () => {
@@ -149,7 +303,7 @@ test('operational release fails closed until exact-head technical hygiene is att
   const releaseInput = { schemaVersion: 1, repository: 'owner/repo', pullRequestNumber: 77, materialHeadSha: A, currentRemoteHeadSha: A, evidenceCollection: { materialHeadSha: A, remoteHeadSha: A, evidenceRef: 'collection' }, classifier: { subjectSha: A, profile: 'fast', version: 'v1', fingerprint: 'x', expectedFingerprint: 'x', evidenceRef: 'classifier' }, checks: [{ name: 'ci', required: true, subjectSha: A, status: 'completed', conclusion: 'success', workflowRunId: 1, evidenceRef: 'ci' }], standardAuditRequired: false, unresolvedFindings: [], blockers: [] };
   let release = evaluateOperationalRelease({ state, releaseInput });
   assert.equal(release.readiness, false);
-  assert.deepEqual(release.reasons, ['technical-hygiene-missing']);
+  assert.deepEqual(release.reasons, ['operational-state:technical-hygiene-pending']);
   state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: { schemaVersion: 1, baselineSha: B, materialSha: A, previousMaterialSha: null, result: 'PASS', effectiveProfile: 'fast', promotionRequired: false, missingEvidence: [], evidenceRef: 'artifact:hygiene' } });
   release = evaluateOperationalRelease({ state, releaseInput });
   assert.equal(release.readiness, true);

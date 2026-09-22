@@ -358,8 +358,8 @@ test('UNKNOWN technical hygiene rearms only for stale toolchain evidence after c
       runHeadSha: previousControllerSha,
       currentControllerSha
     }),
-    false,
-    'mixed toolchain and semantic material UNKNOWN must remain release-blocking'
+    true,
+    'mixed toolchain and semantic material UNKNOWN must be recollected'
   );
 
   assert.equal(
@@ -421,7 +421,7 @@ test('resume controller clears stale UNKNOWN toolchain hygiene before recollecti
 
   assert.match(
     body,
-    /shouldRearmUnknownTechnicalHygiene\(\{[\s\S]*?technicalHygiene: controller\.technicalHygiene[\s\S]*?currentControllerSha/
+    /rearmUnknownTechnicalHygiene\(\{ state, controller,[\s\S]*?run: persistedHygieneRun, currentControllerSha/
   );
 
   assert.match(

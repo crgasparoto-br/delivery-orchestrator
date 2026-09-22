@@ -365,7 +365,6 @@ async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repository
   if (String(currentPr.head.sha).toLowerCase() !== materialHeadSha.toLowerCase()) throw new Error('technical hygiene evidence-only promotion mutated the material head');
   const reevaluated = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: promotionRun.id, token: actionsToken, baselineSha, materialSha: materialHeadSha, previousMaterialSha, profile: promotedState.riskProfile });
   promotedState = applyOperationalEvent(promotedState, { type: 'technical-hygiene-result', result: reevaluated });
-  if (!['PASS', 'PASS_WITH_DEBT'].includes(reevaluated.result)) throw new Error(`technical hygiene remained ${reevaluated.result} after ${promotedState.riskProfile.toUpperCase()} re-evaluation`);
   return { hygiene: reevaluated, state: promotedState, plan: promotedPlan, promotionRun };
 }
 
@@ -536,6 +535,10 @@ export async function main() {
 
       const remediation = operationalRemediationInput(state);
       state = applyOperationalEvent(state, { type: 'start-implementation' });
+      if (state.status === 'escalated') {
+        await persist({ nextAction: 'human-escalation' });
+        break;
+      }
       const workerDispatchNonce = createDispatchNonce();
       await persist({ nextAction: 'dispatch-ci-remediation', workerRunId: null, workerDispatchNonce });
       const beforeSha = materialHeadSha;
@@ -717,6 +720,10 @@ export async function main() {
       if (state.status === 'audit-failed-remediable') {
         const remediation = operationalRemediationInput(state);
         state = applyOperationalEvent(state, { type: 'start-implementation' });
+        if (state.status === 'escalated') {
+          await persist({ nextAction: 'human-escalation' });
+          break;
+        }
         const workerDispatchNonce = createDispatchNonce();
         await persist({ nextAction: 'dispatch-audit-remediation', workerRunId: null, workerDispatchNonce });
         const beforeSha = materialHeadSha;
@@ -782,6 +789,11 @@ export async function main() {
       }
     }
 
+    if (state.status === 'technical-hygiene-pending') {
+      state = applyOperationalEvent(state, { type: 'resolve-technical-hygiene' });
+      await persist({ nextAction: state.status === 'escalated' ? 'human-escalation' : state.status });
+    }
+
     if (state.status === 'ready-for-human-merge') {
       const audit = state.auditRequired ? {
         candidateSha: materialHeadSha,
@@ -824,6 +836,11 @@ export async function main() {
     if (state.status === 'escalated') break;
   }
 
+  if (state.status === 'escalated') {
+    await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha,
+      context: targetPolicy.finalStatusName, state: 'failure', description: state.terminalReason,
+      token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
+  }
   pullRequest = await fetchPullRequest(targetRepository, pullRequest.number, targetReadToken);
   const metrics = createControllerDeliveryMetrics({
     observability,
