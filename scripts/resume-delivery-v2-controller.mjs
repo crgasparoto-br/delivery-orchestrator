@@ -74,6 +74,25 @@ export function shouldRearmFailedTechnicalHygiene({
   );
 }
 
+
+export function shouldRearmStaleUnconsumedTechnicalHygiene({
+  technicalHygiene,
+  runConclusion,
+  runHeadSha,
+  currentControllerSha
+} = {}) {
+  const previousSha = String(runHeadSha ?? '').trim().toLowerCase();
+  const currentSha = String(currentControllerSha ?? '').trim().toLowerCase();
+
+  return (
+    technicalHygiene == null &&
+    String(runConclusion ?? '').trim().toLowerCase() === 'success' &&
+    /^[0-9a-f]{40}$/.test(previousSha) &&
+    /^[0-9a-f]{40}$/.test(currentSha) &&
+    previousSha !== currentSha
+  );
+}
+
 const RECOVERABLE_UNKNOWN_HYGIENE_CODES = new Set([
   'VALIDATION_TOOLCHAIN_MISSING',
   'SAFEOUTPUT_TOOL_MISSING',
@@ -1558,13 +1577,25 @@ export async function main() {
         const currentControllerSha =
           resolveCheckedOutControlPlaneHeadSha();
 
-        if (
+        const rearmFailedTechnicalHygiene =
           shouldRearmFailedTechnicalHygiene({
             nextAction: controller.nextAction,
             runConclusion: hygieneRun.conclusion,
             runHeadSha: hygieneRun.head_sha,
             currentControllerSha
-          })
+          });
+
+        const rearmStaleUnconsumedTechnicalHygiene =
+          shouldRearmStaleUnconsumedTechnicalHygiene({
+            technicalHygiene: controller.technicalHygiene,
+            runConclusion: hygieneRun.conclusion,
+            runHeadSha: hygieneRun.head_sha,
+            currentControllerSha
+          });
+
+        if (
+          rearmFailedTechnicalHygiene ||
+          rearmStaleUnconsumedTechnicalHygiene
         ) {
           const previousHygieneRunId = hygieneRun.id;
           const previousControllerSha = String(
@@ -1577,9 +1608,12 @@ export async function main() {
             nextAction: 'dispatch-technical-hygiene',
             hygieneDispatchNonce,
             hygieneRunId: null,
+            technicalHygiene: null,
             hygieneRecovery: {
               schemaVersion: 1,
-              reason: 'control-plane-changed-after-technical-hygiene-failure',
+              reason: rearmStaleUnconsumedTechnicalHygiene
+                ? 'control-plane-changed-before-technical-hygiene-consumption'
+                : 'control-plane-changed-after-technical-hygiene-failure',
               previousRunId: previousHygieneRunId,
               previousControllerSha,
               currentControllerSha

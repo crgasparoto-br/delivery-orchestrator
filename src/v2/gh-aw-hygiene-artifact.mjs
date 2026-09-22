@@ -216,6 +216,60 @@ function normalizeWorkerSummary(rawSummary) {
   };
 }
 
+
+function evaluateWorkerSummaryFailClosed({
+  rawSummary,
+  profile,
+  baselineSha,
+  materialSha,
+  previousMaterialSha = null,
+  evidenceRef
+} = {}) {
+  const trustedInput = {
+    schemaVersion: 1,
+    profile,
+    baselineSha,
+    materialSha,
+    previousMaterialSha,
+    evidenceRef
+  };
+
+  try {
+    const summary = normalizeWorkerSummary(rawSummary);
+
+    return evaluateTechnicalHygiene({
+      ...trustedInput,
+      reuseDiscovery: summary.reuseDiscovery ?? [],
+      createdFiles: summary.createdFiles ?? [],
+      structuralFindings: summary.structuralFindings ?? [],
+      semanticJudgments: summary.semanticJudgments ?? [],
+      deterministicReferences: summary.deterministicReferences ?? [],
+      missingEvidence: summary.missingEvidence ?? [],
+      semanticCalls: summary.semanticCalls ?? 0
+    });
+  } catch (error) {
+    return evaluateTechnicalHygiene({
+      ...trustedInput,
+      reuseDiscovery: [],
+      createdFiles: [],
+      structuralFindings: [],
+      semanticJudgments: [],
+      deterministicReferences: [],
+      missingEvidence: [
+        {
+          code: 'MALFORMED_WORKER_ARTIFACT',
+          detail:
+            `technical hygiene worker payload rejected: ${
+              String(error?.message ?? error)
+            }`,
+          material: true
+        }
+      ],
+      semanticCalls: 0
+    });
+  }
+}
+
 async function findFile(root, expected) {
   const stack = [root];
   while (stack.length) {
@@ -244,20 +298,44 @@ export async function downloadGhAwTechnicalHygieneArtifact({ repository, runId, 
     execFileSync('unzip', ['-q', zip, '-d', root]);
     const log = await findFile(root, 'agent-stdio.log');
     if (!log) throw new Error('worker agent artifact is missing agent-stdio.log');
-    const summary = normalizeWorkerSummary(summaryFromAgentLog(await readFile(log, 'utf8')));
-    return evaluateTechnicalHygiene({
-      schemaVersion: 1,
+    let rawSummary;
+
+    try {
+      rawSummary = summaryFromAgentLog(await readFile(log, 'utf8'));
+    } catch (error) {
+      return evaluateWorkerSummaryFailClosed({
+        rawSummary: {
+          reuseDiscovery: [],
+          createdFiles: [],
+          structuralFindings: [],
+          semanticJudgments: [],
+          deterministicReferences: [],
+          missingEvidence: [
+            {
+              code: 'MALFORMED_WORKER_ARTIFACT',
+              detail:
+                `technical hygiene worker marker rejected: ${
+                  String(error?.message ?? error)
+                }`,
+              material: true
+            }
+          ],
+          semanticCalls: 0
+        },
+        profile,
+        baselineSha,
+        materialSha,
+        previousMaterialSha,
+        evidenceRef: artifact.archive_download_url
+      });
+    }
+
+    return evaluateWorkerSummaryFailClosed({
+      rawSummary,
       profile,
       baselineSha,
       materialSha,
       previousMaterialSha,
-      reuseDiscovery: summary.reuseDiscovery ?? [],
-      createdFiles: summary.createdFiles ?? [],
-      structuralFindings: summary.structuralFindings ?? [],
-      semanticJudgments: summary.semanticJudgments ?? [],
-      deterministicReferences: summary.deterministicReferences ?? [],
-      missingEvidence: summary.missingEvidence ?? [],
-      semanticCalls: summary.semanticCalls ?? 0,
       evidenceRef: artifact.archive_download_url
     });
   } finally {
@@ -265,4 +343,8 @@ export async function downloadGhAwTechnicalHygieneArtifact({ repository, runId, 
   }
 }
 
-export const __test = Object.freeze({ summaryFromAgentLog, normalizeWorkerSummary });
+export const __test = Object.freeze({
+  summaryFromAgentLog,
+  normalizeWorkerSummary,
+  evaluateWorkerSummaryFailClosed
+});

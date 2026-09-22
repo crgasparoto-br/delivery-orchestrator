@@ -159,3 +159,102 @@ test('observed issue 461 hygiene payload is normalized without crashing the cont
   assert.equal(evaluated.result, 'UNKNOWN');
   assert.equal(evaluated.releaseAllowed, false);
 });
+
+
+test('malformed worker fields become UNKNOWN instead of crashing the controller boundary', () => {
+  const malformedPayloads = [
+    {
+      reuseDiscovery: [],
+      createdFiles: { unexpected: true },
+      structuralFindings: [],
+      semanticJudgments: [],
+      deterministicReferences: [],
+      missingEvidence: [],
+      semanticCalls: 0
+    },
+    {
+      reuseDiscovery: [
+        {
+          decision: 'REUSE_EXISTING',
+          evidence: ['src/example.mjs:1']
+        }
+      ],
+      createdFiles: [],
+      structuralFindings: [],
+      semanticJudgments: [],
+      deterministicReferences: [],
+      missingEvidence: [],
+      semanticCalls: 0
+    },
+    {
+      reuseDiscovery: [],
+      createdFiles: [],
+      structuralFindings: [],
+      semanticJudgments: [
+        {
+          claim: 'semantic claim without decision',
+          evidence: ['src/example.mjs:2']
+        }
+      ],
+      deterministicReferences: [],
+      missingEvidence: [],
+      semanticCalls: 0
+    },
+    {
+      reuseDiscovery: [],
+      createdFiles: [],
+      structuralFindings: [],
+      semanticJudgments: [],
+      deterministicReferences: [
+        {
+          referenced: true,
+          evidence: []
+        }
+      ],
+      missingEvidence: [],
+      semanticCalls: 0
+    },
+    {
+      reuseDiscovery: [],
+      createdFiles: [],
+      structuralFindings: [],
+      semanticJudgments: [],
+      deterministicReferences: [],
+      missingEvidence: [
+        {
+          material: true
+        }
+      ],
+      semanticCalls: 0
+    },
+    {
+      reuseDiscovery: [],
+      createdFiles: [],
+      structuralFindings: [],
+      semanticJudgments: [],
+      deterministicReferences: [],
+      missingEvidence: [],
+      semanticCalls: 'many'
+    }
+  ];
+
+  for (const rawSummary of malformedPayloads) {
+    const evaluated = __test.evaluateWorkerSummaryFailClosed({
+      rawSummary,
+      profile: 'standard',
+      baselineSha: 'a'.repeat(40),
+      materialSha: 'b'.repeat(40),
+      previousMaterialSha: null,
+      evidenceRef: 'artifact://malformed-worker-boundary'
+    });
+
+    assert.equal(evaluated.result, 'UNKNOWN');
+    assert.equal(evaluated.releaseAllowed, false);
+
+    assert.ok(
+      evaluated.missingEvidence.some(
+        (entry) => entry.code === 'MALFORMED_WORKER_ARTIFACT'
+      )
+    );
+  }
+});

@@ -46,3 +46,31 @@ test('Codex wrapper proves the same infrastructure before the worker executes', 
   assert.match(body, /allow_login_shell=false/);
   assert.match(body, /shell_environment_policy\.set\.PATH/);
 });
+
+
+test('worker contract pins structural vocabulary and typed fields', async () => {
+  const body = await readFile(
+    '.github/workflows/shared/delivery-v2-worker-scope-guard.md',
+    'utf8'
+  );
+
+  for (const kind of [
+    'file-growth',
+    'fallback',
+    'workaround',
+    'duplication',
+    'parallel-abstraction',
+    'dead-code',
+    'responsibility-growth',
+    'avoidable-complexity',
+    'created-files',
+    'textual-similarity'
+  ]) {
+    assert.match(body, new RegExp(`\\\`${kind}\\\``));
+  }
+
+  assert.match(body, /MUST be JSON booleans/);
+  assert.match(body, /MUST be an integer >= 1/);
+  assert.match(body, /must never crash the controller/);
+  assert.match(body, /must never be silently interpreted as `PASS`/);
+});
