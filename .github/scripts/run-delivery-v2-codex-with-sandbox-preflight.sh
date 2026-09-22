@@ -105,8 +105,10 @@ require_tool codex
 # explicitly into every Codex command subprocess. This keeps safeoutputs,
 # pnpm, node, npm and git discoverable even if the model invokes bash -lc.
 CODEX_SHELL_PATH="$PATH"
+CODEX_BASH_ENV="$BASH_ENV"
 
 exec codex \
   -c allow_login_shell=false \
   -c "shell_environment_policy.set.PATH=\"${CODEX_SHELL_PATH}\"" \
+  -c "shell_environment_policy.set.BASH_ENV=\"${CODEX_BASH_ENV}\"" \
   "$@"
