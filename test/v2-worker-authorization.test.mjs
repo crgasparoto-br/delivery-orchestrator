@@ -278,6 +278,33 @@ test('UNKNOWN technical hygiene rearms only for stale toolchain evidence after c
     'toolchain UNKNOWN from an older control plane must be recollected'
   );
 
+  const historicalToolchainUnknown = {
+    result: 'UNKNOWN',
+    missingEvidence: [
+      {
+        code: 'SAFEOUTPUTS_UNAVAILABLE',
+        detail: 'safeoutputs transport was unavailable in the previous worker',
+        material: true
+      },
+      {
+        code: 'LOCAL_DEPENDENCIES_UNAVAILABLE',
+        detail: 'local dependencies could not be materialized in the previous worker',
+        material: true
+      }
+    ]
+  };
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene: historicalToolchainUnknown,
+      runConclusion: 'success',
+      runHeadSha: previousControllerSha,
+      currentControllerSha
+    }),
+    true,
+    'historical infrastructure UNKNOWN evidence must be recollected after a control-plane change'
+  );
+
   assert.equal(
     shouldRearmUnknownTechnicalHygiene({
       technicalHygiene: toolchainUnknown,

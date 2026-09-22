@@ -80,7 +80,13 @@ const RECOVERABLE_UNKNOWN_HYGIENE_CODES = new Set([
   'GIT_TOOL_MISSING',
   'NODE_TOOL_MISSING',
   'NPM_TOOL_MISSING',
-  'PNPM_TOOL_MISSING'
+  'PNPM_TOOL_MISSING',
+
+  // Historical evidence vocabulary emitted by earlier hygiene workers.
+  // These aliases remain protected by the existing control-plane SHA
+  // change guard, so they cannot create a same-SHA automatic retry loop.
+  'SAFEOUTPUTS_UNAVAILABLE',
+  'LOCAL_DEPENDENCIES_UNAVAILABLE'
 ]);
 
 export function shouldRearmUnknownTechnicalHygiene({
