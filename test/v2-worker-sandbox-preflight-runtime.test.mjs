@@ -22,11 +22,18 @@ test('effective sandbox propagates BASH_ENV to explicit Codex login-shell comman
     const runTemp = join(dir, 'runner-temp');
     const mcpBin = join(runTemp, 'gh-aw', 'mcp-cli', 'bin');
     const fakeBin = join(dir, 'bin');
+    const codexCommandPath = join(
+      dir,
+      'codex-runtime',
+      'vendor',
+      'codex-path'
+    );
     const loginHome = join(dir, 'login-home');
     const manifest = join(dir, 'safeoutputs.jsonl');
 
     await mkdir(mcpBin, { recursive: true });
     await mkdir(fakeBin, { recursive: true });
+    await mkdir(codexCommandPath, { recursive: true });
     await mkdir(loginHome, { recursive: true });
 
     // Simula o profile de um login shell sobrescrevendo o PATH curado
@@ -108,6 +115,15 @@ policy_path=\${policy_path%\\\"}
 policy_bash_env=\${policy_bash_env#\\\"}
 policy_bash_env=\${policy_bash_env%\\\"}
 
+# Reproduz o comportamento observado no worker real: o command subprocess
+# ignora o PATH amplo do host e recebe somente o codex-path interno. Os shims
+# publicados pelo wrapper devem manter a toolchain disponivel mesmo assim.
+restricted_path="\${DELIVERY_V2_TEST_CODEX_COMMAND_PATH:?}"
+
+env -i \
+  PATH="$restricted_path" \
+  /bin/bash -c 'git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; pnpm --version >/dev/null; safeoutputs noop --help >/dev/null'
+
 # Reconstroi um ambiente minimo, como o command environment do Codex.
 # O .bash_profile abaixo destrói PATH; BASH_ENV deve restaura-lo dentro
 # do bash -lc explicito.
@@ -183,6 +199,7 @@ ${nonLoginShell.stderr}`
         RUNNER_TEMP: runTemp,
         GH_AW_SAFE_OUTPUTS: manifest,
         DELIVERY_V2_TEST_LOGIN_HOME: loginHome,
+        DELIVERY_V2_TEST_CODEX_COMMAND_PATH: codexCommandPath,
         PATH: `${fakeBin}:/usr/local/bin:/usr/bin:/bin`
       }
     });
@@ -201,6 +218,11 @@ ${nonLoginShell.stderr}`
     assert.match(
       result.stdout,
       /Delivery V2 effective sandbox toolchain preflight: PASS/
+    );
+
+    assert.match(
+      result.stdout,
+      /Delivery V2 Codex restricted command PATH toolchain: PASS/
     );
 
     const emitted = await readFile(manifest, 'utf8');

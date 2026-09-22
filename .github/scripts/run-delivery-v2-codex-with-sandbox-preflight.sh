@@ -96,6 +96,70 @@ fi
 
 require_tool codex
 
+# Codex command subprocesses can replace the environment-policy PATH with the
+# native package's restricted codex-path. Publish wrappers for the already
+# validated Delivery V2 toolchain directly in that path so the same binaries
+# remain discoverable by the real command shell used by the model.
+resolve_codex_command_path() {
+  local codex_executable codex_real codex_root
+
+  codex_executable="$(command -v codex)"
+  codex_real="$(readlink -f "$codex_executable" 2>/dev/null || printf '%s\n' "$codex_executable")"
+  codex_root="$(cd "$(dirname "$codex_real")/.." && pwd -P)"
+
+  find "$codex_root" -type d -name codex-path -print -quit 2>/dev/null || true
+}
+
+publish_codex_command_shim() {
+  local tool="$1"
+  local command_path="$2"
+  local target shim
+
+  target="$(command -v "$tool")"
+  [ -n "$target" ] || fail "$tool cannot be published into Codex command PATH"
+
+  shim="$command_path/$tool"
+
+  if PATH="$command_path" command -v "$tool" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$target" > "$shim"
+  chmod 0755 "$shim"
+}
+
+CODEX_COMMAND_PATH="$(resolve_codex_command_path)"
+
+[ -n "$CODEX_COMMAND_PATH" ] ||
+  fail "Codex restricted codex-path could not be located"
+[ -d "$CODEX_COMMAND_PATH" ] ||
+  fail "Codex restricted command path is not a directory: $CODEX_COMMAND_PATH"
+[ -w "$CODEX_COMMAND_PATH" ] ||
+  fail "Codex restricted command path is not writable: $CODEX_COMMAND_PATH"
+
+for tool in bash git sed node npm pnpm safeoutputs; do
+  publish_codex_command_shim "$tool" "$CODEX_COMMAND_PATH"
+done
+
+PATH="$CODEX_COMMAND_PATH" /bin/bash -c '
+  set -e
+  command -v bash >/dev/null
+  command -v git >/dev/null
+  command -v sed >/dev/null
+  command -v node >/dev/null
+  command -v npm >/dev/null
+  command -v pnpm >/dev/null
+  command -v safeoutputs >/dev/null
+  git --version >/dev/null
+  node --version >/dev/null
+  npm --version >/dev/null
+  pnpm --version >/dev/null
+  safeoutputs noop --help >/dev/null
+' || fail "verified tools are not executable from Codex restricted command PATH"
+
+echo "Delivery V2 Codex restricted command PATH toolchain: PASS"
+echo "codex_command_path=$CODEX_COMMAND_PATH"
+
 # Codex shell tools default to login shells. Inside the AWF worker this
 # re-runs the login profile and replaces the curated PATH assembled above,
 # hiding the toolcache and safeoutputs CLI from the actual commands executed

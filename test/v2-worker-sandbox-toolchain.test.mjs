@@ -151,6 +151,26 @@ test('codex command environment receives the validated sandbox PATH', async () =
 
   assert.match(
     wrapper,
+    /resolve_codex_command_path/
+  );
+
+  assert.match(
+    wrapper,
+    /publish_codex_command_shim/
+  );
+
+  assert.match(
+    wrapper,
+    /codex-path/
+  );
+
+  assert.match(
+    wrapper,
+    /Delivery V2 Codex restricted command PATH toolchain: PASS/
+  );
+
+  assert.match(
+    wrapper,
     /pnpm/
   );
 

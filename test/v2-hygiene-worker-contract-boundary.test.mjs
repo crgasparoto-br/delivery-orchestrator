@@ -47,6 +47,9 @@ test('Codex wrapper proves the same infrastructure before the worker executes', 
   assert.match(body, /shell_environment_policy\.set\.PATH/);
   assert.match(body, /CODEX_BASH_ENV="\$BASH_ENV"/);
   assert.match(body, /shell_environment_policy\.set\.BASH_ENV/);
+  assert.match(body, /resolve_codex_command_path/);
+  assert.match(body, /publish_codex_command_shim/);
+  assert.match(body, /Codex restricted command PATH toolchain/);
 });
 
 
