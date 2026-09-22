@@ -15,6 +15,32 @@ import { join } from 'node:path';
 const wrapper =
   '.github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh';
 
+function resolveHostTool(tool) {
+  const result = spawnSync(
+    '/bin/bash',
+    ['-c', `command -v ${tool}`],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(
+    result.status,
+    0,
+    `host tool ${tool} must exist for the regression harness`
+  );
+
+  return result.stdout.trim();
+}
+
+function shimBody(target) {
+  const escaped = target
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"')
+    .replaceAll('$', '\\$')
+    .replaceAll('`', '\\`');
+
+  return `#!/bin/sh\nexec "${escaped}" "$@"\n`;
+}
+
 test('effective sandbox propagates BASH_ENV to explicit Codex login-shell commands', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'delivery-v2-preflight-'));
 
@@ -22,11 +48,18 @@ test('effective sandbox propagates BASH_ENV to explicit Codex login-shell comman
     const runTemp = join(dir, 'runner-temp');
     const mcpBin = join(runTemp, 'gh-aw', 'mcp-cli', 'bin');
     const fakeBin = join(dir, 'bin');
+    const codexCommandPath = join(
+      dir,
+      'codex-runtime',
+      'vendor',
+      'codex-path'
+    );
     const loginHome = join(dir, 'login-home');
     const manifest = join(dir, 'safeoutputs.jsonl');
 
     await mkdir(mcpBin, { recursive: true });
     await mkdir(fakeBin, { recursive: true });
+    await mkdir(codexCommandPath, { recursive: true });
     await mkdir(loginHome, { recursive: true });
 
     // Simula o profile de um login shell sobrescrevendo o PATH curado
@@ -108,10 +141,19 @@ policy_path=\${policy_path%\\\"}
 policy_bash_env=\${policy_bash_env#\\\"}
 policy_bash_env=\${policy_bash_env%\\\"}
 
+# Reproduz o comportamento observado no worker real: o command subprocess
+# ignora o PATH amplo do host e recebe somente o codex-path interno. Os shims
+# publicados pelo wrapper devem manter a toolchain disponivel mesmo assim.
+restricted_path="\${DELIVERY_V2_TEST_CODEX_COMMAND_PATH:?}"
+
+env -i \
+  PATH="$restricted_path" \
+  /bin/bash -c 'cat /dev/null >/dev/null; git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; pnpm --version >/dev/null; safeoutputs noop --help >/dev/null'
+
 # Reconstroi um ambiente minimo, como o command environment do Codex.
 # O .bash_profile abaixo destrói PATH; BASH_ENV deve restaura-lo dentro
 # do bash -lc explicito.
-env -i HOME="\${DELIVERY_V2_TEST_LOGIN_HOME:?}" GH_AW_SAFE_OUTPUTS="\${GH_AW_SAFE_OUTPUTS:?}" PATH="$policy_path" BASH_ENV="$policy_bash_env" /bin/bash -lc 'git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; pnpm --version >/dev/null; safeoutputs noop'
+env -i HOME="\${DELIVERY_V2_TEST_LOGIN_HOME:?}" GH_AW_SAFE_OUTPUTS="\${GH_AW_SAFE_OUTPUTS:?}" PATH="$policy_path" BASH_ENV="$policy_bash_env" /bin/bash -lc 'cat /dev/null >/dev/null; git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; pnpm --version >/dev/null; safeoutputs noop'
 `
     );
 
@@ -127,7 +169,31 @@ echo "9.0.0"
     await chmod(codex, 0o755);
     await chmod(pnpm, 0o755);
 
+    // Reproduz a fronteira real:
+    // 1. runner host prepara os shims enquanto codex-path e gravavel;
+    // 2. AWF monta /usr/local como read-only;
+    // 3. wrapper apenas consome os shims, sem tentar grava-los.
+    const commandTargets = new Map([
+      ['bash', resolveHostTool('bash')],
+      ['cat', resolveHostTool('cat')],
+      ['git', resolveHostTool('git')],
+      ['sed', resolveHostTool('sed')],
+      ['node', process.execPath],
+      ['npm', resolveHostTool('npm')],
+      ['pnpm', pnpm],
+      ['safeoutputs', safeoutputs]
+    ]);
+
+    for (const [tool, target] of commandTargets) {
+      const shim = join(codexCommandPath, tool);
+      await writeFile(shim, shimBody(target));
+      await chmod(shim, 0o755);
+    }
+
+    await chmod(codexCommandPath, 0o555);
+
     const shellProbe =
+      'cat /dev/null >/dev/null && ' +
       'git --version >/dev/null && ' +
       'node --version >/dev/null && ' +
       'npm --version >/dev/null && ' +
@@ -183,9 +249,14 @@ ${nonLoginShell.stderr}`
         RUNNER_TEMP: runTemp,
         GH_AW_SAFE_OUTPUTS: manifest,
         DELIVERY_V2_TEST_LOGIN_HOME: loginHome,
+        DELIVERY_V2_TEST_CODEX_COMMAND_PATH: codexCommandPath,
         PATH: `${fakeBin}:/usr/local/bin:/usr/bin:/bin`
       }
     });
+
+    // A execucao acima aconteceu com codex-path 0555. Restaurar somente
+    // para permitir a limpeza do diretorio temporario pelo harness.
+    await chmod(codexCommandPath, 0o755);
 
     assert.equal(
       result.status,
@@ -201,6 +272,11 @@ ${nonLoginShell.stderr}`
     assert.match(
       result.stdout,
       /Delivery V2 effective sandbox toolchain preflight: PASS/
+    );
+
+    assert.match(
+      result.stdout,
+      /Delivery V2 Codex restricted command PATH toolchain: PASS/
     );
 
     const emitted = await readFile(manifest, 'utf8');

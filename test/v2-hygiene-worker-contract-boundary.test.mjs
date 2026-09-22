@@ -40,6 +40,7 @@ test('Codex wrapper proves the same infrastructure before the worker executes', 
     'utf8'
   );
 
+  assert.match(body, /require_tool cat/);
   assert.match(body, /require_tool pnpm/);
   assert.match(body, /require_tool safeoutputs/);
   assert.match(body, /require_safeoutput noop/);
@@ -47,6 +48,21 @@ test('Codex wrapper proves the same infrastructure before the worker executes', 
   assert.match(body, /shell_environment_policy\.set\.PATH/);
   assert.match(body, /CODEX_BASH_ENV="\$BASH_ENV"/);
   assert.match(body, /shell_environment_policy\.set\.BASH_ENV/);
+  assert.match(body, /resolve_codex_command_path/);
+  assert.doesNotMatch(body, /publish_codex_command_shim/);
+  assert.doesNotMatch(body, /restricted command path is not writable/);
+  assert.match(body, /Codex restricted command PATH toolchain/);
+
+  const hostStager = await readFile(
+    '.github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs',
+    'utf8'
+  );
+
+  assert.match(hostStager, /stageCodexCommandToolchain/);
+  assert.match(hostStager, /publishCodexCommandShim/);
+  assert.match(hostStager, /mcp-cli/);
+  assert.match(hostStager, /safeoutputs/);
+  assert.match(hostStager, /CODEX_COMMAND_TOOLS[\s\S]*'cat'/);
 });
 
 

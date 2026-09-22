@@ -24,6 +24,7 @@ fi
 # restoring the normal system locations needed by login/non-interactive shells.
 export PATH="${PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+require_tool cat
 require_tool git
 require_tool sed
 require_tool node
@@ -49,14 +50,14 @@ require_child_tool() {
     fail "$tool is not available inside Codex child bash shells"
 }
 
-for tool in git sed node npm pnpm safeoutputs; do
+for tool in cat git sed node npm pnpm safeoutputs; do
   require_child_tool "$tool"
 done
 
 # npm itself uses /usr/bin/env node. Running npm here proves that node remains
 # resolvable through the compatibility login-shell probe. Actual Codex command
 # shells are forced to non-login mode below.
-/bin/bash -lc 'git --version >/dev/null && node --version >/dev/null && npm --version >/dev/null && pnpm --version >/dev/null' ||
+/bin/bash -lc 'cat /dev/null >/dev/null && git --version >/dev/null && node --version >/dev/null && npm --version >/dev/null && pnpm --version >/dev/null' ||
   fail "git/node/npm/pnpm execution failed inside sandbox child-shell probe"
 
 echo "Delivery V2 Codex child-shell toolchain preflight: PASS"
@@ -95,6 +96,54 @@ if [ "${DELIVERY_V2_PREFLIGHT_ONLY:-false}" = "true" ]; then
 fi
 
 require_tool codex
+
+# Codex command subprocesses can replace the environment-policy PATH with the
+# native package's restricted codex-path. The required shims are staged on the
+# GitHub runner host by ensure-delivery-v2-worker-sandbox-toolchain.mjs before
+# AWF enters the read-only chroot. This wrapper intentionally performs no write
+# to /usr/local or codex-path.
+resolve_codex_command_path() {
+  local codex_executable codex_real codex_root
+
+  codex_executable="$(command -v codex)"
+  codex_real="$(readlink -f "$codex_executable" 2>/dev/null || printf '%s\n' "$codex_executable")"
+  codex_root="$(cd "$(dirname "$codex_real")/.." && pwd -P)"
+
+  find "$codex_root" -type d -name codex-path -print -quit 2>/dev/null || true
+}
+
+CODEX_COMMAND_PATH="$(resolve_codex_command_path)"
+
+[ -n "$CODEX_COMMAND_PATH" ] ||
+  fail "Codex restricted codex-path could not be located"
+[ -d "$CODEX_COMMAND_PATH" ] ||
+  fail "Codex restricted command path is not a directory: $CODEX_COMMAND_PATH"
+
+for tool in bash cat git sed node npm pnpm safeoutputs; do
+  [ -x "$CODEX_COMMAND_PATH/$tool" ] ||
+    fail "$tool was not staged into Codex restricted command PATH before AWF started"
+done
+
+PATH="$CODEX_COMMAND_PATH" /bin/bash -c '
+  set -e
+  command -v bash >/dev/null
+  command -v cat >/dev/null
+  command -v git >/dev/null
+  command -v sed >/dev/null
+  command -v node >/dev/null
+  command -v npm >/dev/null
+  command -v pnpm >/dev/null
+  command -v safeoutputs >/dev/null
+  cat /dev/null >/dev/null
+  git --version >/dev/null
+  node --version >/dev/null
+  npm --version >/dev/null
+  pnpm --version >/dev/null
+  safeoutputs noop --help >/dev/null
+' || fail "host-staged tools are not executable from Codex restricted command PATH"
+
+echo "Delivery V2 Codex restricted command PATH toolchain: PASS"
+echo "codex_command_path=$CODEX_COMMAND_PATH"
 
 # Codex shell tools default to login shells. Inside the AWF worker this
 # re-runs the login profile and replaces the curated PATH assembled above,
