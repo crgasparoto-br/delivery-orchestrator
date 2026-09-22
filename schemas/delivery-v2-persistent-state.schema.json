@@ -60,6 +60,7 @@
         "audit-pending",
         "audit-failed-remediable",
         "ready-for-human-merge",
+        "technical-hygiene-pending",
         "escalated",
         "terminal"
       ]

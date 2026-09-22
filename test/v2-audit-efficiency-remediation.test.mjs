@@ -36,6 +36,8 @@ test('STANDARD audit policy suppresses the LLM audit when repository policy disa
   let state = createOperationalDelivery({ plan, materialHeadSha: SHA });
   assert.equal(state.auditRequired, false);
   state = applyOperationalEvent(state, { type: 'ci-result', result: { candidateSha: SHA, conclusion: 'success', evidenceRef: 'run:green' } });
+  assert.equal(state.status, 'technical-hygiene-pending');
+  state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: { schemaVersion: 1, baselineSha: 'b'.repeat(40), materialSha: SHA, result: 'PASS', effectiveProfile: 'standard', evidenceRef: 'artifact:hygiene' } });
   assert.equal(state.status, 'ready-for-human-merge');
   assert.equal(state.auditAttempts, 0);
 });

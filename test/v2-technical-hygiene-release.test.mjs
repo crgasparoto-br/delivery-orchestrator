@@ -60,6 +60,6 @@ test('FAST material UNKNOWN promotes before release',()=>{
 test('STANDARD material UNKNOWN remains release blocking',()=>{
   const classifier={subjectSha:SHA,profile:'standard',version:'v2',fingerprint:'fp',expectedFingerprint:'fp',evidenceRef:'artifact:classifier'};
   const result=evaluateReleaseGate(input(hygiene('UNKNOWN',{effectiveProfile:'standard',missingEvidence:[{code:'dup-unknown',detail:'equivalence not proven',material:true}]}),{classifier,standardAuditRequired:false}));
-  assert.equal(result.state,'audit-failed-remediable');
+  assert.equal(result.state,'escalated');
   assert.deepEqual(result.reasons,['technical-hygiene-unknown-material']);
 });

@@ -8,6 +8,7 @@ export const DELIVERY_V2_STATES = Object.freeze([
   'ci-failed-remediable',
   'audit-pending',
   'audit-failed-remediable',
+  'technical-hygiene-pending',
   'ready-for-human-merge',
   'escalated',
   'terminal'

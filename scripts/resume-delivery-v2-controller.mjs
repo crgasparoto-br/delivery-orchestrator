@@ -114,6 +114,15 @@ const RECOVERABLE_UNKNOWN_HYGIENE_CODES = new Set([
   'TEST_EXECUTION_UNAVAILABLE'
 ]);
 
+export function classifyUnknownHygieneEvidence(technicalHygiene) {
+  const groups = { recoverableMaterial: [], semanticMaterial: [], nonMaterial: [] };
+  for (const item of technicalHygiene?.missingEvidence ?? []) {
+    const recoverable = RECOVERABLE_UNKNOWN_HYGIENE_CODES.has(String(item?.code ?? '').trim().toUpperCase());
+    groups[item?.material === false ? 'nonMaterial' : recoverable ? 'recoverableMaterial' : 'semanticMaterial'].push(item);
+  }
+  return groups;
+}
+
 export function shouldRearmUnknownTechnicalHygiene({
   technicalHygiene,
   runConclusion,
@@ -126,30 +135,43 @@ export function shouldRearmUnknownTechnicalHygiene({
     .trim()
     .toUpperCase();
 
-  const missingEvidence = Array.isArray(technicalHygiene?.missingEvidence)
-    ? technicalHygiene.missingEvidence
-    : [];
-
-  const materialMissingEvidence = missingEvidence.filter(
-    (item) => item?.material === true
-  );
-
-  const hasOnlyRecoverableToolchainMaterialEvidence =
-    materialMissingEvidence.length > 0 &&
-    materialMissingEvidence.every((item) =>
-      RECOVERABLE_UNKNOWN_HYGIENE_CODES.has(
-        String(item?.code ?? '').trim().toUpperCase()
-      )
-    );
+  const { recoverableMaterial } = classifyUnknownHygieneEvidence(technicalHygiene);
 
   return (
     result === 'UNKNOWN' &&
     String(runConclusion ?? '').trim().toLowerCase() === 'success' &&
-    hasOnlyRecoverableToolchainMaterialEvidence &&
+    recoverableMaterial.length > 0 &&
     /^[0-9a-f]{40}$/.test(previousSha) &&
     /^[0-9a-f]{40}$/.test(currentSha) &&
     previousSha !== currentSha
   );
+}
+
+export function rearmUnknownTechnicalHygiene({ state, controller, run, currentControllerSha }) {
+  if (!shouldRearmUnknownTechnicalHygiene({ technicalHygiene: controller.technicalHygiene,
+    runConclusion: run.conclusion, runHeadSha: run.head_sha, currentControllerSha })) return null;
+  if (['terminal', 'escalated'].includes(state.status) &&
+      !(state.status === 'escalated' && state.terminalReason?.startsWith('technical-hygiene-'))) return null;
+  return {
+    state: Object.freeze({ ...state, technicalHygiene: null,
+      ...(state.status === 'escalated' || state.status === 'ready-for-human-merge'
+        ? { status: 'technical-hygiene-pending', terminalReason: null, escalation: null } : {}) }),
+    controller: {
+      ...controller,
+      nextAction: 'dispatch-technical-hygiene',
+      hygieneDispatchNonce: createDispatchNonce(),
+      hygieneRunId: null,
+      technicalHygiene: null,
+      hygieneRecovery: {
+        schemaVersion: 1,
+        reason: 'control-plane-changed-after-unknown-technical-hygiene',
+        previousRunId: run.id,
+        previousControllerSha: String(run.head_sha).trim().toLowerCase(),
+        currentControllerSha: String(currentControllerSha).trim().toLowerCase(),
+        previousTechnicalHygiene: controller.technicalHygiene
+      }
+    }
+  };
 }
 
 const TECHNICAL_HYGIENE_RESUME_ACTIONS = new Set([
@@ -289,12 +311,14 @@ function checkEvidence(check, sourceRun, sha) {
   }];
 }
 
-async function upsertStateComment({ repository, prNumber, state, identity, classifier, latestCheck, latestSourceRun, token, extra = {} }) {
+async function upsertStateComment({ repository, prNumber, state, identity, classifier, latestCheck, latestSourceRun, token, extra = {}, previousWorkflowChecks = [] }) {
   const persistent = persistentStateFromOperational({
     state,
     identity,
     classifier,
-    workflowChecks: checkEvidence(latestCheck, latestSourceRun, state.materialHeadSha),
+    workflowChecks: latestCheck && latestSourceRun
+      ? checkEvidence(latestCheck, latestSourceRun, state.materialHeadSha)
+      : previousWorkflowChecks.filter((check) => check.subjectSha === state.materialHeadSha),
     evidenceRefs: [latestCheck?.details_url, latestSourceRun?.html_url].filter(Boolean)
   });
   const body = `${STATE_MARKER}\n## Delivery V2 controller state\n\n\`\`\`json\n${JSON.stringify({ persistent, controller: extra }, null, 2)}\n\`\`\``;
@@ -432,7 +456,6 @@ async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repository
   if (String(currentPr.head.sha).toLowerCase() !== materialHeadSha.toLowerCase()) throw new Error('technical hygiene evidence-only promotion mutated the material head');
   const reevaluated = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: promotionRun.id, token: actionsToken, baselineSha, materialSha: materialHeadSha, previousMaterialSha, profile: promotedState.riskProfile });
   promotedState = applyOperationalEvent(promotedState, { type: 'technical-hygiene-result', result: reevaluated });
-  if (!['PASS', 'PASS_WITH_DEBT'].includes(reevaluated.result)) throw new Error(`technical hygiene remained ${reevaluated.result} after ${promotedState.riskProfile.toUpperCase()} re-evaluation`);
   return { hygiene: reevaluated, state: promotedState, plan: promotedPlan, promotionRun };
 }
 
@@ -575,7 +598,8 @@ export function auditProducerInputs({ state, controller = {}, provider, plan } =
 export function legacyTechnicalHygieneContext({
   materialHeadSha,
   baselineSha,
-  profile
+  profile,
+  previousTechnicalHygiene = null
 } = {}) {
   const material = String(materialHeadSha ?? '').trim().toLowerCase();
   const baseline = String(baselineSha ?? '').trim().toLowerCase();
@@ -599,7 +623,8 @@ export function legacyTechnicalHygieneContext({
     materialSha: material,
     baselineSha: baseline,
     profile: risk,
-    mutationAllowed: false
+    mutationAllowed: false,
+    ...(previousTechnicalHygiene ? { previousTechnicalHygiene } : {})
   });
 }
 
@@ -945,33 +970,11 @@ export async function main() {
         const currentControllerSha =
           resolveCheckedOutControlPlaneHeadSha();
 
-        if (
-          shouldRearmUnknownTechnicalHygiene({
-            technicalHygiene: controller.technicalHygiene,
-            runConclusion: persistedHygieneRun.conclusion,
-            runHeadSha: persistedHygieneRun.head_sha,
-            currentControllerSha
-          })
-        ) {
-          const previousControllerSha = String(
-            persistedHygieneRun.head_sha ?? ''
-          ).trim().toLowerCase();
-
-          controller = {
-            ...controller,
-            nextAction: 'dispatch-technical-hygiene',
-            hygieneDispatchNonce: createDispatchNonce(),
-            hygieneRunId: null,
-            technicalHygiene: null,
-            hygieneRecovery: {
-              schemaVersion: 1,
-              reason: 'control-plane-changed-after-unknown-technical-hygiene',
-              previousRunId: persistedHygieneRun.id,
-              previousControllerSha,
-              currentControllerSha
-            }
-          };
-
+        const rearmed = rearmUnknownTechnicalHygiene({ state, controller,
+          run: persistedHygieneRun, currentControllerSha });
+        if (rearmed) {
+          state = rearmed.state;
+          controller = rearmed.controller;
           reusePersistedTechnicalHygiene = false;
         }
       }
@@ -1022,6 +1025,8 @@ export async function main() {
       classifier,
       latestCheck,
       latestSourceRun,
+      previousWorkflowChecks: stateEnvelope.persistent.baseSha === pullRequest.base.sha
+        ? stateEnvelope.persistent.workflowChecks : [],
       token: targetWriteToken,
       extra: controller
     });
@@ -1502,26 +1507,239 @@ export async function main() {
       continue;
     }
 
+    if (state.status === 'technical-hygiene-pending') {
+      pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
+      releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, baseSha: expectedBaseSha });
+
+      if (!state.technicalHygiene) {
+        let hygieneDispatchNonce =
+          String(controller.hygieneDispatchNonce ?? '').trim();
+
+        if (!hygieneDispatchNonce) {
+          hygieneDispatchNonce = createDispatchNonce();
+
+          await persist({
+            nextAction: 'dispatch-technical-hygiene',
+            hygieneDispatchNonce,
+            hygieneRunId: null
+          });
+        }
+
+        const hygieneContext = legacyTechnicalHygieneContext({
+          materialHeadSha,
+          baselineSha: expectedBaseSha,
+          profile: state.riskProfile,
+          previousTechnicalHygiene: controller.hygieneRecovery?.previousTechnicalHygiene
+        });
+
+        let hygieneRun;
+        const persistedHygieneRunId = Number(controller.hygieneRunId ?? 0);
+
+        if (
+          Number.isInteger(persistedHygieneRunId) &&
+          persistedHygieneRunId > 0
+        ) {
+          hygieneRun = await waitWorkflowRun(
+            orchestratorRepository,
+            persistedHygieneRunId,
+            actionsToken
+          );
+
+          const currentControllerSha =
+            resolveCheckedOutControlPlaneHeadSha();
+
+          const rearmFailedTechnicalHygiene =
+            shouldRearmFailedTechnicalHygiene({
+              nextAction: controller.nextAction,
+              runConclusion: hygieneRun.conclusion,
+              runHeadSha: hygieneRun.head_sha,
+              currentControllerSha
+            });
+
+          const rearmStaleUnconsumedTechnicalHygiene =
+            shouldRearmStaleUnconsumedTechnicalHygiene({
+              technicalHygiene: controller.technicalHygiene,
+              runConclusion: hygieneRun.conclusion,
+              runHeadSha: hygieneRun.head_sha,
+              currentControllerSha
+            });
+
+          if (
+            rearmFailedTechnicalHygiene ||
+            rearmStaleUnconsumedTechnicalHygiene
+          ) {
+            const previousHygieneRunId = hygieneRun.id;
+            const previousControllerSha = String(
+              hygieneRun.head_sha ?? ''
+            ).trim().toLowerCase();
+
+            hygieneDispatchNonce = createDispatchNonce();
+
+            await persist({
+              nextAction: 'dispatch-technical-hygiene',
+              hygieneDispatchNonce,
+              hygieneRunId: null,
+              technicalHygiene: null,
+              hygieneRecovery: {
+                ...controller.hygieneRecovery,
+                schemaVersion: 1,
+                reason: rearmStaleUnconsumedTechnicalHygiene
+                  ? 'control-plane-changed-before-technical-hygiene-consumption'
+                  : 'control-plane-changed-after-technical-hygiene-failure',
+                previousRunId: previousHygieneRunId,
+                previousControllerSha,
+                currentControllerSha
+              }
+            });
+
+            hygieneRun = null;
+          }
+        }
+
+        if (!hygieneRun) {
+          const recovered = selectCorrelatedWorkflowRun(
+            await listWorkflowRuns(
+              orchestratorRepository,
+              plan.implementation.workflow,
+              actionsToken
+            ),
+            {
+              kind: 'worker',
+              nonce: hygieneDispatchNonce,
+              ref: orchestratorRef
+            }
+          );
+
+          hygieneRun = recovered;
+
+          if (!hygieneRun) {
+            if (
+              controller.nextAction !== 'dispatch-technical-hygiene' ||
+              controller.hygieneDispatchNonce !== hygieneDispatchNonce
+            ) {
+              throw new Error(
+                'cannot safely recover technical hygiene evidence dispatch; refusing duplicate worker'
+              );
+            }
+
+            hygieneRun = await dispatchWorker({
+              orchestratorRepository,
+              orchestratorRef,
+              plan,
+              controllerRunId,
+              targetRepository,
+              issueNumber,
+              baseBranch,
+              targetRef: materialHeadSha,
+              targetPr: resumePr,
+              remediationContext: hygieneContext,
+              token: actionsToken,
+              dispatchNonce: hygieneDispatchNonce
+            });
+          }
+
+          await persist({
+            nextAction: 'observe-technical-hygiene',
+            hygieneDispatchNonce,
+            hygieneRunId: hygieneRun.id
+          });
+
+          hygieneRun = await waitWorkflowRun(
+            orchestratorRepository,
+            hygieneRun.id,
+            actionsToken
+          );
+        }
+
+        if (hygieneRun.conclusion !== 'success') {
+          await persist({
+            nextAction: 'technical-hygiene-worker-failed',
+            hygieneDispatchNonce,
+            hygieneRunId: hygieneRun.id
+          });
+
+          throw new Error(
+            `technical hygiene evidence worker failed: ${hygieneRun.html_url}`
+          );
+        }
+
+        await recordWorkerUsage(hygieneRun);
+
+        const postHygienePullRequest = await fetchPullRequest(
+          targetRepository,
+          resumePr,
+          targetReadToken
+        );
+
+        // Evidence-only means exactly that: no material mutation is accepted.
+        releaseIdentityFromPullRequest(postHygienePullRequest, {
+          materialHeadSha,
+          baseSha: expectedBaseSha
+        });
+
+        const technicalHygiene =
+          await downloadGhAwTechnicalHygieneArtifact({
+            repository: orchestratorRepository,
+            runId: hygieneRun.id,
+            token: actionsToken,
+            baselineSha: expectedBaseSha,
+            materialSha: materialHeadSha,
+            previousMaterialSha: null,
+            profile: state.riskProfile
+          });
+
+        state = applyOperationalEvent(state, {
+          type: 'technical-hygiene-result',
+          result: technicalHygiene
+        });
+
+        await persist({
+          nextAction: state.status,
+          hygieneDispatchNonce,
+          hygieneRunId: hygieneRun.id,
+          technicalHygiene: state.technicalHygiene
+        });
+      }
+
+      if (state.technicalHygiene?.promotionRequired) {
+        const promotion = await ensurePromotedTechnicalHygiene({
+          hygiene: state.technicalHygiene, state, plan, repositoryPolicy, changedPaths, provider,
+          orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber,
+          baseBranch, pullRequestNumber: resumePr, materialHeadSha, baselineSha: expectedBaseSha,
+          actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, promotedState }) => {
+            await persist({ nextAction: phase === 'observe' ? 'observe-technical-hygiene' : 'dispatch-technical-hygiene',
+              hygieneDispatchNonce: dispatchNonce, hygieneRunId: runId, technicalHygiene: null }, promotedState);
+          }
+        });
+        state = promotion.state;
+        plan = promotion.plan;
+        await recordWorkerUsage(promotion.promotionRun);
+        await persist({ hygieneRunId: promotion.promotionRun.id, technicalHygiene: state.technicalHygiene });
+      }
+
+      state = applyOperationalEvent(state, { type: 'resolve-technical-hygiene' });
+      await persist({ nextAction: state.status === 'escalated' ? 'human-escalation' : state.status,
+        technicalHygiene: state.technicalHygiene });
+      continue;
+    }
+
     throw new Error(`unsupported resumed controller state: ${state.status}`);
+  }
+
+  if (state.status === 'escalated') {
+    await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha,
+      context: targetPolicy.finalStatusName, state: 'failure', description: state.terminalReason,
+      token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${controllerRunId}` });
   }
 
   if (state.status === 'ready-for-human-merge') {
     pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
     materialHeadSha = String(pullRequest.head.sha).toLowerCase();
-
-    // Do not collect hygiene or release evidence against an unrefrozen head.
-    releaseIdentityFromPullRequest(pullRequest, {
-      materialHeadSha: state.materialHeadSha,
-      baseSha: expectedBaseSha
-    });
-
+    releaseIdentityFromPullRequest(pullRequest, { materialHeadSha: state.materialHeadSha, baseSha: expectedBaseSha });
     latestCheck = (await fetchCheckRuns(targetRepository, materialHeadSha, targetReadToken)).find((item) => item.name === targetPolicy.requiredStatusName);
     if (!latestCheck || latestCheck.status !== 'completed' || latestCheck.conclusion !== 'success') throw new Error('release gate requires exact-head terminal green source CI');
     latestSourceRun = await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
-    observability = recordControllerCiObservation(observability, {
-      run: latestSourceRun,
-      evidenceRef: latestSourceRun.html_url
-    });
+    observability = recordControllerCiObservation(observability, { run: latestSourceRun, evidenceRef: latestSourceRun.html_url });
     let audit = null;
     if (state.auditRequired) {
       const auditRunId = positiveInteger(controller.auditRunId, 'persisted auditRunId');
@@ -1529,224 +1747,10 @@ export async function main() {
       const auditResult = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: latestSourceRun.id, token: actionsToken });
       if (auditResult.decision !== 'approved') throw new Error('release gate requires approved authoritative audit');
       observability = recordControllerProviderObservation(observability, {
-        runId: auditRun.id,
-        stage: 'audit',
-        usage: auditResult.providerCalls === 0 ? { providerCalls: 0 } : (auditResult.modelUsage ?? {}),
-        durationMs: runDurationMs(auditRun),
-        evidenceRef: auditRun.html_url
+        runId: auditRun.id, stage: 'audit', usage: auditResult.providerCalls === 0 ? { providerCalls: 0 } : (auditResult.modelUsage ?? {}),
+        durationMs: runDurationMs(auditRun), evidenceRef: auditRun.html_url
       });
       audit = { candidateSha: materialHeadSha, decision: 'approved', mode: state.auditMode, requestFingerprint: auditResult.requestFingerprint, evidenceRef: auditRun.html_url };
-    }
-
-    if (
-      controller.adoption?.type === 'legacy-adopted-post-refreeze' &&
-      !state.technicalHygiene
-    ) {
-      let hygieneDispatchNonce =
-        String(controller.hygieneDispatchNonce ?? '').trim();
-
-      if (!hygieneDispatchNonce) {
-        hygieneDispatchNonce = createDispatchNonce();
-
-        await persist({
-          nextAction: 'dispatch-technical-hygiene',
-          hygieneDispatchNonce,
-          hygieneRunId: null
-        });
-      }
-
-      const hygieneContext = legacyTechnicalHygieneContext({
-        materialHeadSha,
-        baselineSha: expectedBaseSha,
-        profile: state.riskProfile
-      });
-
-      let hygieneRun;
-      const persistedHygieneRunId = Number(controller.hygieneRunId ?? 0);
-
-      if (
-        Number.isInteger(persistedHygieneRunId) &&
-        persistedHygieneRunId > 0
-      ) {
-        hygieneRun = await waitWorkflowRun(
-          orchestratorRepository,
-          persistedHygieneRunId,
-          actionsToken
-        );
-
-        const currentControllerSha =
-          resolveCheckedOutControlPlaneHeadSha();
-
-        const rearmFailedTechnicalHygiene =
-          shouldRearmFailedTechnicalHygiene({
-            nextAction: controller.nextAction,
-            runConclusion: hygieneRun.conclusion,
-            runHeadSha: hygieneRun.head_sha,
-            currentControllerSha
-          });
-
-        const rearmStaleUnconsumedTechnicalHygiene =
-          shouldRearmStaleUnconsumedTechnicalHygiene({
-            technicalHygiene: controller.technicalHygiene,
-            runConclusion: hygieneRun.conclusion,
-            runHeadSha: hygieneRun.head_sha,
-            currentControllerSha
-          });
-
-        if (
-          rearmFailedTechnicalHygiene ||
-          rearmStaleUnconsumedTechnicalHygiene
-        ) {
-          const previousHygieneRunId = hygieneRun.id;
-          const previousControllerSha = String(
-            hygieneRun.head_sha ?? ''
-          ).trim().toLowerCase();
-
-          hygieneDispatchNonce = createDispatchNonce();
-
-          await persist({
-            nextAction: 'dispatch-technical-hygiene',
-            hygieneDispatchNonce,
-            hygieneRunId: null,
-            technicalHygiene: null,
-            hygieneRecovery: {
-              schemaVersion: 1,
-              reason: rearmStaleUnconsumedTechnicalHygiene
-                ? 'control-plane-changed-before-technical-hygiene-consumption'
-                : 'control-plane-changed-after-technical-hygiene-failure',
-              previousRunId: previousHygieneRunId,
-              previousControllerSha,
-              currentControllerSha
-            }
-          });
-
-          hygieneRun = null;
-        }
-      }
-
-      if (!hygieneRun) {
-        const recovered = selectCorrelatedWorkflowRun(
-          await listWorkflowRuns(
-            orchestratorRepository,
-            plan.implementation.workflow,
-            actionsToken
-          ),
-          {
-            kind: 'worker',
-            nonce: hygieneDispatchNonce,
-            ref: orchestratorRef
-          }
-        );
-
-        hygieneRun = recovered;
-
-        if (!hygieneRun) {
-          if (
-            controller.nextAction !== 'dispatch-technical-hygiene' ||
-            controller.hygieneDispatchNonce !== hygieneDispatchNonce
-          ) {
-            throw new Error(
-              'cannot safely recover technical hygiene evidence dispatch; refusing duplicate worker'
-            );
-          }
-
-          hygieneRun = await dispatchWorker({
-            orchestratorRepository,
-            orchestratorRef,
-            plan,
-            controllerRunId,
-            targetRepository,
-            issueNumber,
-            baseBranch,
-            targetRef: materialHeadSha,
-            targetPr: resumePr,
-            remediationContext: hygieneContext,
-            token: actionsToken,
-            dispatchNonce: hygieneDispatchNonce
-          });
-        }
-
-        await persist({
-          nextAction: 'observe-technical-hygiene',
-          hygieneDispatchNonce,
-          hygieneRunId: hygieneRun.id
-        });
-
-        hygieneRun = await waitWorkflowRun(
-          orchestratorRepository,
-          hygieneRun.id,
-          actionsToken
-        );
-      }
-
-      if (hygieneRun.conclusion !== 'success') {
-        await persist({
-          nextAction: 'technical-hygiene-worker-failed',
-          hygieneDispatchNonce,
-          hygieneRunId: hygieneRun.id
-        });
-
-        throw new Error(
-          `technical hygiene evidence worker failed: ${hygieneRun.html_url}`
-        );
-      }
-
-      await recordWorkerUsage(hygieneRun);
-
-      const postHygienePullRequest = await fetchPullRequest(
-        targetRepository,
-        resumePr,
-        targetReadToken
-      );
-
-      // Evidence-only means exactly that: no material mutation is accepted.
-      releaseIdentityFromPullRequest(postHygienePullRequest, {
-        materialHeadSha,
-        baseSha: expectedBaseSha
-      });
-
-      const technicalHygiene =
-        await downloadGhAwTechnicalHygieneArtifact({
-          repository: orchestratorRepository,
-          runId: hygieneRun.id,
-          token: actionsToken,
-          baselineSha: expectedBaseSha,
-          materialSha: materialHeadSha,
-          previousMaterialSha: null,
-          profile: state.riskProfile
-        });
-
-      state = applyOperationalEvent(state, {
-        type: 'technical-hygiene-result',
-        result: technicalHygiene
-      });
-
-      await persist({
-        nextAction: 'evaluate-release-gate',
-        hygieneDispatchNonce,
-        hygieneRunId: hygieneRun.id,
-        technicalHygiene: state.technicalHygiene
-      });
-
-      if (
-        !['PASS', 'PASS_WITH_DEBT'].includes(
-          state.technicalHygiene?.result
-        )
-      ) {
-        await publishReleaseStatus({
-          repository: targetRepository,
-          sha: materialHeadSha,
-          context: targetPolicy.finalStatusName,
-          state: 'failure',
-          description: `Delivery V2 technical hygiene ${state.technicalHygiene?.result ?? 'UNKNOWN'}`,
-          token: targetWriteToken,
-          targetUrl: hygieneRun.html_url
-        });
-
-        throw new Error(
-          `legacy adoption technical hygiene did not pass: ${state.technicalHygiene?.result ?? 'UNKNOWN'}`
-        );
-      }
     }
 
     const finalPullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);

@@ -51,6 +51,8 @@ test('normal path composes implementation -> CI -> audit -> ready without conver
   assert.equal(nextOperationalAction(state), 'dispatch-audit');
 
   state = applyOperationalEvent(state, { type: 'audit-result', result: { candidateSha: A, decision: 'approved', evidenceRef: 'audit:1' } });
+  assert.equal(state.status, 'technical-hygiene-pending');
+  state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: { schemaVersion: 1, baselineSha: B, materialSha: A, result: 'PASS', effectiveProfile: 'critical', evidenceRef: 'artifact:hygiene' } });
   assert.equal(state.status, 'ready-for-human-merge');
   assert.equal(state.auditAttempts, 1);
 });
@@ -149,7 +151,7 @@ test('operational release fails closed until exact-head technical hygiene is att
   const releaseInput = { schemaVersion: 1, repository: 'owner/repo', pullRequestNumber: 77, materialHeadSha: A, currentRemoteHeadSha: A, evidenceCollection: { materialHeadSha: A, remoteHeadSha: A, evidenceRef: 'collection' }, classifier: { subjectSha: A, profile: 'fast', version: 'v1', fingerprint: 'x', expectedFingerprint: 'x', evidenceRef: 'classifier' }, checks: [{ name: 'ci', required: true, subjectSha: A, status: 'completed', conclusion: 'success', workflowRunId: 1, evidenceRef: 'ci' }], standardAuditRequired: false, unresolvedFindings: [], blockers: [] };
   let release = evaluateOperationalRelease({ state, releaseInput });
   assert.equal(release.readiness, false);
-  assert.deepEqual(release.reasons, ['technical-hygiene-missing']);
+  assert.deepEqual(release.reasons, ['operational-state:technical-hygiene-pending']);
   state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: { schemaVersion: 1, baselineSha: B, materialSha: A, previousMaterialSha: null, result: 'PASS', effectiveProfile: 'fast', promotionRequired: false, missingEvidence: [], evidenceRef: 'artifact:hygiene' } });
   release = evaluateOperationalRelease({ state, releaseInput });
   assert.equal(release.readiness, true);
