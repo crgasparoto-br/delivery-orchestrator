@@ -78,6 +78,43 @@ export function recoveryContextForExhaustedBootstrap({
   });
 }
 
+
+export function recoveryContextForSuccessfulBootstrapWithoutPr({
+  bootstrapLease,
+  currentControllerHeadSha,
+  bootstrapControllerHeadSha = null
+} = {}) {
+  const previousControllerHeadSha = normalizedSha(
+    bootstrapLease?.recovery?.currentControllerHeadSha
+      ?? bootstrapLease?.controllerHeadSha
+      ?? bootstrapControllerHeadSha
+  );
+  const currentControlPlaneHeadSha = normalizedSha(
+    currentControllerHeadSha
+  );
+  const previousImplementationAttempts = Number(
+    bootstrapLease?.implementationAttempts
+  );
+
+  const eligible =
+    bootstrapLease?.status === 'reserved-initial-attempt'
+    && Number.isInteger(previousImplementationAttempts)
+    && previousImplementationAttempts >= 1
+    && previousControllerHeadSha
+    && currentControlPlaneHeadSha
+    && previousControllerHeadSha !== currentControlPlaneHeadSha;
+
+  if (!eligible) return null;
+
+  return Object.freeze({
+    reason: 'control-plane-changed-after-successful-pre-material-worker-without-pr',
+    previousImplementationAttempts,
+    previousControllerHeadSha,
+    currentControllerHeadSha: currentControlPlaneHeadSha,
+    grantedImplementationAttempts: 1
+  });
+}
+
 function requiredEnv(name) {
   const value = String(process.env[name] ?? '').trim();
   if (!value) throw new Error(`${name} is required`);
@@ -458,7 +495,48 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
       return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
     }
     if (recoveredWorkerRun?.status === 'completed' && recoveredWorkerRun?.conclusion === 'success') {
-      return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
+      const recovery = recoveryContextForSuccessfulBootstrapWithoutPr({
+        bootstrapLease,
+        currentControllerHeadSha,
+        bootstrapControllerHeadSha
+      });
+
+      if (recovery) {
+        return Object.freeze({
+          runController: true,
+          resumePr: null,
+          recoverWorkerRunId: null,
+          status: 'retry-initial-delivery',
+          pullRequestNumber: null,
+          materialHeadSha: null,
+          staleStateDetected: false,
+          nextAction: 'retry-initial-worker',
+          priorInitialAttempts: Math.max(
+            0,
+            recovery.previousImplementationAttempts - 1
+          ),
+          attempts: {
+            implementation: recovery.previousImplementationAttempts
+          },
+          recovery
+        });
+      }
+
+      return Object.freeze({
+        runController: true,
+        resumePr: null,
+        recoverWorkerRunId: Number(recoveredWorkerRun.id),
+        status: 'resume-initial-delivery',
+        pullRequestNumber: null,
+        materialHeadSha: null,
+        staleStateDetected: false,
+        nextAction: 'recover-initial-attempt',
+        priorInitialAttempts: bootstrapLease.implementationAttempts,
+        dispatchNonce: bootstrapLease.dispatchNonce,
+        attempts: {
+          implementation: bootstrapLease.implementationAttempts
+        }
+      });
     }
     if (bootstrapLease.implementationAttempts >= policy.maxImplementationAttempts) {
       return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-budget-exhausted', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });

@@ -43,6 +43,81 @@ function successfulWorker(overrides = {}) {
   return { id: 35117775004, status: 'completed', conclusion: 'success', ...overrides };
 }
 
+
+test('successful bootstrap worker without PR is rearmed after a verified control-plane change without charging another attempt', () => {
+  const previousControllerHeadSha = 'c'.repeat(40);
+  const currentControllerHeadSha = 'd'.repeat(40);
+
+  const decision = evaluateReentry({
+    pullRequest: null,
+    stateEnvelope: null,
+    bootstrapLease: bootstrapLease({
+      implementationAttempts: 1,
+      controllerHeadSha: previousControllerHeadSha
+    }),
+    targetRepository: 'crgasparoto-br/delivery-orchestrator',
+    issueNumber: 105,
+    baseBranch: 'main',
+    provider: 'codex',
+    model: 'gpt-5.6-sol',
+    recoveredWorkerRun: successfulWorker(),
+    bootstrapControllerHeadSha: previousControllerHeadSha,
+    currentControllerHeadSha
+  });
+
+  assert.equal(decision.runController, true);
+  assert.equal(decision.resumePr, null);
+  assert.equal(decision.recoverWorkerRunId, null);
+  assert.equal(decision.status, 'retry-initial-delivery');
+  assert.equal(decision.nextAction, 'retry-initial-worker');
+
+  // A tentativa anterior foi perdida por defeito do control plane.
+  // Reserve initial implementation attempt incrementara novamente para 1,
+  // em vez de consumir a tentativa 2.
+  assert.equal(decision.priorInitialAttempts, 0);
+  assert.equal(decision.attempts.implementation, 1);
+
+  assert.equal(
+    decision.recovery.reason,
+    'control-plane-changed-after-successful-pre-material-worker-without-pr'
+  );
+  assert.equal(
+    decision.recovery.previousControllerHeadSha,
+    previousControllerHeadSha
+  );
+  assert.equal(
+    decision.recovery.currentControllerHeadSha,
+    currentControllerHeadSha
+  );
+});
+
+test('successful bootstrap worker without PR is still recovered when control plane did not change', () => {
+  const controllerHeadSha = 'c'.repeat(40);
+
+  const decision = evaluateReentry({
+    pullRequest: null,
+    stateEnvelope: null,
+    bootstrapLease: bootstrapLease({
+      implementationAttempts: 1,
+      controllerHeadSha
+    }),
+    targetRepository: 'crgasparoto-br/delivery-orchestrator',
+    issueNumber: 105,
+    baseBranch: 'main',
+    provider: 'codex',
+    model: 'gpt-5.6-sol',
+    recoveredWorkerRun: successfulWorker(),
+    bootstrapControllerHeadSha: controllerHeadSha,
+    currentControllerHeadSha: controllerHeadSha
+  });
+
+  assert.equal(decision.runController, true);
+  assert.equal(decision.status, 'resume-initial-delivery');
+  assert.equal(decision.nextAction, 'recover-initial-attempt');
+  assert.equal(decision.recoverWorkerRunId, 35117775004);
+  assert.equal(decision.priorInitialAttempts, 1);
+});
+
 test('managed PR without persistent state recovers the correlated successful model-less bootstrap worker without reserving a new attempt', () => {
   const decision = evaluateReentry({
     pullRequest: managedPr(),
