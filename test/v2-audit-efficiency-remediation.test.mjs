@@ -52,6 +52,45 @@ test('CRITICAL audit cannot be disabled by the STANDARD repository switch', () =
   assert.equal(plan.audit.mode, 'independent');
 });
 
+test('controllers never dispatch remediation after start-implementation escalates', async () => {
+  const controller = await readFile(
+    new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
+  const resume = await readFile(
+    new URL('../scripts/resume-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
+
+  const unsafePattern =
+    /state = applyOperationalEvent\(state, \{ type: 'start-implementation' \}\);\s*const workerDispatchNonce = createDispatchNonce\(\);/g;
+
+  const guardedPattern =
+    /state = applyOperationalEvent\(state, \{ type: 'start-implementation' \}\);\s*if \(state\.status === 'escalated'\) \{/g;
+
+  assert.equal(
+    (controller.match(unsafePattern) ?? []).length,
+    0,
+    'initial controller must not dispatch immediately after start-implementation without checking escalation'
+  );
+
+  assert.equal(
+    (resume.match(unsafePattern) ?? []).length,
+    0,
+    'resume controller must not dispatch immediately after start-implementation without checking escalation'
+  );
+
+  assert.ok(
+    (controller.match(guardedPattern) ?? []).length >= 1,
+    'initial controller must guard remediation dispatch'
+  );
+
+  assert.ok(
+    (resume.match(guardedPattern) ?? []).length >= 1,
+    'resume controller must guard remediation dispatch'
+  );
+});
+
 test('platform CI executes one strict completeness scan and one target scan', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const ci = await readFile(new URL('../.github/workflows/delivery-v2-ci.yml', import.meta.url), 'utf8');

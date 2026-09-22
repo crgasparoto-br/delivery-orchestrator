@@ -490,6 +490,23 @@ export function rebuildCiPendingState({ plan, materialHeadSha, previousState }) 
   });
 }
 
+export function shouldRebuildCiPendingStateOnResume({
+  staleStateDetected = false,
+  state
+} = {}) {
+  if (staleStateDetected) return true;
+
+  if (['queued', 'classified'].includes(state?.status)) {
+    return true;
+  }
+
+  if (state?.status !== 'ci-failed-remediable') {
+    return false;
+  }
+
+  return state?.ciFailure?.cause !== 'technical-hygiene-block';
+}
+
 export function markExistingAuditInFlight(state) {
   if (state.status !== 'audit-pending' || state.auditAttempts < 1) throw new Error('existing audit requires audit-pending state with a reserved attempt');
   return Object.freeze({ ...state, auditInFlight: true });
@@ -986,7 +1003,10 @@ export async function main() {
         });
       }
     }
-    if (reconciled.staleStateDetected || ['queued', 'classified', 'ci-failed-remediable'].includes(state.status)) {
+    if (shouldRebuildCiPendingStateOnResume({
+      staleStateDetected: reconciled.staleStateDetected,
+      state
+    })) {
       state = rebuildCiPendingState({ plan, materialHeadSha, previousState: state });
       const materialIdentityStale = String(stateEnvelope.persistent.materialHeadSha).toLowerCase() !== materialHeadSha;
       controller = {
@@ -1172,6 +1192,10 @@ export async function main() {
       const remediation = operationalRemediationInput(state);
       const beforeSha = materialHeadSha;
       state = applyOperationalEvent(state, { type: 'start-implementation' });
+      if (state.status === 'escalated') {
+        await persist({ nextAction: 'human-escalation' });
+        break;
+      }
       const workerDispatchNonce = createDispatchNonce();
       await persist({ nextAction: 'dispatch-remediation', workerRunId: null, workerDispatchNonce });
       let worker = await dispatchWorker({

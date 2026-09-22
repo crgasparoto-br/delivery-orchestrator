@@ -213,6 +213,16 @@ function reconcileTechnicalHygieneReadiness(state) {
       (state.status === 'audit-pending' && !state.auditInFlight)
     )
   ) {
+    if (
+      state.implementationAttempts >=
+      state.limits.maxImplementationAttempts
+    ) {
+      return escalateDelivery(state, {
+        reason: 'implementation-budget-exhausted',
+        evidenceRef: hygiene.evidenceRef
+      });
+    }
+
     return Object.freeze({
       ...state,
       status: 'ci-failed-remediable',

@@ -165,6 +165,83 @@ test('technical hygiene BLOCK remains bounded implementation remediation instead
   );
 });
 
+test('technical hygiene BLOCK escalates instead of exceeding implementation budget', () => {
+  let state = createOperationalDelivery({
+    plan: planFor('standard'),
+    materialHeadSha: A
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'ci-result',
+    result: {
+      candidateSha: A,
+      conclusion: 'failure',
+      failureClass: 'actionable',
+      cause: 'first-remediation',
+      evidenceRef: 'run:first-remediation'
+    }
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'start-implementation'
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'publish-material',
+    materialHeadSha: B
+  });
+
+  // Exercise BLOCK exactly at the configured implementation limit.
+  state = Object.freeze({
+    ...state,
+    implementationAttempts: state.limits.maxImplementationAttempts
+  });
+
+  assert.equal(
+    state.implementationAttempts,
+    state.limits.maxImplementationAttempts
+  );
+
+  state = applyOperationalEvent(state, {
+    type: 'technical-hygiene-result',
+    result: {
+      schemaVersion: 1,
+      baselineSha: A,
+      materialSha: B,
+      result: 'BLOCK',
+      effectiveProfile: 'standard',
+      promotionRequired: false,
+      missingEvidence: [],
+      structuralFindings: [{
+        kind: 'duplication',
+        material: true,
+        evidence: ['src/v2/example.mjs:1']
+      }],
+      evidenceRef: 'artifact:hygiene-budget-block'
+    }
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'ci-result',
+    result: {
+      candidateSha: B,
+      conclusion: 'success',
+      evidenceRef: 'run:green-at-budget-limit'
+    }
+  });
+
+  assert.equal(state.status, 'escalated');
+  assert.equal(
+    state.terminalReason,
+    'implementation-budget-exhausted'
+  );
+  assert.equal(nextOperationalAction(state), 'human-escalation');
+  assert.throws(
+    () => operationalRemediationInput(state),
+    /no remediation input/
+  );
+});
+
 test('persistent projection binds state, evidence and effective AI identity to the exact material head', () => {
   let state = createOperationalDelivery({ plan: planFor('critical'), materialHeadSha: A });
   state = applyOperationalEvent(state, { type: 'ci-result', result: { candidateSha: A, conclusion: 'success', evidenceRef: 'run:1' } });

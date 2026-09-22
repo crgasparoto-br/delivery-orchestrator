@@ -535,6 +535,10 @@ export async function main() {
 
       const remediation = operationalRemediationInput(state);
       state = applyOperationalEvent(state, { type: 'start-implementation' });
+      if (state.status === 'escalated') {
+        await persist({ nextAction: 'human-escalation' });
+        break;
+      }
       const workerDispatchNonce = createDispatchNonce();
       await persist({ nextAction: 'dispatch-ci-remediation', workerRunId: null, workerDispatchNonce });
       const beforeSha = materialHeadSha;
@@ -716,6 +720,10 @@ export async function main() {
       if (state.status === 'audit-failed-remediable') {
         const remediation = operationalRemediationInput(state);
         state = applyOperationalEvent(state, { type: 'start-implementation' });
+        if (state.status === 'escalated') {
+          await persist({ nextAction: 'human-escalation' });
+          break;
+        }
         const workerDispatchNonce = createDispatchNonce();
         await persist({ nextAction: 'dispatch-audit-remediation', workerRunId: null, workerDispatchNonce });
         const beforeSha = materialHeadSha;
