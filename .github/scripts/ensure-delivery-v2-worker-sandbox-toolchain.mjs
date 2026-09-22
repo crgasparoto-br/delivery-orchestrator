@@ -26,9 +26,11 @@ import {
   lstatSync,
   rmSync,
   readdirSync,
-  statSync
+  statSync,
+  writeFileSync,
+  chmodSync
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const REQUIRED_TOOLS = ['git', 'node', 'npm', 'pnpm'];
 const MAX_SCAN_DEPTH = 5;
@@ -120,6 +122,188 @@ export function resolveInBinDirs(tool, binDirs) {
   return '';
 }
 
+
+const CODEX_COMMAND_TOOLS = Object.freeze([
+  'bash',
+  'git',
+  'sed',
+  'node',
+  'npm',
+  'pnpm'
+]);
+
+function shellDoubleQuote(value) {
+  return String(value)
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"')
+    .replaceAll('$', '\\$')
+    .replaceAll('`', '\\`');
+}
+
+export function findNamedDirectory(root, name, maxDepth = 8) {
+  const walk = (dir, depth) => {
+    if (depth > maxDepth) return '';
+
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return '';
+    }
+
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+
+      if (entry.name === name) {
+        try {
+          if (statSync(full).isDirectory()) return full;
+        } catch {
+          // Continue bounded search.
+        }
+      }
+
+      if (!entry.isDirectory()) continue;
+
+      const nested = walk(full, depth + 1);
+      if (nested) return nested;
+    }
+
+    return '';
+  };
+
+  return walk(root, 0);
+}
+
+export function resolveCodexCommandPath({
+  codexPath = commandPath('codex')
+} = {}) {
+  if (!codexPath) {
+    fail(
+      'codex is not installed on the runner host; cannot stage the restricted command toolchain before AWF starts.'
+    );
+  }
+
+  const realCodexPath = realpathSync(codexPath);
+  const codexRoot = realpathSync(join(dirname(realCodexPath), '..'));
+  const commandPathDir = findNamedDirectory(
+    codexRoot,
+    'codex-path'
+  );
+
+  if (!commandPathDir) {
+    fail(
+      `Codex restricted codex-path was not found below ${codexRoot}.`
+    );
+  }
+
+  return commandPathDir;
+}
+
+export function publishCodexCommandShim(
+  commandPathDir,
+  tool,
+  target
+) {
+  if (!commandPathDir || !existsSync(commandPathDir)) {
+    fail(
+      `Codex restricted command directory is missing: ${commandPathDir}`
+    );
+  }
+
+  if (!statSync(commandPathDir).isDirectory()) {
+    fail(
+      `Codex restricted command path is not a directory: ${commandPathDir}`
+    );
+  }
+
+  if (!target || !String(target).startsWith('/')) {
+    fail(
+      `Cannot stage ${tool}: expected an absolute executable target, got ${target || '<empty>'}`
+    );
+  }
+
+  const shimPath = join(commandPathDir, tool);
+  const escapedTarget = shellDoubleQuote(target);
+
+  writeFileSync(
+    shimPath,
+    `#!/bin/sh\nexec "${escapedTarget}" "$@"\n`,
+    { mode: 0o755 }
+  );
+  chmodSync(shimPath, 0o755);
+
+  return shimPath;
+}
+
+export function stageCodexCommandToolchain({
+  toolCache = resolveToolCache(),
+  env = process.env,
+  commandPathDir
+} = {}) {
+  const binDirs = findBinDirs(toolCache);
+  const codexCommandPath =
+    commandPathDir || resolveCodexCommandPath();
+
+  const targets = {};
+
+  for (const tool of CODEX_COMMAND_TOOLS) {
+    let target = '';
+
+    if (['git', 'node', 'npm', 'pnpm'].includes(tool)) {
+      target = resolveInBinDirs(tool, binDirs);
+    }
+
+    if (!target) {
+      target = commandPath(tool);
+    }
+
+    if (!target) {
+      fail(
+        `Cannot stage ${tool} into Codex restricted command PATH before AWF starts.`
+      );
+    }
+
+    targets[tool] = target;
+
+    publishCodexCommandShim(
+      codexCommandPath,
+      tool,
+      target
+    );
+  }
+
+  if (!env.RUNNER_TEMP) {
+    fail(
+      'RUNNER_TEMP must be set to stage the future safeoutputs command shim.'
+    );
+  }
+
+  // safeoutputs is materialized later by gh-aw, after this host-side
+  // preprocessing step and before the Codex engine executes. Stage a
+  // deterministic wrapper to that future path now, while /usr/local is
+  // still writable on the runner host.
+  const safeoutputsTarget = join(
+    env.RUNNER_TEMP,
+    'gh-aw',
+    'mcp-cli',
+    'bin',
+    'safeoutputs'
+  );
+
+  targets.safeoutputs = safeoutputsTarget;
+
+  publishCodexCommandShim(
+    codexCommandPath,
+    'safeoutputs',
+    safeoutputsTarget
+  );
+
+  return Object.freeze({
+    commandPath: codexCommandPath,
+    targets: Object.freeze({ ...targets })
+  });
+}
+
 function main() {
   const toolCache = resolveToolCache();
   const { binDir, version } = registerGit(toolCache);
@@ -141,6 +325,16 @@ function main() {
       `Delivery V2 sandbox toolchain preflight failed: ${missing.join(', ')} not discoverable under RUNNER_TOOL_CACHE (${toolCache}) via the same bin-directory scan the agent sandbox uses to build PATH. ` +
         'Declare the missing tool under `runtimes:` in the worker workflow (for node/npm) or extend this script (for other host tools) before the Codex CLI step runs, so the failure is caught before AI budget is spent.'
     );
+  }
+
+  const staged = stageCodexCommandToolchain({ toolCache });
+
+  console.log(
+    `Staged Codex restricted command toolchain on runner host: ${staged.commandPath}`
+  );
+
+  for (const [tool, target] of Object.entries(staged.targets)) {
+    console.log(`codex-command-toolchain: ${tool} -> ${target}`);
   }
 
   console.log(

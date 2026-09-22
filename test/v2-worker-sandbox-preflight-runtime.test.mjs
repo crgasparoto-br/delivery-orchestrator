@@ -15,6 +15,32 @@ import { join } from 'node:path';
 const wrapper =
   '.github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh';
 
+function resolveHostTool(tool) {
+  const result = spawnSync(
+    '/bin/bash',
+    ['-c', `command -v ${tool}`],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(
+    result.status,
+    0,
+    `host tool ${tool} must exist for the regression harness`
+  );
+
+  return result.stdout.trim();
+}
+
+function shimBody(target) {
+  const escaped = target
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"')
+    .replaceAll('$', '\\$')
+    .replaceAll('`', '\\`');
+
+  return `#!/bin/sh\nexec "${escaped}" "$@"\n`;
+}
+
 test('effective sandbox propagates BASH_ENV to explicit Codex login-shell commands', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'delivery-v2-preflight-'));
 
@@ -143,6 +169,28 @@ echo "9.0.0"
     await chmod(codex, 0o755);
     await chmod(pnpm, 0o755);
 
+    // Reproduz a fronteira real:
+    // 1. runner host prepara os shims enquanto codex-path e gravavel;
+    // 2. AWF monta /usr/local como read-only;
+    // 3. wrapper apenas consome os shims, sem tentar grava-los.
+    const commandTargets = new Map([
+      ['bash', resolveHostTool('bash')],
+      ['git', resolveHostTool('git')],
+      ['sed', resolveHostTool('sed')],
+      ['node', process.execPath],
+      ['npm', resolveHostTool('npm')],
+      ['pnpm', pnpm],
+      ['safeoutputs', safeoutputs]
+    ]);
+
+    for (const [tool, target] of commandTargets) {
+      const shim = join(codexCommandPath, tool);
+      await writeFile(shim, shimBody(target));
+      await chmod(shim, 0o755);
+    }
+
+    await chmod(codexCommandPath, 0o555);
+
     const shellProbe =
       'git --version >/dev/null && ' +
       'node --version >/dev/null && ' +
@@ -203,6 +251,10 @@ ${nonLoginShell.stderr}`
         PATH: `${fakeBin}:/usr/local/bin:/usr/bin:/bin`
       }
     });
+
+    // A execucao acima aconteceu com codex-path 0555. Restaurar somente
+    // para permitir a limpeza do diretorio temporario pelo harness.
+    await chmod(codexCommandPath, 0o755);
 
     assert.equal(
       result.status,

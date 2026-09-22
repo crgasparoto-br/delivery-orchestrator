@@ -97,9 +97,10 @@ fi
 require_tool codex
 
 # Codex command subprocesses can replace the environment-policy PATH with the
-# native package's restricted codex-path. Publish wrappers for the already
-# validated Delivery V2 toolchain directly in that path so the same binaries
-# remain discoverable by the real command shell used by the model.
+# native package's restricted codex-path. The required shims are staged on the
+# GitHub runner host by ensure-delivery-v2-worker-sandbox-toolchain.mjs before
+# AWF enters the read-only chroot. This wrapper intentionally performs no write
+# to /usr/local or codex-path.
 resolve_codex_command_path() {
   local codex_executable codex_real codex_root
 
@@ -110,35 +111,16 @@ resolve_codex_command_path() {
   find "$codex_root" -type d -name codex-path -print -quit 2>/dev/null || true
 }
 
-publish_codex_command_shim() {
-  local tool="$1"
-  local command_path="$2"
-  local target shim
-
-  target="$(command -v "$tool")"
-  [ -n "$target" ] || fail "$tool cannot be published into Codex command PATH"
-
-  shim="$command_path/$tool"
-
-  if PATH="$command_path" command -v "$tool" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  printf '#!/bin/sh\nexec "%s" "$@"\n' "$target" > "$shim"
-  chmod 0755 "$shim"
-}
-
 CODEX_COMMAND_PATH="$(resolve_codex_command_path)"
 
 [ -n "$CODEX_COMMAND_PATH" ] ||
   fail "Codex restricted codex-path could not be located"
 [ -d "$CODEX_COMMAND_PATH" ] ||
   fail "Codex restricted command path is not a directory: $CODEX_COMMAND_PATH"
-[ -w "$CODEX_COMMAND_PATH" ] ||
-  fail "Codex restricted command path is not writable: $CODEX_COMMAND_PATH"
 
 for tool in bash git sed node npm pnpm safeoutputs; do
-  publish_codex_command_shim "$tool" "$CODEX_COMMAND_PATH"
+  [ -x "$CODEX_COMMAND_PATH/$tool" ] ||
+    fail "$tool was not staged into Codex restricted command PATH before AWF started"
 done
 
 PATH="$CODEX_COMMAND_PATH" /bin/bash -c '
@@ -155,7 +137,7 @@ PATH="$CODEX_COMMAND_PATH" /bin/bash -c '
   npm --version >/dev/null
   pnpm --version >/dev/null
   safeoutputs noop --help >/dev/null
-' || fail "verified tools are not executable from Codex restricted command PATH"
+' || fail "host-staged tools are not executable from Codex restricted command PATH"
 
 echo "Delivery V2 Codex restricted command PATH toolchain: PASS"
 echo "codex_command_path=$CODEX_COMMAND_PATH"

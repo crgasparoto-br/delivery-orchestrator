@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 
 import {
   resolveToolCache,
   registerGit,
   findBinDirs,
-  resolveInBinDirs
+  resolveInBinDirs,
+  publishCodexCommandShim
 } from '../.github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs';
 
 function makeFakeExecutable(path) {
@@ -17,6 +19,43 @@ function makeFakeExecutable(path) {
   writeFileSync(path, '#!/bin/sh\necho fake\n');
   chmodSync(path, 0o755);
 }
+
+test('Codex command shim is staged before the command directory becomes read-only', () => {
+  const root = mkdtempSync(join(tmpdir(), 'delivery-v2-codex-command-'));
+  const commandPath = join(root, 'codex-path');
+  const target = join(root, 'real-tool');
+  const shim = join(commandPath, 'tool');
+
+  mkdirSync(commandPath, { recursive: true });
+  makeFakeExecutable(target);
+
+  try {
+    publishCodexCommandShim(commandPath, 'tool', target);
+
+    chmodSync(commandPath, 0o555);
+
+    const result = spawnSync(shim, [], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: commandPath
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.trim(), 'fake');
+
+    chmodSync(commandPath, 0o755);
+  } finally {
+    try {
+      chmodSync(commandPath, 0o755);
+    } catch {
+      // Directory may already be gone after an earlier assertion failure.
+    }
+
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('resolveToolCache requires RUNNER_TOOL_CACHE', () => {
   assert.throws(() => resolveToolCache({}), /RUNNER_TOOL_CACHE/);
@@ -154,9 +193,34 @@ test('codex command environment receives the validated sandbox PATH', async () =
     /resolve_codex_command_path/
   );
 
+  const hostStager = await readFile(
+    '.github/scripts/ensure-delivery-v2-worker-sandbox-toolchain.mjs',
+    'utf8'
+  );
+
   assert.match(
+    hostStager,
+    /stageCodexCommandToolchain/
+  );
+
+  assert.match(
+    hostStager,
+    /mcp-cli/
+  );
+
+  assert.match(
+    hostStager,
+    /safeoutputs/
+  );
+
+  assert.doesNotMatch(
     wrapper,
     /publish_codex_command_shim/
+  );
+
+  assert.doesNotMatch(
+    wrapper,
+    /restricted command path is not writable/
   );
 
   assert.match(
