@@ -45,6 +45,8 @@ test('Codex wrapper proves the same infrastructure before the worker executes', 
   assert.match(body, /require_safeoutput noop/);
   assert.match(body, /allow_login_shell=false/);
   assert.match(body, /shell_environment_policy\.set\.PATH/);
+  assert.match(body, /CODEX_BASH_ENV="\$BASH_ENV"/);
+  assert.match(body, /shell_environment_policy\.set\.BASH_ENV/);
 });
 
 

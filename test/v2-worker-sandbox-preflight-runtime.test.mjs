@@ -15,7 +15,7 @@ import { join } from 'node:path';
 const wrapper =
   '.github/scripts/run-delivery-v2-codex-with-sandbox-preflight.sh';
 
-test('effective sandbox exposes safeoutputs to the Codex child process', async () => {
+test('effective sandbox propagates BASH_ENV to explicit Codex login-shell commands', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'delivery-v2-preflight-'));
 
   try {
@@ -72,23 +72,46 @@ exit 2
       `#!/usr/bin/env bash
 set -euo pipefail
 
-# Simula a politica interna do Codex removendo BASH_ENV antes de executar
-# comandos. Sem allow_login_shell=false, bash -lc carrega .bash_profile,
-# substitui PATH e perde toolcache/safeoutputs.
-shell_mode="-lc"
+# Simula a reconstrucao do ambiente aplicada pelo Codex aos command tools.
+# Mesmo com allow_login_shell=false, o modelo ainda pode invocar
+# explicitamente /bin/bash -lc. Nesse caso BASH_ENV precisa restaurar a
+# toolchain depois que o login profile substituir PATH.
+allow_non_login=false
+policy_path=""
+policy_bash_env=""
 previous=""
+
 for arg in "$@"; do
-  if [ "$previous" = "-c" ] && [ "$arg" = "allow_login_shell=false" ]; then
-    shell_mode="-c"
+  if [ "$previous" = "-c" ]; then
+    case "$arg" in
+      allow_login_shell=false)
+        allow_non_login=true
+        ;;
+      shell_environment_policy.set.PATH=*)
+        policy_path=\${arg#shell_environment_policy.set.PATH=}
+        ;;
+      shell_environment_policy.set.BASH_ENV=*)
+        policy_bash_env=\${arg#shell_environment_policy.set.BASH_ENV=}
+        ;;
+    esac
   fi
   previous="$arg"
 done
 
-test "$shell_mode" = "-c"
-unset BASH_ENV
-export HOME="\${DELIVERY_V2_TEST_LOGIN_HOME:?}"
+test "$allow_non_login" = "true"
+test -n "$policy_path"
+test -n "$policy_bash_env"
 
-/bin/bash "$shell_mode" 'git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; pnpm --version >/dev/null; safeoutputs noop'
+# Os valores de shell_environment_policy chegam delimitados por aspas.
+policy_path=\${policy_path#\\\"}
+policy_path=\${policy_path%\\\"}
+policy_bash_env=\${policy_bash_env#\\\"}
+policy_bash_env=\${policy_bash_env%\\\"}
+
+# Reconstroi um ambiente minimo, como o command environment do Codex.
+# O .bash_profile abaixo destrói PATH; BASH_ENV deve restaura-lo dentro
+# do bash -lc explicito.
+env -i HOME="\${DELIVERY_V2_TEST_LOGIN_HOME:?}" GH_AW_SAFE_OUTPUTS="\${GH_AW_SAFE_OUTPUTS:?}" PATH="$policy_path" BASH_ENV="$policy_bash_env" /bin/bash -lc 'git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; pnpm --version >/dev/null; safeoutputs noop'
 `
     );
 
