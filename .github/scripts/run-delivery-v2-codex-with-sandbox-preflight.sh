@@ -24,6 +24,7 @@ fi
 # restoring the normal system locations needed by login/non-interactive shells.
 export PATH="${PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+require_tool cat
 require_tool git
 require_tool sed
 require_tool node
@@ -49,14 +50,14 @@ require_child_tool() {
     fail "$tool is not available inside Codex child bash shells"
 }
 
-for tool in git sed node npm pnpm safeoutputs; do
+for tool in cat git sed node npm pnpm safeoutputs; do
   require_child_tool "$tool"
 done
 
 # npm itself uses /usr/bin/env node. Running npm here proves that node remains
 # resolvable through the compatibility login-shell probe. Actual Codex command
 # shells are forced to non-login mode below.
-/bin/bash -lc 'git --version >/dev/null && node --version >/dev/null && npm --version >/dev/null && pnpm --version >/dev/null' ||
+/bin/bash -lc 'cat /dev/null >/dev/null && git --version >/dev/null && node --version >/dev/null && npm --version >/dev/null && pnpm --version >/dev/null' ||
   fail "git/node/npm/pnpm execution failed inside sandbox child-shell probe"
 
 echo "Delivery V2 Codex child-shell toolchain preflight: PASS"
@@ -118,7 +119,7 @@ CODEX_COMMAND_PATH="$(resolve_codex_command_path)"
 [ -d "$CODEX_COMMAND_PATH" ] ||
   fail "Codex restricted command path is not a directory: $CODEX_COMMAND_PATH"
 
-for tool in bash git sed node npm pnpm safeoutputs; do
+for tool in bash cat git sed node npm pnpm safeoutputs; do
   [ -x "$CODEX_COMMAND_PATH/$tool" ] ||
     fail "$tool was not staged into Codex restricted command PATH before AWF started"
 done
@@ -126,12 +127,14 @@ done
 PATH="$CODEX_COMMAND_PATH" /bin/bash -c '
   set -e
   command -v bash >/dev/null
+  command -v cat >/dev/null
   command -v git >/dev/null
   command -v sed >/dev/null
   command -v node >/dev/null
   command -v npm >/dev/null
   command -v pnpm >/dev/null
   command -v safeoutputs >/dev/null
+  cat /dev/null >/dev/null
   git --version >/dev/null
   node --version >/dev/null
   npm --version >/dev/null

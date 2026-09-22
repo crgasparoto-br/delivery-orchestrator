@@ -125,6 +125,7 @@ export function resolveInBinDirs(tool, binDirs) {
 
 const CODEX_COMMAND_TOOLS = Object.freeze([
   'bash',
+  'cat',
   'git',
   'sed',
   'node',

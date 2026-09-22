@@ -40,6 +40,7 @@ test('Codex wrapper proves the same infrastructure before the worker executes', 
     'utf8'
   );
 
+  assert.match(body, /require_tool cat/);
   assert.match(body, /require_tool pnpm/);
   assert.match(body, /require_tool safeoutputs/);
   assert.match(body, /require_safeoutput noop/);
@@ -61,6 +62,7 @@ test('Codex wrapper proves the same infrastructure before the worker executes', 
   assert.match(hostStager, /publishCodexCommandShim/);
   assert.match(hostStager, /mcp-cli/);
   assert.match(hostStager, /safeoutputs/);
+  assert.match(hostStager, /CODEX_COMMAND_TOOLS[\s\S]*'cat'/);
 });
 
 

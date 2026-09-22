@@ -213,6 +213,26 @@ test('codex command environment receives the validated sandbox PATH', async () =
     /safeoutputs/
   );
 
+  assert.match(
+    hostStager,
+    /CODEX_COMMAND_TOOLS[\s\S]*'cat'/
+  );
+
+  assert.match(
+    wrapper,
+    /for tool in bash cat git sed node npm pnpm safeoutputs/
+  );
+
+  assert.match(
+    wrapper,
+    /command -v cat/
+  );
+
+  assert.match(
+    wrapper,
+    /cat \/dev\/null/
+  );
+
   assert.doesNotMatch(
     wrapper,
     /publish_codex_command_shim/
