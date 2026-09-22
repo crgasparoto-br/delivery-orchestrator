@@ -116,7 +116,7 @@
       "title": "Exact-head release gate",
       "status": "validated",
       "requiredForV2Default": true,
-      "summary": "Release readiness is computed from the current PR head, required checks, risk profile and required independent review; missing/non-terminal hygiene remains technical-hygiene-pending, and material SHA drift invalidates prior approval.",
+      "summary": "Release readiness is computed from the current PR head, required checks, risk profile and required independent review; missing or materially UNKNOWN hygiene remains technical-hygiene-pending, proven BLOCK remains bounded-remediable, and material SHA drift invalidates prior approval.",
       "implementationRefs": ["file:src/v2/release-gate.mjs", "file:src/v2/delivery-plan.mjs"],
       "validationRefs": ["file:test/v2-release-gate.test.mjs", "file:test/v2-release-gate-live-evidence.test.mjs", "file:docs/delivery-v2/evidence/dv2-010-exact-head-release.json", "file:test/v2-delivery-plan.test.mjs", "github:delivery-orchestrator#54", "commit:1315274732bac8e421e9c3b2bf7783c97db943f3", "commit:5c14445e7d82784b16e1fe7af0f708c5e07909a2", "github-actions:34692897163"],
       "rolloutRefs": [],

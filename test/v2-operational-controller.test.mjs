@@ -90,6 +90,81 @@ test('actionable CI failure becomes the only bounded remediation input and prese
   assert.equal(state.status, 'implementing');
 });
 
+test('technical hygiene BLOCK remains bounded implementation remediation instead of human escalation', () => {
+  let state = createOperationalDelivery({
+    plan: planFor('critical'),
+    materialHeadSha: A
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'technical-hygiene-result',
+    result: {
+      schemaVersion: 1,
+      baselineSha: B,
+      materialSha: A,
+      result: 'BLOCK',
+      effectiveProfile: 'critical',
+      promotionRequired: false,
+      missingEvidence: [],
+      structuralFindings: [{
+        kind: 'duplication',
+        material: true,
+        evidence: ['src/v2/example.mjs:1']
+      }],
+      evidenceRef: 'artifact:hygiene-block'
+    }
+  });
+
+  state = applyOperationalEvent(state, {
+    type: 'ci-result',
+    result: {
+      candidateSha: A,
+      conclusion: 'success',
+      evidenceRef: 'run:green-before-hygiene-remediation'
+    }
+  });
+
+  assert.equal(state.status, 'ci-failed-remediable');
+  assert.equal(nextOperationalAction(state), 'dispatch-ci-remediation');
+  assert.equal(state.ciFailure.failureClass, 'actionable');
+  assert.equal(state.ciFailure.cause, 'technical-hygiene-block');
+  assert.equal(state.ciFailure.evidenceRef, 'artifact:hygiene-block');
+
+  const remediation = operationalRemediationInput(state);
+  assert.equal(remediation.source, 'ci-failure');
+  assert.equal(remediation.ciFailure.cause, 'technical-hygiene-block');
+  assert.equal(remediation.technicalHygiene.result, 'BLOCK');
+  assert.equal(remediation.technicalHygiene.structuralFindings[0].kind, 'duplication');
+
+  const persistent = persistentStateFromOperational({
+    state,
+    identity: identity(),
+    classifier: { version: 'v1', fingerprint: 'fingerprint' },
+    workflowChecks: [{
+      name: 'required',
+      subjectSha: A,
+      status: 'completed',
+      conclusion: 'success',
+      workflowRunId: 1,
+      evidenceRef: 'run:green-before-hygiene-remediation'
+    }]
+  });
+
+  assert.equal(persistent.status, 'ci-failed-remediable');
+
+  let restored = operationalStateFromPersistent(persistent);
+  restored = applyOperationalEvent(restored, {
+    type: 'technical-hygiene-result',
+    result: state.technicalHygiene
+  });
+
+  assert.equal(restored.status, 'ci-failed-remediable');
+  assert.equal(
+    operationalRemediationInput(restored).technicalHygiene.result,
+    'BLOCK'
+  );
+});
+
 test('persistent projection binds state, evidence and effective AI identity to the exact material head', () => {
   let state = createOperationalDelivery({ plan: planFor('critical'), materialHeadSha: A });
   state = applyOperationalEvent(state, { type: 'ci-result', result: { candidateSha: A, conclusion: 'success', evidenceRef: 'run:1' } });

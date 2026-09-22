@@ -198,15 +198,49 @@ export function createAdoptedOperationalDelivery({ plan, materialHeadSha, ciEvid
 }
 
 function reconcileTechnicalHygieneReadiness(state) {
-  if (!['ready-for-human-merge', 'technical-hygiene-pending'].includes(state.status)) return state;
   const hygiene = state.technicalHygiene;
+
+  // A proven hygiene BLOCK is actionable material failure. Preserve the
+  // existing bounded implementation-remediation path instead of converting
+  // it into human escalation. When CI has just completed for an audit-required
+  // candidate, route before allocating an audit run.
+  if (
+    hygiene?.materialSha === state.materialHeadSha &&
+    hygiene.result === 'BLOCK' &&
+    (
+      state.status === 'ready-for-human-merge' ||
+      state.status === 'technical-hygiene-pending' ||
+      (state.status === 'audit-pending' && !state.auditInFlight)
+    )
+  ) {
+    return Object.freeze({
+      ...state,
+      status: 'ci-failed-remediable',
+      ciFailure: Object.freeze({
+        candidateSha: state.materialHeadSha,
+        failureClass: 'actionable',
+        cause: 'technical-hygiene-block',
+        evidenceRef: hygiene.evidenceRef
+      }),
+      auditInFlight: false
+    });
+  }
+
+  if (!['ready-for-human-merge', 'technical-hygiene-pending'].includes(state.status)) return state;
+
   const passed = hygiene?.materialSha === state.materialHeadSha &&
     ['PASS', 'PASS_WITH_DEBT'].includes(hygiene.result) &&
     !hygiene.promotionRequired &&
     !hygiene.missingEvidence.some((item) => item.material);
-  return Object.freeze({ ...state, status: passed
-    ? (state.auditRequired && state.auditEvidence?.decision !== 'approved' ? 'audit-pending' : 'ready-for-human-merge')
-    : 'technical-hygiene-pending' });
+
+  return Object.freeze({
+    ...state,
+    status: passed
+      ? (state.auditRequired && state.auditEvidence?.decision !== 'approved'
+        ? 'audit-pending'
+        : 'ready-for-human-merge')
+      : 'technical-hygiene-pending'
+  });
 }
 
 export function nextOperationalAction(state) {
@@ -260,7 +294,20 @@ export function applyOperationalEvent(state, event) {
 }
 
 export function operationalRemediationInput(state, options = {}) {
-  return remediationInputsFor(state, options);
+  const input = remediationInputsFor(state, options);
+
+  if (
+    state.status === 'ci-failed-remediable' &&
+    state.ciFailure?.cause === 'technical-hygiene-block' &&
+    state.technicalHygiene?.result === 'BLOCK'
+  ) {
+    return Object.freeze({
+      ...input,
+      technicalHygiene: state.technicalHygiene
+    });
+  }
+
+  return input;
 }
 
 export function persistentStateFromOperational({ state, identity, classifier, workflowChecks = [], evidenceRefs = [] } = {}) {
