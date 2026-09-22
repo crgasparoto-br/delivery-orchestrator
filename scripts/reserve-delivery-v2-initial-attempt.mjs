@@ -10,7 +10,9 @@ import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { createDispatchNonce } from '../src/v2/controller-runtime.mjs';
 import {
   parseBootstrapLease,
+  recoverBootstrapWorkerRun,
   recoveryContextForExhaustedBootstrap,
+  recoveryContextForSuccessfulBootstrapWithoutPr,
   resolveBootstrapControllerHeadShaFromRun,
   resolveCheckedOutControlPlaneHeadSha
 } from './guard-delivery-v2-reentry.mjs';
@@ -52,33 +54,58 @@ export function resolveRecoveryForReservation({
   currentControllerHeadSha,
   priorImplementationAttempts = 0,
   envRecovery = null,
-  bootstrapControllerHeadSha = null
+  bootstrapControllerHeadSha = null,
+  recoveredWorkerRun = null
 } = {}) {
   const normalizedEnvRecovery = normalizeRecoveryContext(envRecovery);
+  const status = String(persistedBootstrapLease?.status ?? '').trim();
 
-  if (
-    persistedBootstrapLease?.status
-      !== 'escalated-initial-budget-exhausted'
-  ) {
+  let persistedRecovery = null;
+
+  if (status === 'escalated-initial-budget-exhausted') {
+    persistedRecovery = recoveryContextForExhaustedBootstrap({
+      bootstrapLease: persistedBootstrapLease,
+      currentControllerHeadSha,
+      bootstrapControllerHeadSha
+    });
+  } else if (status === 'reserved-initial-attempt') {
+    const successfulWorker =
+      recoveredWorkerRun?.status === 'completed'
+      && recoveredWorkerRun?.conclusion === 'success';
+
+    if (successfulWorker) {
+      persistedRecovery = recoveryContextForSuccessfulBootstrapWithoutPr({
+        bootstrapLease: persistedBootstrapLease,
+        currentControllerHeadSha,
+        bootstrapControllerHeadSha
+      });
+    }
+  } else {
     if (normalizedEnvRecovery) {
       throw new Error(
-        'recovery environment requires a trusted exhausted bootstrap lease'
+        'recovery environment requires a trusted recoverable bootstrap lease'
       );
     }
     return null;
   }
 
-  const persistedRecovery = recoveryContextForExhaustedBootstrap({
-    bootstrapLease: persistedBootstrapLease,
-    currentControllerHeadSha,
-    bootstrapControllerHeadSha
-  });
-
   if (!persistedRecovery) {
-    throw new Error(
-      'trusted exhausted bootstrap lease is not eligible for recovery '
-      + 'on the checked-out control-plane SHA'
-    );
+    if (status === 'escalated-initial-budget-exhausted') {
+      throw new Error(
+        'trusted exhausted bootstrap lease is not eligible for recovery '
+        + 'on the checked-out control-plane SHA'
+      );
+    }
+
+    if (normalizedEnvRecovery) {
+      throw new Error(
+        'trusted successful bootstrap recovery is not eligible: '
+        + 'the correlated worker must be completed/success and the '
+        + 'checked-out control-plane SHA must have changed'
+      );
+    }
+
+    return null;
   }
 
   const prior = Number(priorImplementationAttempts);
@@ -113,9 +140,8 @@ export function resolveRecoveryForReservation({
     }
   }
 
-  // Persisted trusted state is authoritative. Environment fields are
-  // compatibility evidence only. This preserves recovery provenance
-  // even when a run started from older workflow YAML.
+  // Trusted persisted state + correlated GitHub worker evidence are
+  // authoritative. Workflow outputs are compatibility cross-checks only.
   return persistedRecovery;
 }
 
@@ -319,12 +345,23 @@ async function main() {
       });
   }
 
+  const recoveredWorkerRun =
+    persistedBootstrapLease?.status === 'reserved-initial-attempt'
+      ? await recoverBootstrapWorkerRun(
+          persistedBootstrapLease,
+          orchestratorRepository,
+          orchestratorRef,
+          actionsToken
+        )
+      : null;
+
   const recovery = resolveRecoveryForReservation({
     persistedBootstrapLease,
     currentControllerHeadSha: controllerHeadSha,
     priorImplementationAttempts,
     envRecovery,
-    bootstrapControllerHeadSha
+    bootstrapControllerHeadSha,
+    recoveredWorkerRun
   });
   const explicitChangedPaths = splitPaths(process.env.DELIVERY_CHANGED_PATHS);
   let changedPaths = explicitChangedPaths;

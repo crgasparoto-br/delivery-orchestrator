@@ -585,7 +585,7 @@ function assertRecoveredWorkerIdentity(run, lease, orchestratorRef) {
   return correlated;
 }
 
-async function recoverBootstrapWorkerRun(lease, orchestratorRepository, orchestratorRef, token) {
+export async function recoverBootstrapWorkerRun(lease, orchestratorRepository, orchestratorRef, token) {
   if (!lease) return null;
   if (lease.workerRunId) {
     const run = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${lease.workerRunId}`, token);
