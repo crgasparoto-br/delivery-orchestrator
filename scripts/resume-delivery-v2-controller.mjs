@@ -86,7 +86,13 @@ const RECOVERABLE_UNKNOWN_HYGIENE_CODES = new Set([
   // These aliases remain protected by the existing control-plane SHA
   // change guard, so they cannot create a same-SHA automatic retry loop.
   'SAFEOUTPUTS_UNAVAILABLE',
-  'LOCAL_DEPENDENCIES_UNAVAILABLE'
+  'LOCAL_DEPENDENCIES_UNAVAILABLE',
+
+  // Vocabulary observed from current evidence-only workers.
+  // Rearming still requires a control-plane SHA change, so these aliases
+  // cannot create an automatic retry loop on the same controller version.
+  'SAFE_OUTPUT_TOOL_UNAVAILABLE',
+  'TEST_EXECUTION_UNAVAILABLE'
 ]);
 
 export function shouldRearmUnknownTechnicalHygiene({

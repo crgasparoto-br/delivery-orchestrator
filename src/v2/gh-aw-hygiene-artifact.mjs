@@ -37,6 +37,26 @@ function nonEmptyStrings(value) {
   return value.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim());
 }
 
+function normalizeEvidenceList(value, label) {
+  if (value == null) return [];
+
+  if (typeof value === 'string') {
+    const resolved = value.trim();
+    return resolved ? [resolved] : [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array of evidence strings`);
+  }
+
+  return value.map((item, index) => {
+    if (typeof item !== 'string' || !item.trim()) {
+      throw new Error(`${label}[${index}] must be a non-empty string`);
+    }
+    return item.trim();
+  });
+}
+
 function normalizeWorkerSummary(rawSummary) {
   const summary = rawSummary && !Array.isArray(rawSummary) && typeof rawSummary === 'object' ? rawSummary : null;
   if (!summary) throw new Error('technical hygiene worker summary must be an object');
@@ -51,14 +71,101 @@ function normalizeWorkerSummary(rawSummary) {
   }
   if (!Array.isArray(reuseDiscovery)) throw new Error('reuseDiscovery must be an array or a supported shorthand decision');
 
+  reuseDiscovery = reuseDiscovery.map((entry, index) => {
+    if (!entry || Array.isArray(entry) || typeof entry !== 'object') {
+      throw new Error(`reuseDiscovery[${index}] must be an object`);
+    }
+
+    const normalized = {
+      ...entry,
+      evidence: normalizeEvidenceList(
+        entry.evidence,
+        `reuseDiscovery[${index}].evidence`
+      )
+    };
+
+    if (entry.existingOwnerEvidence != null) {
+      normalized.existingOwnerEvidence = normalizeEvidenceList(
+        entry.existingOwnerEvidence,
+        `reuseDiscovery[${index}].existingOwnerEvidence`
+      );
+    }
+
+    if (entry.justificationEvidence != null) {
+      normalized.justificationEvidence = normalizeEvidenceList(
+        entry.justificationEvidence,
+        `reuseDiscovery[${index}].justificationEvidence`
+      );
+    }
+
+    return normalized;
+  });
+
+  const compatibilityMissingEvidence = [];
+
+  let structuralFindings = summary.structuralFindings ?? [];
+  if (!Array.isArray(structuralFindings)) {
+    throw new Error('structuralFindings must be an array');
+  }
+
+  structuralFindings = structuralFindings.flatMap((entry, index) => {
+    if (!entry || Array.isArray(entry) || typeof entry !== 'object') {
+      compatibilityMissingEvidence.push({
+        code: 'MALFORMED_STRUCTURAL_FINDING',
+        detail: `structuralFindings[${index}] must be a canonical object`,
+        material: true
+      });
+      return [];
+    }
+
+    const kind = String(entry.kind ?? '').trim();
+
+    if (!kind) {
+      const claim = String(entry.claim ?? '').trim();
+
+      compatibilityMissingEvidence.push({
+        code: 'MALFORMED_STRUCTURAL_FINDING',
+        detail:
+          `structuralFindings[${index}] is missing canonical kind` +
+          (claim ? `; worker claim: ${claim}` : ''),
+        material: true
+      });
+
+      return [];
+    }
+
+    return [{
+      ...entry,
+      kind,
+      evidence: normalizeEvidenceList(
+        entry.evidence,
+        `structuralFindings[${index}].evidence`
+      ),
+      rootCauseEvidence: normalizeEvidenceList(
+        entry.rootCauseEvidence,
+        `structuralFindings[${index}].rootCauseEvidence`
+      )
+    }];
+  });
+
   let semanticJudgments = summary.semanticJudgments ?? [];
   if (!Array.isArray(semanticJudgments)) throw new Error('semanticJudgments must be an array');
   semanticJudgments = semanticJudgments.map((entry, index) => {
     if (!entry || Array.isArray(entry) || typeof entry !== 'object') throw new Error(`semanticJudgments[${index}] must be an object`);
-    if (String(entry.claim ?? '').trim()) return entry;
+
+    const evidence = normalizeEvidenceList(
+      entry.evidence,
+      `semanticJudgments[${index}].evidence`
+    );
+
+    if (String(entry.claim ?? '').trim()) {
+      return { ...entry, evidence };
+    }
+
     const decision = String(entry.decision ?? '').trim();
     if (!decision) throw new Error(`semanticJudgments[${index}] requires claim or decision`);
-    return { ...entry, claim: decision };
+
+    return { ...entry, claim: decision, evidence };
   });
 
   let deterministicReferences = summary.deterministicReferences ?? [];
@@ -69,6 +176,25 @@ function normalizeWorkerSummary(rawSummary) {
       return { symbol: evidenceRef, referenced: true, evidence: [evidenceRef] };
     }
     if (!entry || Array.isArray(entry) || typeof entry !== 'object') throw new Error(`deterministicReferences[${index}] must be an object or evidence string`);
+
+    return {
+      ...entry,
+      evidence: normalizeEvidenceList(
+        entry.evidence,
+        `deterministicReferences[${index}].evidence`
+      )
+    };
+  });
+
+  let missingEvidence = summary.missingEvidence ?? [];
+  if (!Array.isArray(missingEvidence)) {
+    throw new Error('missingEvidence must be an array');
+  }
+
+  missingEvidence = missingEvidence.map((entry, index) => {
+    if (!entry || Array.isArray(entry) || typeof entry !== 'object') {
+      throw new Error(`missingEvidence[${index}] must be an object`);
+    }
     return entry;
   });
 
@@ -79,8 +205,13 @@ function normalizeWorkerSummary(rawSummary) {
   return {
     ...summary,
     reuseDiscovery,
+    structuralFindings,
     semanticJudgments,
     deterministicReferences,
+    missingEvidence: [
+      ...missingEvidence,
+      ...compatibilityMissingEvidence
+    ],
     semanticCalls
   };
 }

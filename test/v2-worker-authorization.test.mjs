@@ -487,3 +487,42 @@ test('resume controller clears stale hygiene run before redispatch', async () =>
     /if \(!hygieneRun\) \{[\s\S]*?dispatchWorker\(\{/
   );
 });
+
+test('current hygiene infrastructure vocabulary can rearm after a control-plane change', () => {
+  const technicalHygiene = {
+    result: 'UNKNOWN',
+    missingEvidence: [
+      {
+        code: 'SAFE_OUTPUT_TOOL_UNAVAILABLE',
+        detail: 'worker could not locate safeoutputs noop',
+        material: true
+      },
+      {
+        code: 'TEST_EXECUTION_UNAVAILABLE',
+        detail: 'worker could not execute the focused test command',
+        material: true
+      }
+    ]
+  };
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene,
+      runConclusion: 'success',
+      runHeadSha: 'a'.repeat(40),
+      currentControllerSha: 'b'.repeat(40)
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldRearmUnknownTechnicalHygiene({
+      technicalHygiene,
+      runConclusion: 'success',
+      runHeadSha: 'b'.repeat(40),
+      currentControllerSha: 'b'.repeat(40)
+    }),
+    false,
+    'same-SHA retries must remain blocked'
+  );
+});
