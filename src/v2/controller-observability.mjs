@@ -134,6 +134,7 @@ export function createControllerObservability({ startedAtMs = Date.now() } = {})
     // zero provider calls is deliberately absent here (it is counted in zeroProviderCallRuns)
     // so it is never mistaken for a provider run of unknown cost.
     providerRunLedger: Object.freeze([]),
+    providerLedgerHistoryComplete: true,
     zeroProviderCallRuns: 0,
     providerAccountingComplete: true,
     failedAuditRunIds: Object.freeze([]),
@@ -162,9 +163,44 @@ export function normalizeControllerObservability(raw) {
   const providerCalls = nonNegativeInteger(value.providerCalls, 'observability.providerCalls');
   if (providerCalls !== normalizedRunIds.length) throw new Error('observability.providerCalls must equal providerRunIds length');
   const providerRunLedger = normalizeLedger(value.providerRunLedger);
-  if (providerRunLedger.length > 0 && providerRunLedger.length !== providerCalls) {
-    throw new Error('observability.providerRunLedger must contain exactly one entry per provider call');
+
+  if (providerRunLedger.length > providerCalls) {
+    throw new Error(
+      'observability.providerRunLedger cannot contain more entries than providerCalls'
+    );
   }
+
+  for (const entry of providerRunLedger) {
+    if (!normalizedRunIds.includes(entry.runId)) {
+      throw new Error(
+        `observability.providerRunLedger runId ${entry.runId} is not present in providerRunIds`
+      );
+    }
+  }
+
+  const inferredProviderLedgerHistoryComplete =
+    providerRunLedger.length === providerCalls;
+
+  const providerLedgerHistoryComplete =
+    value.providerLedgerHistoryComplete == null
+      ? inferredProviderLedgerHistoryComplete
+      : value.providerLedgerHistoryComplete;
+
+  if (typeof providerLedgerHistoryComplete !== 'boolean') {
+    throw new Error(
+      'observability.providerLedgerHistoryComplete must be boolean when present'
+    );
+  }
+
+  if (
+    providerLedgerHistoryComplete &&
+    !inferredProviderLedgerHistoryComplete
+  ) {
+    throw new Error(
+      'complete provider ledger history requires one ledger entry per provider call'
+    );
+  }
+
   const zeroProviderCallRuns = nonNegativeInteger(value.zeroProviderCallRuns ?? 0, 'observability.zeroProviderCallRuns');
 
   const hasAnyProviderAccountingField = [
@@ -243,6 +279,7 @@ export function normalizeControllerObservability(raw) {
     providerRunIds: Object.freeze(normalizedRunIds),
     observedRunIds: Object.freeze(observedRunIds),
     providerRunLedger,
+    providerLedgerHistoryComplete,
     zeroProviderCallRuns,
     providerAccountingComplete,
     failedAuditRunIds: Object.freeze(failedAuditRunIds),

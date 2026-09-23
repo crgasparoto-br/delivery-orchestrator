@@ -346,3 +346,126 @@ test('auditAttempt survives canonical controller observability normalization and
 
   assert.equal(normalized.providerRunLedger[0].auditAttempt, 3);
 });
+
+test('partial historical provider ledger remains resumable without fabricating missing entries', () => {
+  let complete = createControllerObservability({ startedAtMs: 1000 });
+
+  complete = recordControllerProviderObservation(complete, {
+    runId: 91001,
+    stage: 'implementation',
+    provider: 'codex',
+    usage: { turns: 1 },
+    evidenceRef: 'run:91001'
+  });
+
+  complete = recordControllerProviderObservation(complete, {
+    runId: 91002,
+    stage: 'implementation',
+    provider: 'codex',
+    usage: { turns: 1 },
+    evidenceRef: 'run:91002'
+  });
+
+  const {
+    providerLedgerHistoryComplete: _providerLedgerHistoryComplete,
+    ...persisted
+  } = JSON.parse(JSON.stringify(complete));
+
+  // Simula um delivery criado antes do ledger detalhado: os dois provider
+  // calls sao conhecidos, mas apenas o run mais recente possui linha no
+  // ledger. O normalizador nao pode inventar a linha historica ausente.
+  persisted.providerRunLedger = [
+    persisted.providerRunLedger[1]
+  ];
+
+  let resumed = normalizeControllerObservability(persisted);
+
+  assert.equal(resumed.providerCalls, 2);
+  assert.deepEqual(resumed.providerRunIds, [91001, 91002]);
+  assert.deepEqual(
+    resumed.providerRunLedger.map((entry) => entry.runId),
+    [91002]
+  );
+  assert.equal(resumed.providerLedgerHistoryComplete, false);
+
+  resumed = recordControllerProviderObservation(resumed, {
+    runId: 91003,
+    stage: 'implementation',
+    provider: 'codex',
+    usage: { turns: 1 },
+    evidenceRef: 'run:91003'
+  });
+
+  assert.equal(resumed.providerCalls, 3);
+  assert.deepEqual(
+    resumed.providerRunIds,
+    [91001, 91002, 91003]
+  );
+  assert.deepEqual(
+    resumed.providerRunLedger.map((entry) => entry.runId),
+    [91002, 91003]
+  );
+  assert.equal(resumed.providerLedgerHistoryComplete, false);
+
+  const roundTrip = normalizeControllerObservability(
+    JSON.parse(JSON.stringify(resumed))
+  );
+
+  assert.equal(roundTrip.providerCalls, 3);
+  assert.deepEqual(
+    roundTrip.providerRunLedger.map((entry) => entry.runId),
+    [91002, 91003]
+  );
+  assert.equal(roundTrip.providerLedgerHistoryComplete, false);
+});
+
+test('partial provider ledger still rejects entries outside providerRunIds', () => {
+  let state = createControllerObservability({ startedAtMs: 1000 });
+
+  state = recordControllerProviderObservation(state, {
+    runId: 92001,
+    stage: 'implementation',
+    provider: 'codex',
+    usage: { turns: 1 }
+  });
+
+  const persisted = JSON.parse(JSON.stringify(state));
+
+  persisted.providerLedgerHistoryComplete = false;
+  persisted.providerRunLedger[0].runId = 92999;
+
+  assert.throws(
+    () => normalizeControllerObservability(persisted),
+    /is not present in providerRunIds/
+  );
+});
+
+test('provider ledger declared complete still requires exact historical coverage', () => {
+  let state = createControllerObservability({ startedAtMs: 1000 });
+
+  state = recordControllerProviderObservation(state, {
+    runId: 93001,
+    stage: 'implementation',
+    provider: 'codex',
+    usage: { turns: 1 }
+  });
+
+  state = recordControllerProviderObservation(state, {
+    runId: 93002,
+    stage: 'implementation',
+    provider: 'codex',
+    usage: { turns: 1 }
+  });
+
+  const persisted = JSON.parse(JSON.stringify(state));
+
+  persisted.providerRunLedger =
+    persisted.providerRunLedger.slice(1);
+
+  persisted.providerLedgerHistoryComplete = true;
+
+  assert.throws(
+    () => normalizeControllerObservability(persisted),
+    /complete provider ledger history requires/
+  );
+});

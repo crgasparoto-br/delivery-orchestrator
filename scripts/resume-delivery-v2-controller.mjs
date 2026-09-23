@@ -653,6 +653,7 @@ export function initializeResumeObservability(controller = {}, { startedAtMs = D
       declaredHistoryComplete &&
       observability.ciTimingHistoryComplete &&
       observability.providerAccountingComplete &&
+      observability.providerLedgerHistoryComplete &&
       observability.auditTimingComplete
   });
 }
