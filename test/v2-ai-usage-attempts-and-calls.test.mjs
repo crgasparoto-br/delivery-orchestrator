@@ -359,3 +359,132 @@ test('export consistency: unknown calls and attempts are rendered as unknown, ne
   assert.match(toHtml(payload), /unknown provider calls \(unknown\)/);
   assert.match(toJobSummary(payload), /\| Provider calls \| unknown \(unknown\) \|/);
 });
+
+// --- F-214-04: attempts are scoped to the group, never inherited from the delivery -----------
+
+test('F-214-04: a phase grouping never lets the implementation group inherit the delivery audit attempts', () => {
+  const record = createDeliveryMetrics(baseInput({
+    providerCalls: 4,
+    attempts: { implementation: 1, audit: 3 },
+    providerRunLedger: [
+      run({ runId: 9901, implementationAttempt: 1, remediationAttempt: 0 }),
+      run({ runId: 9902, implementationAttempt: 1, remediationAttempt: 0 }),
+      run({ runId: 9903, implementationAttempt: 1, remediationAttempt: 0, phase: 'audit' }),
+      run({ runId: 9904, implementationAttempt: 1, remediationAttempt: 0, phase: 'audit' })
+    ]
+  }));
+  const entries = deriveLedgerEntries([record]);
+  const byPhase = groupLedgerEntries(entries, ['phase']);
+
+  // The whole window still reports the canonical delivery-level audit attempts.
+  assert.equal(aggregateLedgerEntries(entries).auditAttempts, 3);
+
+  // The implementation group holds none of the delivery's audit evidence, so it cannot claim the
+  // delivery's audit attempts. It stays unknown instead of inheriting 3 or fabricating 0.
+  assert.notEqual(byPhase.implementation.auditAttempts, 3);
+  assert.equal(byPhase.implementation.auditAttempts, null);
+  assert.equal(byPhase.implementation.attempts.audit.accounting, 'unknown');
+  assert.equal(byPhase.implementation.providerRuns, 2);
+  assert.equal(byPhase.implementation.auditRuns, 0);
+
+  // The audit group holds ALL of the delivery's audit evidence, so the canonical count applies.
+  assert.equal(byPhase.audit.auditAttempts, 3);
+  assert.equal(byPhase.audit.attempts.audit.accounting, 'complete');
+  assert.equal(byPhase.audit.auditRuns, 2);
+  // Audit provider runs are never used as the audit attempt count.
+  assert.notEqual(byPhase.audit.auditAttempts, byPhase.audit.auditRuns);
+});
+
+test('F-214-04: run-granular audit attempt identity scopes audit attempts exactly, even per workflow run', () => {
+  const record = createDeliveryMetrics(baseInput({
+    providerCalls: 4,
+    attempts: { implementation: 1, audit: 2 },
+    providerRunLedger: [
+      run({ runId: 9911, workflowRunId: 501, implementationAttempt: 1, remediationAttempt: 0 }),
+      run({ runId: 9912, workflowRunId: 501, implementationAttempt: 1, remediationAttempt: 0, phase: 'audit', auditAttempt: 1 }),
+      run({ runId: 9913, workflowRunId: 502, implementationAttempt: 1, remediationAttempt: 0, phase: 'audit', auditAttempt: 1 }),
+      run({ runId: 9914, workflowRunId: 502, implementationAttempt: 1, remediationAttempt: 0, phase: 'audit', auditAttempt: 2 })
+    ]
+  }));
+  const entries = deriveLedgerEntries([record]);
+
+  const totals = aggregateLedgerEntries(entries);
+  assert.equal(totals.auditRuns, 3);
+  // Three audit provider runs, two distinct audit attempts.
+  assert.equal(totals.auditAttempts, 2);
+  assert.equal(totals.attempts.audit.accounting, 'complete');
+
+  const byWorkflowRun = groupLedgerEntries(entries, ['workflow-run']);
+  // Workflow run 501 contains audit attempt 1 only; 502 contains attempts 1 and 2.
+  assert.equal(byWorkflowRun['501'].auditAttempts, 1);
+  assert.equal(byWorkflowRun['502'].auditAttempts, 2);
+  assert.notEqual(byWorkflowRun['501'].auditAttempts, totals.auditAttempts);
+
+  const byPhase = groupLedgerEntries(entries, ['phase']);
+  // A scope with identified audit attempts and no audit evidence proves zero, and says so.
+  assert.equal(byPhase.implementation.auditAttempts, 0);
+  assert.equal(byPhase.implementation.attempts.audit.accounting, 'complete');
+});
+
+test('F-214-04: two provider runs of one implementation attempt stay one attempt in every grouping', () => {
+  const record = createDeliveryMetrics(baseInput({
+    providerCalls: 2,
+    attempts: { implementation: 1, audit: 0 },
+    providerRunLedger: [
+      run({ runId: 9921, workflowRunId: 601, implementationAttempt: 1, remediationAttempt: 0 }),
+      run({ runId: 9922, workflowRunId: 601, implementationAttempt: 1, remediationAttempt: 0 })
+    ]
+  }));
+  const entries = deriveLedgerEntries([record]);
+  const totals = aggregateLedgerEntries(entries);
+  assert.equal(totals.providerRuns, 2);
+  assert.equal(totals.implementationAttempts, 1);
+  assert.notEqual(totals.implementationAttempts, totals.providerRuns);
+
+  const byImplementationAttempt = groupLedgerEntries(entries, ['implementation-attempt']);
+  assert.deepEqual(Object.keys(byImplementationAttempt), ['1']);
+  assert.equal(byImplementationAttempt['1'].providerRuns, 2);
+  assert.equal(byImplementationAttempt['1'].implementationAttempts, 1);
+});
+
+test('F-214-04: two remediation attempts with several runs each keep runs > attempts', () => {
+  const record = createDeliveryMetrics(baseInput({
+    providerCalls: 4,
+    attempts: { implementation: 1, audit: 0 },
+    providerRunLedger: [
+      run({ runId: 9931, implementationAttempt: 1, remediationAttempt: 1, phase: 'remediation' }),
+      run({ runId: 9932, implementationAttempt: 1, remediationAttempt: 1, phase: 'remediation' }),
+      run({ runId: 9933, implementationAttempt: 1, remediationAttempt: 2, phase: 'remediation' }),
+      run({ runId: 9934, implementationAttempt: 1, remediationAttempt: 2, phase: 'remediation' })
+    ]
+  }));
+  const entries = deriveLedgerEntries([record]);
+  const totals = aggregateLedgerEntries(entries);
+  assert.equal(totals.remediationRuns, 4);
+  assert.equal(totals.remediationAttempts, 2);
+  assert.ok(totals.remediationRuns > totals.remediationAttempts);
+
+  const byRemediationAttempt = groupLedgerEntries(entries, ['remediation-attempt']);
+  assert.deepEqual(Object.keys(byRemediationAttempt), ['1', '2']);
+  assert.equal(byRemediationAttempt['1'].remediationRuns, 2);
+  assert.equal(byRemediationAttempt['1'].remediationAttempts, 1);
+  assert.equal(byRemediationAttempt['2'].remediationAttempts, 1);
+});
+
+test('F-214-04: a partially covered legacy audit scope stays unknown instead of inheriting or zeroing', () => {
+  const legacy = createDeliveryMetrics(baseInput({
+    attempts: { implementation: 1, audit: 2 },
+    aiUsage: { turns: 4 },
+    aiUsageByStage: { implementation: { turns: 3 }, audit: { turns: 1 } }
+  }));
+  const entries = deriveLedgerEntries([legacy]);
+  const byPhase = groupLedgerEntries(entries, ['phase']);
+
+  assert.equal(byPhase.implementation.auditAttempts, null);
+  assert.equal(byPhase.implementation.attempts.audit.accounting, 'unknown');
+  assert.equal(byPhase.audit.auditAttempts, 2);
+  assert.equal(aggregateLedgerEntries(entries).auditAttempts, 2);
+  // Implementation/remediation attempts of legacy evidence stay unknown, never zero.
+  assert.equal(byPhase.implementation.implementationAttempts, null);
+  assert.equal(byPhase.implementation.remediationAttempts, null);
+});

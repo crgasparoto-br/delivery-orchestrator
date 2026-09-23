@@ -184,3 +184,123 @@ test('writeFile smoke: export script writes csv/html/json files to disk', async 
     assert.match(csv, /group,currency/);
   });
 });
+
+// --- F-214-05: warnings.remediationCount counts remediation ATTEMPTS, not provider runs -------
+
+function remediationRun(runId, remediationAttempt) {
+  return {
+    runId,
+    phase: 'remediation',
+    provider: 'codex',
+    model: 'gpt-5-codex',
+    implementationAttempt: 1,
+    remediationAttempt,
+    usage: { turns: 1 },
+    reportedCost: null,
+    estimatedCost: null,
+    observedAtIso: '2026-09-10T00:00:00.000Z',
+    endedAtIso: '2026-09-10T00:00:00.000Z'
+  };
+}
+
+async function reportWithRuns(dir, providerRunLedger, overrides = {}) {
+  const metricsFile = path.join(dir, `metrics-${Math.random().toString(36).slice(2)}.json`);
+  await upsertDeliveryMetrics(metricsFile, metricsRecord({
+    providerCalls: providerRunLedger.length,
+    providerRunLedger,
+    ...overrides
+  }));
+  return buildAiUsageReport({ metricsFile, groupBy: ['phase'] });
+}
+
+test('F-214-05: 4 remediation provider runs of only 2 attempts do not exceed a threshold of 3', async () => {
+  await withTempDir(async (dir) => {
+    const report = await reportWithRuns(dir, [
+      remediationRun(9601, 1), remediationRun(9602, 1),
+      remediationRun(9603, 2), remediationRun(9604, 2)
+    ]);
+    assert.equal(report.totals.remediationRuns, 4);
+    assert.equal(report.totals.remediationAttempts, 2);
+
+    const result = evaluateAiBudgetWarnings(report, { warnings: { remediationCount: 3 } });
+    assert.equal(result.blocking, false);
+    // Counting provider runs would have produced a warning here; counting attempts must not.
+    assert.equal(result.warnings.some((w) => w.type === 'remediation-count-warning'), false);
+    // The accounting is complete, so there is nothing inconclusive to report either.
+    assert.equal(result.warnings.some((w) => w.type === 'remediation-count-inconclusive'), false);
+  });
+});
+
+test('F-214-05: real remediation attempts above the threshold do warn, for the total and the group', async () => {
+  await withTempDir(async (dir) => {
+    const report = await reportWithRuns(dir, [
+      remediationRun(9611, 1), remediationRun(9612, 2),
+      remediationRun(9613, 3), remediationRun(9614, 4)
+    ]);
+    assert.equal(report.totals.remediationAttempts, 4);
+
+    const result = evaluateAiBudgetWarnings(report, { warnings: { remediationCount: 3 } });
+    assert.equal(result.blocking, false);
+    const warned = result.warnings.filter((w) => w.type === 'remediation-count-warning');
+    assert.equal(warned.length, 2);
+    const total = warned.find((w) => w.scope === 'total');
+    assert.equal(total.remediationAttempts, 4);
+    assert.equal(total.limit, 3);
+    const group = warned.find((w) => w.scope === 'group');
+    assert.equal(group.group, 'remediation');
+    assert.equal(group.remediationAttempts, 4);
+  });
+});
+
+test('F-214-05: unknown remediation attempts are never read as zero, and never silently pass', async () => {
+  await withTempDir(async (dir) => {
+    const metricsFile = path.join(dir, 'legacy-metrics.json');
+    await upsertDeliveryMetrics(metricsFile, metricsRecord({
+      providerRunLedger: [],
+      aiUsage: { turns: 2 },
+      aiUsageByStage: { implementation: { turns: 2 } }
+    }));
+    const report = await buildAiUsageReport({ metricsFile, groupBy: ['phase'] });
+    assert.equal(report.totals.remediationAttempts, null);
+    assert.equal(report.totals.attempts.remediation.accounting, 'unknown');
+
+    const result = evaluateAiBudgetWarnings(report, { warnings: { remediationCount: 3 } });
+    assert.equal(result.blocking, false);
+    // No fabricated "below threshold" conclusion: the incompleteness is reported explicitly.
+    assert.equal(result.warnings.some((w) => w.type === 'remediation-count-warning'), false);
+    const inconclusive = result.warnings.filter((w) => w.type === 'remediation-count-inconclusive');
+    assert.ok(inconclusive.length >= 1);
+    const total = inconclusive.find((w) => w.scope === 'total');
+    assert.equal(total.remediationAttempts, null);
+    assert.notEqual(total.remediationAttempts, 0);
+    assert.equal(total.accounting, 'unknown');
+    assert.ok(inconclusive.some((w) => w.scope === 'group'));
+  });
+});
+
+test('F-214-05: partial remediation accounting below the threshold stays inconclusive, never a pass', async () => {
+  await withTempDir(async (dir) => {
+    const metricsFile = path.join(dir, 'mixed-metrics.json');
+    await upsertDeliveryMetrics(metricsFile, metricsRecord({
+      providerCalls: 1,
+      providerRunLedger: [remediationRun(9621, 1)]
+    }));
+    await upsertDeliveryMetrics(metricsFile, metricsRecord({
+      materialHeadSha: SHA_B,
+      providerRunLedger: [],
+      aiUsage: { turns: 1 },
+      aiUsageByStage: { remediation: { turns: 1 } }
+    }));
+    const report = await buildAiUsageReport({ metricsFile, groupBy: ['phase'] });
+    assert.equal(report.totals.remediationAttempts, 1);
+    assert.equal(report.totals.attempts.remediation.accounting, 'partial');
+
+    const result = evaluateAiBudgetWarnings(report, { warnings: { remediationCount: 3 } });
+    assert.equal(result.blocking, false);
+    assert.equal(result.warnings.some((w) => w.type === 'remediation-count-warning'), false);
+    const total = result.warnings.find((w) => w.type === 'remediation-count-inconclusive' && w.scope === 'total');
+    assert.equal(total.accounting, 'partial');
+    assert.equal(total.remediationAttempts, 1);
+    assert.ok(total.unknownEntries >= 1);
+  });
+});

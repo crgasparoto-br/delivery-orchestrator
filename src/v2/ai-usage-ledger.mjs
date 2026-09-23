@@ -45,6 +45,11 @@ export function toInstantMs(value, label) {
  */
 export const LEDGER_ENTRY_KINDS = Object.freeze(['run', 'zero-calls', 'legacy-aggregate']);
 
+/** True when a ledger entry is evidence of audit work, i.e. it belongs to the `audit` phase. */
+export function isAuditEvidenceEntry(entry) {
+  return entry.phase === 'audit';
+}
+
 export function deriveLedgerEntries(records) {
   if (!Array.isArray(records)) throw new Error('records must be an array');
   const entries = [];
@@ -56,11 +61,17 @@ export function deriveLedgerEntries(records) {
       pullRequestNumber: record.pullRequestNumber,
       risk: record.risk,
       escalated: record.escalated,
-      auditAttempts: record.attempts.audit,
-      implementationAttempts: record.attempts.implementation,
+      // Delivery-level counters. They describe the DELIVERY, never the subset of entries a
+      // grouped report happens to contain, so aggregation may only use them when the scope
+      // provably covers that delivery's whole evidence for the counter (see
+      // `aggregateLedgerEntries`). They are deliberately named `delivery*` so a group-scoped
+      // total can never be read off an entry by accident.
+      deliveryAuditAttempts: record.attempts.audit,
+      deliveryImplementationAttempts: record.attempts.implementation,
       deliveryObservedAtIso: record.observedAtIso
     };
     const runAccounting = record.providerRunAccounting ?? 'legacy';
+    const recordStart = entries.length;
 
     if (record.providerRunLedger.length > 0) {
       for (const run of record.providerRunLedger) {
@@ -77,6 +88,7 @@ export function deriveLedgerEntries(records) {
           role: run.role,
           implementationAttempt: run.implementationAttempt,
           remediationAttempt: run.remediationAttempt,
+          auditAttempt: run.auditAttempt ?? null,
           usage: run.usage,
           usageAccounting: run.usageAccounting,
           cache: run.cache,
@@ -96,6 +108,7 @@ export function deriveLedgerEntries(records) {
           runGranularity: 'run'
         });
       }
+      stampAuditEvidenceCensus(entries, recordStart);
       continue;
     }
 
@@ -115,6 +128,7 @@ export function deriveLedgerEntries(records) {
         role: null,
         implementationAttempt: null,
         remediationAttempt: null,
+        auditAttempt: null,
         usage: null,
         usageAccounting: 'zero-calls',
         cache: null,
@@ -131,6 +145,7 @@ export function deriveLedgerEntries(records) {
         evidenceRef: null,
         runGranularity: 'delivery'
       });
+      stampAuditEvidenceCensus(entries, recordStart);
       continue;
     }
 
@@ -145,6 +160,7 @@ export function deriveLedgerEntries(records) {
       role: null,
       implementationAttempt: null,
       remediationAttempt: null,
+      auditAttempt: null,
       cache: null,
       pricingSnapshot: null,
       startedAtIso: null,
@@ -200,8 +216,31 @@ export function deriveLedgerEntries(records) {
         accounting: 'unknown'
       });
     }
+    stampAuditEvidenceCensus(entries, recordStart);
   }
   return entries;
+}
+
+/**
+ * Stamps on every entry of one delivery how many of that delivery's entries are audit evidence,
+ * and whether every one of them carries a run-granular audit attempt identity.
+ *
+ * This is what lets a grouped report tell "this group holds all of the delivery's audit work"
+ * apart from "this group holds only part of it (or none)". Only in the first case may the
+ * delivery-level `attempts.audit` be attributed to the group; otherwise the group reports
+ * `unknown`/`partial` instead of inheriting a delivery total it does not cover.
+ */
+function stampAuditEvidenceCensus(entries, recordStart) {
+  const own = entries.slice(recordStart);
+  const auditEvidence = own.filter(isAuditEvidenceEntry);
+  const census = Object.freeze({
+    deliveryAuditEvidenceEntries: auditEvidence.length,
+    deliveryAuditAttemptIdentified: auditEvidence.length > 0
+      && auditEvidence.every((entry) => entry.auditAttempt != null)
+  });
+  for (let index = recordStart; index < entries.length; index += 1) {
+    entries[index] = { ...entries[index], ...census };
+  }
 }
 
 /**
@@ -301,10 +340,26 @@ function summarizeUsage(entries) {
  *
  * Attempts (`attempts.implementation`/`audit`/`remediation`) are derived from DISTINCT identities,
  * never by summing per-run attempt numbers: several provider runs of the same delivery can belong
- * to the same implementation attempt. Implementation/remediation attempts use the attempt fields
- * persisted in the ledger keyed by `deliveryId`; audit attempts use the canonical delivery-level
- * `attempts.audit` of the record. An entry that cannot carry attempt identity is counted as
- * unknown, so incomplete history stays `partial`/`unknown` instead of being reported as 0.
+ * to the same implementation attempt.
+ *
+ * Every attempt counter is scoped to the entries actually aggregated here, because this function
+ * is also what `groupLedgerEntries` runs over each group. Implementation and remediation attempts
+ * come from the run-granular attempt identity the ledger persists, and only from the runs of the
+ * corresponding phase, so a group of audit runs never reports the implementation attempts those
+ * runs merely happened under.
+ *
+ * Audit attempts are the delicate case, because the canonical `attempts.audit` is DELIVERY-level.
+ * It may only be attributed to this scope when the scope provably covers that delivery's whole
+ * audit evidence (`deliveryAuditEvidenceEntries`). Otherwise the scope reports `unknown`/
+ * `partial` instead of inheriting a delivery total it does not cover — a group holding only
+ * implementation runs must never show the delivery's audit attempts. When the runs themselves
+ * carry a run-granular `auditAttempt` identity, any scope is counted exactly from distinct
+ * identities and no delivery-level fallback is needed.
+ *
+ * An entry that cannot carry attempt identity is counted as unknown, so incomplete history stays
+ * `partial`/`unknown` instead of being reported as 0. Provider runs are never used as a
+ * substitute for an attempt count: `providerRuns`, `providerCalls`, `entriesCount` and the three
+ * attempt counters are distinct quantities and all of them are reported.
  */
 export function aggregateLedgerEntries(entries) {
   const byCurrency = new Map();
@@ -320,17 +375,37 @@ export function aggregateLedgerEntries(entries) {
   // Distinct attempt identities, so N provider runs of one attempt stay ONE attempt.
   const implementationAttemptIds = new Set();
   const remediationAttemptIds = new Set();
-  const auditAttemptsByDelivery = new Map();
+  // Per-delivery audit bookkeeping, used to decide whether this scope covers a delivery's whole
+  // audit evidence before attributing its delivery-level `attempts.audit` to the scope.
+  const auditScopeByDelivery = new Map();
   let unknownImplementationAttemptEntries = 0;
   let unknownRemediationAttemptEntries = 0;
   let unknownAuditAttemptEntries = 0;
 
+  const auditScopeOf = (entry) => {
+    let scope = auditScopeByDelivery.get(entry.deliveryId);
+    if (!scope) {
+      scope = {
+        canonical: entry.deliveryAuditAttempts ?? null,
+        evidenceTotal: entry.deliveryAuditEvidenceEntries ?? null,
+        runIdentified: entry.deliveryAuditAttemptIdentified === true,
+        evidenceInScope: 0,
+        entriesInScope: 0,
+        attemptIds: new Set()
+      };
+      auditScopeByDelivery.set(entry.deliveryId, scope);
+    }
+    return scope;
+  };
+
   for (const entry of entries) {
     deliveries.add(entry.deliveryId);
-    // `attempts.audit` is the canonical delivery-level count the controller persisted; it is read
-    // once per delivery, never summed per entry.
-    if (entry.auditAttempts == null) unknownAuditAttemptEntries += 1;
-    else auditAttemptsByDelivery.set(entry.deliveryId, entry.auditAttempts);
+    const auditScope = auditScopeOf(entry);
+    auditScope.entriesInScope += 1;
+    if (isAuditEvidenceEntry(entry)) {
+      auditScope.evidenceInScope += 1;
+      if (entry.auditAttempt != null) auditScope.attemptIds.add(`${entry.deliveryId}#${entry.auditAttempt}`);
+    }
     if (entry.kind === 'zero-calls') {
       zeroProviderCallEntries += 1;
       // A proven zero-call delivery carries no run-level attempt identity; it is unknown here
@@ -347,6 +422,9 @@ export function aggregateLedgerEntries(entries) {
       if (entry.usageAccounting === 'unknown') unknownUsageEntries += 1;
       else if (entry.usageAccounting === 'partial') partialUsageEntries += 1;
     }
+    // Implementation and remediation attempts are already scope-safe: the identity lives on the
+    // entry itself (`deliveryId#attempt`), so a group only ever counts the attempts its own
+    // entries belong to, and several runs of one attempt collapse into that one attempt.
     if (entry.implementationAttempt == null) unknownImplementationAttemptEntries += 1;
     else implementationAttemptIds.add(`${entry.deliveryId}#${entry.implementationAttempt}`);
     if (entry.remediationAttempt == null) unknownRemediationAttemptEntries += 1;
@@ -402,14 +480,38 @@ export function aggregateLedgerEntries(entries) {
     accounting: !hasKnown ? 'unknown' : (unknownEntries > 0 ? 'partial' : 'complete')
   });
 
-  const auditAttemptsTotal = [...auditAttemptsByDelivery.values()].reduce((sum, value) => sum + value, 0);
+  // Audit attempts, resolved per delivery against what THIS scope actually contains.
+  let auditAttemptsTotal = 0;
+  let resolvedAuditDeliveries = 0;
+  for (const scope of auditScopeByDelivery.values()) {
+    if (scope.runIdentified) {
+      // Every audit run of the delivery carries its own attempt identity, so any scope — a whole
+      // delivery, one phase, one workflow run — is counted exactly, including a proven zero for a
+      // scope that holds none of them.
+      auditAttemptsTotal += scope.attemptIds.size;
+      resolvedAuditDeliveries += 1;
+      continue;
+    }
+    if (scope.canonical != null && scope.evidenceTotal != null && scope.evidenceInScope === scope.evidenceTotal) {
+      // No run-granular identity, but this scope holds ALL of the delivery's audit evidence (a
+      // delivery with no audit evidence at all included), so the canonical delivery-level count
+      // is exactly this scope's count.
+      auditAttemptsTotal += scope.canonical;
+      resolvedAuditDeliveries += 1;
+      continue;
+    }
+    // Partial coverage without run-granular identity: the delivery-level total is NOT this
+    // scope's total and must not be inherited. Its entries stay unknown.
+    unknownAuditAttemptEntries += scope.entriesInScope;
+  }
+
   const attempts = Object.freeze({
     implementation: attemptSummary(
       implementationAttemptIds.size,
       unknownImplementationAttemptEntries,
       implementationAttemptIds.size > 0
     ),
-    audit: attemptSummary(auditAttemptsTotal, unknownAuditAttemptEntries, auditAttemptsByDelivery.size > 0),
+    audit: attemptSummary(auditAttemptsTotal, unknownAuditAttemptEntries, resolvedAuditDeliveries > 0),
     remediation: attemptSummary(
       remediationAttemptIds.size,
       unknownRemediationAttemptEntries,

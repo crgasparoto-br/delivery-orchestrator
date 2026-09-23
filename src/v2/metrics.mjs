@@ -10,7 +10,7 @@ const USAGE_KEYS = new Set(['turns', 'credits', 'inputTokens', 'outputTokens', '
 const HYGIENE_RESULTS = new Set(['PASS', 'PASS_WITH_DEBT', 'BLOCK', 'UNKNOWN']);
 const RUN_LEDGER_KEYS = new Set([
   'runId', 'workflowRunId', 'phase', 'provider', 'model', 'worker', 'role',
-  'materialHeadSha', 'implementationAttempt', 'remediationAttempt',
+  'materialHeadSha', 'implementationAttempt', 'remediationAttempt', 'auditAttempt',
   'usage', 'cache', 'reportedCost', 'estimatedCost', 'pricingSnapshot',
   'startedAtIso', 'endedAtIso', 'observedAtIso', 'terminalState', 'evidenceRef'
 ]);
@@ -216,6 +216,10 @@ function normalizeProviderRunLedgerEntry(value, label) {
     role: entry.role == null ? null : requireString(entry.role, `${label}.role`).toLowerCase(),
     implementationAttempt: requireInteger(entry.implementationAttempt, `${label}.implementationAttempt`, { nullable: true }),
     remediationAttempt: requireInteger(entry.remediationAttempt, `${label}.remediationAttempt`, { nullable: true }),
+    // Run-granular audit attempt identity. Optional: history recorded before this field existed
+    // leaves it null, and reporting then falls back to the delivery-level `attempts.audit`
+    // ONLY when the reporting scope covers that delivery's whole audit evidence.
+    auditAttempt: requireInteger(entry.auditAttempt, `${label}.auditAttempt`, { nullable: true }),
     usage,
     usageAccounting: usageAccountingFor(usage),
     cache: normalizeRunCache(entry.cache, `${label}.cache`),

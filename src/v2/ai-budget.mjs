@@ -29,6 +29,12 @@ export function normalizeAiBudgetConfig(raw) {
   });
 }
 
+/** The scopes a remediation threshold is evaluated over: the whole window, then each grouping. */
+function* remediationScopes(report) {
+  yield ['total', null, report.totals];
+  for (const [groupKey, group] of Object.entries(report.groups)) yield ['group', groupKey, group];
+}
+
 /**
  * Evaluates non-blocking budget warnings against an AI usage report.
  * `report.totals.costByCurrency`/`report.groups[*].costByCurrency` are the only cost inputs;
@@ -69,27 +75,44 @@ export function evaluateAiBudgetWarnings(report, budgetConfigRaw) {
     }
   }
 
-  // Remediation-volume warning. The report knows how many remediation provider runs fall in the
-  // window, both overall and per grouping, so the threshold is evaluated at both levels. This is
-  // informative only: an exceeded remediation threshold never blocks a delivery.
+  // Remediation-volume warning. The threshold counts remediation ATTEMPTS, never provider runs:
+  // one remediation attempt can execute several provider runs, so `remediationRuns` would
+  // overstate it. The canonical metric is `attempts.remediation` (mirrored by
+  // `remediationAttempts`), evaluated for the window overall and for each grouping.
+  //
+  // When attempts cannot be identified the threshold is NOT silently treated as met or unmet: an
+  // unknown count never becomes zero. An explicit, still non-blocking informative warning records
+  // that the threshold could not be evaluated conclusively. This is informative only: neither
+  // warning ever blocks a delivery.
   if (config.warnings.remediationCount != null) {
     const limit = config.warnings.remediationCount;
-    if (report.totals.remediationRuns > limit) {
-      warnings.push(Object.freeze({
-        type: 'remediation-count-warning',
-        scope: 'total',
-        group: null,
-        remediationRuns: report.totals.remediationRuns,
-        limit
-      }));
-    }
-    for (const [groupKey, group] of Object.entries(report.groups)) {
-      if (group.remediationRuns > limit) {
+    for (const [scope, groupKey, scopeTotals] of remediationScopes(report)) {
+      const attempts = scopeTotals.attempts?.remediation ?? null;
+      const observed = attempts ? attempts.total : null;
+      const accounting = attempts ? attempts.accounting : 'unknown';
+      if (observed != null && observed > limit) {
         warnings.push(Object.freeze({
           type: 'remediation-count-warning',
-          scope: 'group',
+          scope,
           group: groupKey,
-          remediationRuns: group.remediationRuns,
+          remediationAttempts: observed,
+          remediationRuns: scopeTotals.remediationRuns,
+          accounting,
+          limit
+        }));
+        continue;
+      }
+      // Unknown, or known-but-below-threshold while some entries carry no attempt identity: the
+      // accounting is incomplete, so "not exceeded" is not a conclusion we are entitled to.
+      if (observed == null || accounting !== 'complete') {
+        warnings.push(Object.freeze({
+          type: 'remediation-count-inconclusive',
+          scope,
+          group: groupKey,
+          remediationAttempts: observed,
+          remediationRuns: scopeTotals.remediationRuns,
+          accounting,
+          unknownEntries: attempts ? attempts.unknownEntries : null,
           limit
         }));
       }

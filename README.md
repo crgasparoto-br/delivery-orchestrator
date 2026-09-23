@@ -171,12 +171,22 @@ to have made no provider call is one ledger entry with `providerCalls: 0`, never
 pre-ledger legacy row carries no call identity, so it contributes to `unknownProviderCallEntries`
 and leaves `providerCalls` unknown instead of fabricating calls.
 
-**Attempts.** `implementationAttempts` and `remediationAttempts` count DISTINCT attempt identities
-per delivery, from the attempt fields the ledger already persists — never the sum of the per-run
-attempt numbers, so two provider runs of the same implementation attempt are 2 runs and 1 attempt.
-`auditAttempts` is the canonical delivery-level `attempts.audit`, read once per delivery rather
-than once per run. When history cannot determine an attempt identity, the metric stays
-`unknown`/`partial` instead of being reported as zero.
+**Attempts.** `providerRuns`, `providerCalls`, `entriesCount`, `implementationAttempts`,
+`auditAttempts` and `remediationAttempts` are six distinct quantities and all of them are
+exported; a provider-run count is never used as a substitute for an attempt count.
+`implementationAttempts` and `remediationAttempts` count DISTINCT attempt identities per delivery,
+from the attempt fields the ledger already persists — never the sum of the per-run attempt
+numbers, so two provider runs of the same implementation attempt are 2 runs and 1 attempt.
+
+Every attempt counter is scoped to the rows actually aggregated, including inside a grouping.
+Implementation and remediation attempt identities live on the ledger row itself, so a group only
+counts the attempts its own rows belong to. Audit attempts are the delicate case: `attempts.audit`
+is a DELIVERY-level counter, so it is attributed to a grouping only when that grouping provably
+covers the delivery's whole audit evidence. A group holding only implementation runs therefore
+never shows the delivery's audit attempts: it reports `unknown`. When the provider runs carry the
+run-granular `auditAttempt` identity, every scope — one phase, one workflow run — is counted
+exactly from distinct identities. When history cannot determine an attempt identity, the metric
+stays `unknown`/`partial` instead of being reported as zero.
 
 **Workflow and exports.** The manual **Delivery V2 - AI Usage Report** workflow
 (`workflow_dispatch`, inputs `period`/`from`/`to`/`timezone`/`repository`/`group_by`) runs the
@@ -196,9 +206,15 @@ run; otherwise it says `partial`.
 
 **Budget.** `config/delivery-v2-ai-budget.json` (`src/v2/ai-budget.mjs`) declares an optional
 `monthly.amount`/`monthly.currency` and `warnings.issueCost`/`warnings.remediationCount`.
-`warnings.remediationCount` is evaluated against the remediation provider runs in the window,
-overall and per grouping. Budget evaluation only ever adds non-blocking, informative warnings; it
-never gates, blocks or delays a delivery. Billing, automatic payment, API key rotation, mandatory
+`warnings.remediationCount` is a threshold on remediation ATTEMPTS — the canonical
+`attempts.remediation`/`remediationAttempts` — evaluated for the window overall and per grouping.
+It is deliberately not a count of remediation provider runs: one remediation attempt can execute
+several provider runs, so runs would overstate it. When the remediation attempts of a scope are
+unknown or only partially accounted, the threshold is not silently declared unmet and the unknown
+count is never read as zero; the evaluation emits an informative
+`remediation-count-inconclusive` warning recording that the threshold could not be evaluated
+conclusively for lack of attempt identity. Budget evaluation only ever adds non-blocking,
+informative warnings; it never gates, blocks or delays a delivery. Billing, automatic payment, API key rotation, mandatory
 public publication, automatic currency conversion and hard limits are explicitly out of scope.
 
 ## Release and merge enforcement
