@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "pricingVersion": "2026-09-01",
+  "notes": "Versioned, in-repository AI pricing catalog for Delivery V2 estimatedCost. Never fetched at runtime. Changing pricingVersion/rates only affects provider runs observed AFTER the change: historical runs keep the pricingSnapshot persisted with them. Unknown provider/model keys deliberately yield unknown cost instead of a fabricated zero.",
+  "models": {
+    "copilot/claude-sonnet-4.5": { "currency": "USD", "inputPerMillionTokens": 3, "outputPerMillionTokens": 15 },
+    "copilot/claude-opus-4.1": { "currency": "USD", "inputPerMillionTokens": 15, "outputPerMillionTokens": 75 },
+    "copilot/gpt-5": { "currency": "USD", "inputPerMillionTokens": 1.25, "outputPerMillionTokens": 10 },
+    "codex/gpt-5": { "currency": "USD", "inputPerMillionTokens": 1.25, "outputPerMillionTokens": 10 },
+    "codex/gpt-5-codex": { "currency": "USD", "inputPerMillionTokens": 1.25, "outputPerMillionTokens": 10 },
+    "claude/claude-sonnet-4.5": { "currency": "USD", "inputPerMillionTokens": 3, "outputPerMillionTokens": 15 },
+    "claude/claude-opus-4.1": { "currency": "USD", "inputPerMillionTokens": 15, "outputPerMillionTokens": 75 },
+    "claude/claude-haiku-4.5": { "currency": "USD", "inputPerMillionTokens": 1, "outputPerMillionTokens": 5 }
+  }
+}

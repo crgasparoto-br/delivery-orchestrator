@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "monthly": { "amount": 200, "currency": "USD" },
+  "warnings": {
+    "issueCost": 20,
+    "remediationCount": 5
+  }
+}

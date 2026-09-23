@@ -17,6 +17,9 @@ import {
   persistentStateFromOperational
 } from '../src/v2/operational-controller.mjs';
 import { normalizeGhAwUsage, parseGhAwUsageJsonl } from '../src/v2/usage-telemetry.mjs';
+import { loadAiPricingCatalog, DEFAULT_AI_PRICING_FILE } from '../src/v2/ai-pricing.mjs';
+import { persistOperationalDeliveryMetrics } from '../src/v2/metrics-store.mjs';
+import { summarizeDeliveryAiUsage, renderDeliveryAiUsageSummary } from '../src/v2/ai-usage-summary.mjs';
 import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
 import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
@@ -268,7 +271,7 @@ async function downloadWorkerUsage(orchestratorRepository, runId, token) {
   try {
     const payload = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${runId}/artifacts?per_page=100`, token);
     const artifact = (payload.artifacts ?? []).find((item) => item.name === 'usage');
-    if (!artifact) return { usage: normalizeGhAwUsage({}), evidenceRef: null };
+    if (!artifact) return { usage: normalizeGhAwUsage({}), rawUsagePayload: null, evidenceRef: null };
     const response = await fetch(`https://api.github.com/repos/${orchestratorRepository}/actions/artifacts/${artifact.id}/zip`, { headers: headers(token) });
     if (!response.ok) throw new Error(`usage artifact download failed: ${response.status}`);
     const root = await mkdtemp(path.join(tmpdir(), 'dv2-usage-'));
@@ -288,15 +291,25 @@ async function downloadWorkerUsage(orchestratorRepository, runId, token) {
           else if (entry.name === 'agent_usage.jsonl') jsonl = full;
         }
       }
+      // The raw payload is preserved alongside the normalized counters so the observability
+      // accumulator can extract model / reported cost / run timestamps / cache counters from the
+      // same evidence, instead of discarding them here.
       let usage = normalizeGhAwUsage({});
-      if (json) usage = normalizeGhAwUsage(JSON.parse(await readFile(json, 'utf8')));
-      else if (jsonl) usage = parseGhAwUsageJsonl(await readFile(jsonl, 'utf8'));
-      return { usage, evidenceRef: artifact.archive_download_url, artifactId: artifact.id };
+      let rawUsagePayload = null;
+      if (json) {
+        rawUsagePayload = JSON.parse(await readFile(json, 'utf8'));
+        usage = normalizeGhAwUsage(rawUsagePayload);
+      } else if (jsonl) {
+        const text = await readFile(jsonl, 'utf8');
+        rawUsagePayload = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
+        usage = parseGhAwUsageJsonl(text);
+      }
+      return { usage, rawUsagePayload, evidenceRef: artifact.archive_download_url, artifactId: artifact.id };
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   } catch (error) {
-    return { usage: normalizeGhAwUsage({}), evidenceRef: null, error: error.message };
+    return { usage: normalizeGhAwUsage({}), rawUsagePayload: null, evidenceRef: null, error: error.message };
   }
 }
 
@@ -374,6 +387,9 @@ export async function main() {
     return resumeMain();
   }
   const startedAt = Date.now();
+  // Pricing is read once, from the version committed to this repository. There is never a
+  // network pricing lookup during a delivery.
+  const pricingCatalog = await loadAiPricingCatalog(path.resolve(process.cwd(), DEFAULT_AI_PRICING_FILE));
   const targetRepository = requiredEnv('TARGET_REPOSITORY');
   const issueNumber = positiveInteger(requiredEnv('TARGET_ISSUE'), 'TARGET_ISSUE');
   const baseBranch = requiredEnv('BASE_BRANCH');
@@ -424,7 +440,19 @@ export async function main() {
   let observability = recordControllerProviderObservation(createControllerObservability({ startedAtMs: startedAt }), {
     runId: worker.id,
     stage: 'implementation',
+    phase: 'implementation',
+    provider,
+    role: 'implementation-worker',
+    worker: initialWorkerIdentity,
+    workflowRunId: worker.id,
+    implementationAttempt: initialAttempts,
+    remediationAttempt: 0,
+    startedAtIso: worker.run_started_at ?? null,
+    endedAtIso: worker.updated_at ?? null,
+    terminalState: worker.conclusion ?? null,
     usage: workerUsage.usage,
+    rawUsagePayload: workerUsage.rawUsagePayload,
+    pricingCatalog,
     evidenceRef: workerUsage.evidenceRef ?? worker.html_url
   });
   if (workerUsage.evidenceRef) evidenceRefs.push(workerUsage.evidenceRef);
@@ -442,6 +470,25 @@ export async function main() {
   let latestSourceRun = null;
   let lastAudit = null;
   let controller = { controllerRunId, controllerRepository: orchestratorRepository, controllerRef: orchestratorRef, controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml', observability };
+  // Single place where an observed provider run is attributed, so every phase (implementation,
+  // remediation, technical hygiene, audit) records the same canonical identity/evidence shape.
+  // Nothing here is fabricated: a field the run does not carry stays null.
+  const attribution = ({ run, phase, role, worker: workerName = null }) => ({
+    workflowRunId: run.id,
+    materialHeadSha: /^[0-9a-f]{40}$/i.test(String(materialHeadSha ?? '')) ? materialHeadSha : null,
+    phase,
+    provider,
+    role,
+    worker: workerName,
+    implementationAttempt: state?.implementationAttempts ?? null,
+    remediationAttempt: state?.auditRemediationAttempts ?? null,
+    auditAttempt: phase === 'audit' ? (state?.auditAttempts ?? null) : null,
+    startedAtIso: run.run_started_at ?? null,
+    endedAtIso: run.updated_at ?? null,
+    terminalState: run.conclusion ?? null,
+    pricingCatalog
+  });
+
   const identity = () => ({
     issueNumber,
     pullRequestNumber: pullRequest.number,
@@ -473,7 +520,7 @@ export async function main() {
     initialTechnicalHygiene = initialPromotion.hygiene;
     workerRuns.push(initialPromotion.promotionRun);
     const promotionUsage = await downloadWorkerUsage(orchestratorRepository, initialPromotion.promotionRun.id, actionsToken);
-    observability = recordControllerProviderObservation(observability, { runId: initialPromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, evidenceRef: promotionUsage.evidenceRef ?? initialPromotion.promotionRun.html_url });
+    observability = recordControllerProviderObservation(observability, { runId: initialPromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, rawUsagePayload: promotionUsage.rawUsagePayload, ...attribution({ run: initialPromotion.promotionRun, phase: 'technical-hygiene', role: 'technical-hygiene-worker' }), evidenceRef: promotionUsage.evidenceRef ?? initialPromotion.promotionRun.html_url });
     if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);
     evidenceRefs.push(initialTechnicalHygiene.evidenceRef);
   }
@@ -558,6 +605,8 @@ export async function main() {
         runId: worker.id,
         stage: 'implementation',
         usage: usage.usage,
+        rawUsagePayload: usage.rawUsagePayload,
+        ...attribution({ run: worker, phase: 'remediation', role: 'remediation-worker' }),
         evidenceRef: usage.evidenceRef ?? worker.html_url
       });
       if (usage.evidenceRef) evidenceRefs.push(usage.evidenceRef);
@@ -592,7 +641,7 @@ export async function main() {
         remediationTechnicalHygiene = hygienePromotion.hygiene;
         workerRuns.push(hygienePromotion.promotionRun);
         const promotionUsage = await downloadWorkerUsage(orchestratorRepository, hygienePromotion.promotionRun.id, actionsToken);
-        observability = recordControllerProviderObservation(observability, { runId: hygienePromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, evidenceRef: promotionUsage.evidenceRef ?? hygienePromotion.promotionRun.html_url });
+        observability = recordControllerProviderObservation(observability, { runId: hygienePromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, rawUsagePayload: promotionUsage.rawUsagePayload, ...attribution({ run: hygienePromotion.promotionRun, phase: 'technical-hygiene', role: 'technical-hygiene-worker' }), evidenceRef: promotionUsage.evidenceRef ?? hygienePromotion.promotionRun.html_url });
         if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);
         evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);
       }
@@ -700,7 +749,11 @@ export async function main() {
       observability = recordControllerProviderObservation(observability, {
         runId: auditRun.id,
         stage: 'audit',
+        // A proven zero-provider-call audit stays a zero-call observation: it must not become a
+        // provider run whose cost is merely unknown.
         usage: lastAudit.providerCalls === 0 ? { providerCalls: 0 } : (lastAudit.modelUsage ?? {}),
+        rawUsagePayload: lastAudit.modelUsage ?? null,
+        ...attribution({ run: auditRun, phase: 'audit', role: 'independent-auditor' }),
         durationMs: runDurationMs(auditRun),
         evidenceRef: auditRun.html_url
       });
@@ -743,6 +796,8 @@ export async function main() {
           runId: worker.id,
           stage: 'implementation',
           usage: usage.usage,
+          rawUsagePayload: usage.rawUsagePayload,
+          ...attribution({ run: worker, phase: 'remediation', role: 'remediation-worker' }),
           evidenceRef: usage.evidenceRef ?? worker.html_url
         });
         if (usage.evidenceRef) evidenceRefs.push(usage.evidenceRef);
@@ -777,7 +832,7 @@ export async function main() {
           remediationTechnicalHygiene = hygienePromotion.hygiene;
           workerRuns.push(hygienePromotion.promotionRun);
           const promotionUsage = await downloadWorkerUsage(orchestratorRepository, hygienePromotion.promotionRun.id, actionsToken);
-          observability = recordControllerProviderObservation(observability, { runId: hygienePromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, evidenceRef: promotionUsage.evidenceRef ?? hygienePromotion.promotionRun.html_url });
+          observability = recordControllerProviderObservation(observability, { runId: hygienePromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, rawUsagePayload: promotionUsage.rawUsagePayload, ...attribution({ run: hygienePromotion.promotionRun, phase: 'technical-hygiene', role: 'technical-hygiene-worker' }), evidenceRef: promotionUsage.evidenceRef ?? hygienePromotion.promotionRun.html_url });
           if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);
           evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);
         }
@@ -858,6 +913,11 @@ export async function main() {
     evidenceRefs
   });
 
+  // The completed delivery is published to the single operational cross-delivery store, which is
+  // what `npm run ai:usage` and the manual AI Usage Report workflow read.
+  const metricsStore = await persistOperationalDeliveryMetrics(metrics);
+  const aiUsage = summarizeDeliveryAiUsage(metrics);
+
   const payload = {
     schemaVersion: 1,
     status: state.status,
@@ -868,7 +928,10 @@ export async function main() {
     risk: state.riskProfile,
     workerRuns: workerRuns.map((run) => ({ id: run.id, conclusion: run.conclusion, url: run.html_url })),
     auditRuns: auditRuns.map((run) => ({ id: run.id, conclusion: run.conclusion, url: run.html_url })),
-    metrics
+    metrics,
+    metricsStore,
+    aiUsage,
+    aiUsageSummary: renderDeliveryAiUsageSummary(aiUsage)
   };
   await writeFile(resultPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
   process.stdout.write(`${JSON.stringify(payload)}\n`);

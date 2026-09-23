@@ -8,6 +8,15 @@ const SHA_RE = /^[0-9a-f]{40}$/i;
 const COST_KEYS = new Set(['available', 'amount', 'currency']);
 const USAGE_KEYS = new Set(['turns', 'credits', 'inputTokens', 'outputTokens', 'totalTokens']);
 const HYGIENE_RESULTS = new Set(['PASS', 'PASS_WITH_DEBT', 'BLOCK', 'UNKNOWN']);
+const RUN_LEDGER_KEYS = new Set([
+  'runId', 'workflowRunId', 'phase', 'provider', 'model', 'worker', 'role',
+  'materialHeadSha', 'implementationAttempt', 'remediationAttempt', 'auditAttempt',
+  'usage', 'cache', 'reportedCost', 'estimatedCost', 'pricingSnapshot',
+  'startedAtIso', 'endedAtIso', 'observedAtIso', 'terminalState', 'evidenceRef'
+]);
+const CACHE_KEYS = new Set(['cacheReadInputTokens', 'cacheCreationInputTokens']);
+const PRICING_SNAPSHOT_KEYS = new Set(['version', 'key', 'currency', 'inputPerMillionTokens', 'outputPerMillionTokens', 'basis']);
+export const PROVIDER_RUN_ACCOUNTING = new Set(['complete', 'partial', 'legacy']);
 
 function requireObject(value, label) {
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be an object`);
@@ -50,22 +59,196 @@ function normalizeRepository(value) {
   return repository;
 }
 
-function normalizeProviderCost(value) {
-  if (value == null) return Object.freeze({ available: false, amount: null, currency: null });
-  const cost = requireObject(value, 'providerCost');
+function normalizeCostAmount(value, label) {
+  if (value == null) return null;
+  const cost = requireObject(value, label);
   for (const key of Object.keys(cost)) {
-    if (!COST_KEYS.has(key)) throw new Error(`providerCost contains unsupported field: ${key}`);
+    if (key !== 'amount' && key !== 'currency') throw new Error(`${label} contains unsupported field: ${key}`);
   }
-  if (cost.available === false) {
-    if (cost.amount != null || cost.currency != null) throw new Error('unavailable providerCost cannot contain amount or currency');
-    return Object.freeze({ available: false, amount: null, currency: null });
-  }
-  if (cost.available != null && cost.available !== true) throw new Error('providerCost.available must be boolean when present');
   return Object.freeze({
-    available: true,
-    amount: requireNumber(cost.amount, 'providerCost.amount'),
-    currency: requireString(cost.currency, 'providerCost.currency').toUpperCase()
+    amount: requireNumber(cost.amount, `${label}.amount`),
+    currency: requireString(cost.currency, `${label}.currency`).toUpperCase()
   });
+}
+
+function effectiveCostFrom(reportedCost, estimatedCost) {
+  // Precedence invariant: reported cost is authoritative when present; estimated is a fallback.
+  // reported and estimated are never summed together for the same entry.
+  if (reportedCost) return Object.freeze({ amount: reportedCost.amount, currency: reportedCost.currency, source: 'reported' });
+  if (estimatedCost) return Object.freeze({ amount: estimatedCost.amount, currency: estimatedCost.currency, source: 'estimated' });
+  return null;
+}
+
+function normalizeProviderCost(value) {
+  const empty = Object.freeze({
+    available: false, amount: null, currency: null,
+    reportedCost: null, estimatedCost: null, effectiveCost: null, accounting: 'unknown'
+  });
+  if (value == null) return empty;
+  const cost = requireObject(value, 'providerCost');
+  const hasStructured = Object.hasOwn(cost, 'reportedCost') || Object.hasOwn(cost, 'estimatedCost');
+  const hasLegacy = !hasStructured && (Object.hasOwn(cost, 'amount') || Object.hasOwn(cost, 'currency'));
+  const derivedOnlyKeys = new Set(['effectiveCost', 'accounting']);
+  for (const key of Object.keys(cost)) {
+    if (!COST_KEYS.has(key) && key !== 'reportedCost' && key !== 'estimatedCost' && !derivedOnlyKeys.has(key)) {
+      throw new Error(`providerCost contains unsupported field: ${key}`);
+    }
+  }
+
+  if (hasLegacy) {
+    if (cost.available === false) {
+      if (cost.amount != null || cost.currency != null) throw new Error('unavailable providerCost cannot contain amount or currency');
+      return empty;
+    }
+    if (cost.available != null && cost.available !== true) throw new Error('providerCost.available must be boolean when present');
+    const reportedCost = normalizeCostAmount({ amount: cost.amount, currency: cost.currency }, 'providerCost');
+    const effectiveCost = effectiveCostFrom(reportedCost, null);
+    return Object.freeze({
+      available: true,
+      amount: effectiveCost.amount,
+      currency: effectiveCost.currency,
+      reportedCost,
+      estimatedCost: null,
+      effectiveCost,
+      accounting: 'complete'
+    });
+  }
+
+  if (!hasStructured) return empty;
+
+  const reportedCost = normalizeCostAmount(cost.reportedCost, 'providerCost.reportedCost');
+  const estimatedCost = normalizeCostAmount(cost.estimatedCost, 'providerCost.estimatedCost');
+  const effectiveCost = effectiveCostFrom(reportedCost, estimatedCost);
+  return Object.freeze({
+    available: effectiveCost != null,
+    amount: effectiveCost?.amount ?? null,
+    currency: effectiveCost?.currency ?? null,
+    reportedCost,
+    estimatedCost,
+    effectiveCost,
+    accounting: effectiveCost == null ? 'unknown' : (reportedCost ? 'complete' : 'partial')
+  });
+}
+
+function normalizeTimestamp(value, label) {
+  if (value == null) return null;
+  const iso = requireString(value, label);
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) throw new Error(`${label} must be a valid ISO-8601 timestamp`);
+  return new Date(ms).toISOString();
+}
+
+const RUN_LEDGER_DERIVED_KEYS = new Set(['effectiveCost', 'accounting', 'costProvenance', 'usageAccounting']);
+
+function normalizeRunCache(value, label) {
+  if (value == null) return Object.freeze({ cacheReadInputTokens: null, cacheCreationInputTokens: null });
+  const cache = requireObject(value, label);
+  for (const key of Object.keys(cache)) {
+    if (!CACHE_KEYS.has(key)) throw new Error(`${label} contains unsupported field: ${key}`);
+  }
+  return Object.freeze({
+    cacheReadInputTokens: requireInteger(cache.cacheReadInputTokens, `${label}.cacheReadInputTokens`, { nullable: true }),
+    cacheCreationInputTokens: requireInteger(cache.cacheCreationInputTokens, `${label}.cacheCreationInputTokens`, { nullable: true })
+  });
+}
+
+function normalizePricingSnapshot(value, label) {
+  if (value == null) return null;
+  const snapshot = requireObject(value, label);
+  for (const key of Object.keys(snapshot)) {
+    if (!PRICING_SNAPSHOT_KEYS.has(key)) throw new Error(`${label} contains unsupported field: ${key}`);
+  }
+  const basis = snapshot.basis == null ? 'complete' : requireString(snapshot.basis, `${label}.basis`).toLowerCase();
+  if (basis !== 'complete' && basis !== 'partial') throw new Error(`${label}.basis must be complete or partial`);
+  return Object.freeze({
+    version: requireString(snapshot.version, `${label}.version`),
+    key: requireString(snapshot.key, `${label}.key`).toLowerCase(),
+    currency: requireString(snapshot.currency, `${label}.currency`).toUpperCase(),
+    inputPerMillionTokens: requireNumber(snapshot.inputPerMillionTokens, `${label}.inputPerMillionTokens`),
+    outputPerMillionTokens: requireNumber(snapshot.outputPerMillionTokens, `${label}.outputPerMillionTokens`),
+    basis
+  });
+}
+
+/**
+ * Classifies how complete the *usage* evidence for a provider run is, independently of cost.
+ * `complete` = both token sides known; `partial` = some but not all counters known;
+ * `unknown` = the run produced no usage evidence at all. Absence is never coerced to zero.
+ */
+function usageAccountingFor(usage) {
+  const known = [usage.inputTokens, usage.outputTokens].filter((value) => value != null).length;
+  if (known === 2) return 'complete';
+  const anyKnown = [usage.turns, usage.credits, usage.inputTokens, usage.outputTokens, usage.totalTokens]
+    .some((value) => value != null);
+  return anyKnown ? 'partial' : 'unknown';
+}
+
+function normalizeProviderRunLedgerEntry(value, label) {
+  const entry = requireObject(value, label);
+  for (const key of Object.keys(entry)) {
+    if (!RUN_LEDGER_KEYS.has(key) && !RUN_LEDGER_DERIVED_KEYS.has(key)) {
+      throw new Error(`${label} contains unsupported field: ${key}`);
+    }
+  }
+  const reportedCost = normalizeCostAmount(entry.reportedCost, `${label}.reportedCost`);
+  const estimatedCost = normalizeCostAmount(entry.estimatedCost, `${label}.estimatedCost`);
+  const effectiveCost = effectiveCostFrom(reportedCost, estimatedCost);
+  const pricingSnapshot = normalizePricingSnapshot(entry.pricingSnapshot, `${label}.pricingSnapshot`);
+  if (estimatedCost && !pricingSnapshot) {
+    throw new Error(`${label}.estimatedCost requires a pricingSnapshot recording the pricing version used`);
+  }
+  const phase = requireString(entry.phase, `${label}.phase`).toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(phase)) throw new Error(`invalid ${label}.phase: ${phase}`);
+  const usage = normalizeAiUsage(entry.usage ?? {}, `${label}.usage`);
+  const startedAtIso = normalizeTimestamp(entry.startedAtIso ?? null, `${label}.startedAtIso`);
+  const endedAtIso = normalizeTimestamp(entry.endedAtIso ?? null, `${label}.endedAtIso`);
+  if (startedAtIso && endedAtIso && Date.parse(endedAtIso) < Date.parse(startedAtIso)) {
+    throw new Error(`${label}.endedAtIso cannot precede startedAtIso`);
+  }
+  return Object.freeze({
+    runId: requirePositiveInteger(entry.runId, `${label}.runId`),
+    workflowRunId: requirePositiveInteger(entry.workflowRunId, `${label}.workflowRunId`, { nullable: true }),
+    materialHeadSha: entry.materialHeadSha == null ? null : requireSha(entry.materialHeadSha, `${label}.materialHeadSha`),
+    phase,
+    provider: requireString(entry.provider, `${label}.provider`).toLowerCase(),
+    model: entry.model == null ? null : requireString(entry.model, `${label}.model`),
+    worker: entry.worker == null ? null : requireString(entry.worker, `${label}.worker`),
+    role: entry.role == null ? null : requireString(entry.role, `${label}.role`).toLowerCase(),
+    implementationAttempt: requireInteger(entry.implementationAttempt, `${label}.implementationAttempt`, { nullable: true }),
+    remediationAttempt: requireInteger(entry.remediationAttempt, `${label}.remediationAttempt`, { nullable: true }),
+    // Run-granular audit attempt identity. Optional: history recorded before this field existed
+    // leaves it null, and reporting then falls back to the delivery-level `attempts.audit`
+    // ONLY when the reporting scope covers that delivery's whole audit evidence.
+    auditAttempt: requireInteger(entry.auditAttempt, `${label}.auditAttempt`, { nullable: true }),
+    usage,
+    usageAccounting: usageAccountingFor(usage),
+    cache: normalizeRunCache(entry.cache, `${label}.cache`),
+    reportedCost,
+    estimatedCost,
+    effectiveCost,
+    pricingSnapshot,
+    // Cost provenance is explicit so reporting can distinguish a metered cost from a
+    // catalog-derived estimate from a genuinely unknown cost, without inspecting amounts.
+    costProvenance: reportedCost ? 'reported' : (estimatedCost ? 'estimated' : 'unknown'),
+    accounting: effectiveCost == null ? 'unknown' : (reportedCost ? 'complete' : 'partial'),
+    startedAtIso,
+    endedAtIso,
+    observedAtIso: normalizeTimestamp(entry.observedAtIso ?? null, `${label}.observedAtIso`),
+    terminalState: entry.terminalState == null ? null : requireString(entry.terminalState, `${label}.terminalState`).toLowerCase(),
+    evidenceRef: entry.evidenceRef == null ? null : requireString(entry.evidenceRef, `${label}.evidenceRef`)
+  });
+}
+
+function normalizeProviderRunLedger(value) {
+  if (value == null) return Object.freeze([]);
+  if (!Array.isArray(value)) throw new Error('providerRunLedger must be an array');
+  const normalized = value.map((item, index) => normalizeProviderRunLedgerEntry(item, `providerRunLedger[${index}]`));
+  const seen = new Set();
+  for (const entry of normalized) {
+    if (seen.has(entry.runId)) throw new Error(`duplicate providerRunLedger runId: ${entry.runId}`);
+    seen.add(entry.runId);
+  }
+  return Object.freeze(normalized);
 }
 
 function normalizeAiUsage(value = {}, label = 'aiUsage') {
@@ -142,6 +325,30 @@ function normalizeTechnicalHygieneMetrics(value) {
   });
 }
 
+/**
+ * Resolves how trustworthy the per-provider-run accounting of a record is.
+ *
+ * An explicit value from the controller wins (it is the only component that knows whether it
+ * observed every provider run). Otherwise the value is inferred conservatively: a record with a
+ * ledger covering exactly `providerCalls` runs is `complete`, a record with a shorter ledger is
+ * `partial`, and a record with no ledger at all is `legacy` — never `complete`, because a
+ * pre-ledger record cannot prove it had zero provider calls.
+ */
+function resolveProviderRunAccounting(value, providerCalls, ledger) {
+  if (value != null) {
+    const resolved = requireString(value, 'providerRunAccounting').toLowerCase();
+    if (!PROVIDER_RUN_ACCOUNTING.has(resolved)) {
+      throw new Error(`unsupported providerRunAccounting: ${resolved}`);
+    }
+    if (resolved === 'complete' && ledger.length !== providerCalls) {
+      throw new Error('complete providerRunAccounting requires one ledger entry per provider call');
+    }
+    return resolved;
+  }
+  if (ledger.length === 0) return 'legacy';
+  return ledger.length === providerCalls ? 'complete' : 'partial';
+}
+
 export function normalizeDeliveryMetrics(rawMetrics) {
   const value = requireObject(rawMetrics, 'Delivery V2 metrics');
   if (value.schemaVersion !== DELIVERY_V2_METRICS_SCHEMA_VERSION) {
@@ -156,6 +363,9 @@ export function normalizeDeliveryMetrics(rawMetrics) {
   const provider = requireString(value.provider, 'provider').toLowerCase();
   const classifier = requireObject(value.classifier, 'classifier');
   const attempts = requireObject(value.attempts, 'attempts');
+  const providerCalls = requireInteger(value.providerCalls, 'providerCalls');
+  const providerRunLedger = normalizeProviderRunLedger(value.providerRunLedger);
+  const providerRunAccounting = resolveProviderRunAccounting(value.providerRunAccounting, providerCalls, providerRunLedger);
 
   return Object.freeze({
     schemaVersion: DELIVERY_V2_METRICS_SCHEMA_VERSION,
@@ -170,7 +380,7 @@ export function normalizeDeliveryMetrics(rawMetrics) {
       version: requireString(classifier.version, 'classifier.version'),
       fingerprint: requireString(classifier.fingerprint, 'classifier.fingerprint')
     }),
-    providerCalls: requireInteger(value.providerCalls, 'providerCalls'),
+    providerCalls,
     attempts: Object.freeze({
       implementation: requireInteger(attempts.implementation, 'attempts.implementation'),
       audit: requireInteger(attempts.audit, 'attempts.audit')
@@ -179,6 +389,14 @@ export function normalizeDeliveryMetrics(rawMetrics) {
     aiUsageByStage: normalizeAiUsageByStage(value.aiUsageByStage),
     technicalHygiene: normalizeTechnicalHygieneMetrics(value.technicalHygiene),
     providerCost: normalizeProviderCost(value.providerCost),
+    providerRunLedger: providerRunLedger,
+    // Distinguishes a delivery whose provider runs are fully enumerated by the ledger
+    // (`complete` — including a *proven* zero-provider-call delivery, where providerCalls is 0
+    // and the ledger is legitimately empty) from one with incomplete run-granular evidence
+    // (`partial`) and from a pre-ledger historical record (`legacy`). Reporting uses this to
+    // avoid counting a proven zero-call delivery as an unknown-cost provider run.
+    providerRunAccounting,
+    observedAtIso: normalizeTimestamp(value.observedAtIso ?? null, 'observedAtIso'),
     durationsMs: normalizeDurations(value.durationsMs),
     terminalReason: requireString(value.terminalReason, 'terminalReason'),
     change: normalizeChange(value.change),
@@ -243,9 +461,17 @@ function summarizeGroup(records) {
   const endToEnd = records.map((record) => record.durationsMs.endToEnd);
   const ciExecution = records.map((record) => record.durationsMs.ciExecution);
   const costByCurrency = {};
+  const costAccountingByCurrency = {};
+  let providerCostUnknownCount = 0;
   for (const record of records) {
-    if (!record.providerCost.available) continue;
-    costByCurrency[record.providerCost.currency] = (costByCurrency[record.providerCost.currency] ?? 0) + record.providerCost.amount;
+    if (!record.providerCost.available) {
+      providerCostUnknownCount += 1;
+      continue;
+    }
+    const currency = record.providerCost.currency;
+    costByCurrency[currency] = (costByCurrency[currency] ?? 0) + record.providerCost.amount;
+    const isPartial = record.providerCost.accounting !== 'complete';
+    costAccountingByCurrency[currency] = costAccountingByCurrency[currency] === 'partial' || isPartial ? 'partial' : 'complete';
   }
   return Object.freeze({
     deliveries: records.length,
@@ -257,7 +483,9 @@ function summarizeGroup(records) {
     technicalHygiene: summarizeHygiene(records),
     endToEndMs: Object.freeze({ avg: average(endToEnd), p50: percentile(endToEnd, 50), p95: percentile(endToEnd, 95) }),
     ciExecutionMs: Object.freeze({ avg: average(ciExecution), p50: percentile(ciExecution, 50), p95: percentile(ciExecution, 95) }),
-    providerCostTotals: Object.freeze(costByCurrency)
+    providerCostTotals: Object.freeze(costByCurrency),
+    providerCostAccounting: Object.freeze(costAccountingByCurrency),
+    providerCostUnknownCount
   });
 }
 

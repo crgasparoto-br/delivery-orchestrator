@@ -15,6 +15,78 @@
         "outputTokens": { "type": ["integer", "null"], "minimum": 0 },
         "totalTokens": { "type": ["integer", "null"], "minimum": 0 }
       }
+    },
+    "costAmount": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": { "type": "number", "minimum": 0 },
+        "currency": { "type": "string", "minLength": 1 }
+      }
+    },
+    "pricingSnapshot": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["version", "key", "currency", "inputPerMillionTokens", "outputPerMillionTokens"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "key": { "type": "string", "minLength": 1 },
+        "currency": { "type": "string", "minLength": 1 },
+        "inputPerMillionTokens": { "type": "number", "minimum": 0 },
+        "outputPerMillionTokens": { "type": "number", "minimum": 0 },
+        "basis": { "enum": ["complete", "partial"] }
+      }
+    },
+    "runCache": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cacheReadInputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "cacheCreationInputTokens": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "providerRunLedgerEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId", "phase", "provider", "usage", "usageAccounting",
+        "reportedCost", "estimatedCost", "effectiveCost", "costProvenance", "accounting"
+      ],
+      "properties": {
+        "runId": { "type": "integer", "minimum": 1 },
+        "workflowRunId": { "type": ["integer", "null"], "minimum": 1 },
+        "materialHeadSha": { "type": ["string", "null"], "pattern": "^[0-9a-fA-F]{40}$" },
+        "phase": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": ["string", "null"] },
+        "worker": { "type": ["string", "null"] },
+        "role": { "type": ["string", "null"] },
+        "implementationAttempt": { "type": ["integer", "null"], "minimum": 0 },
+        "remediationAttempt": { "type": ["integer", "null"], "minimum": 0 },
+        "usage": { "$ref": "#/$defs/aiUsage" },
+        "usageAccounting": { "enum": ["complete", "partial", "unknown"] },
+        "cache": { "$ref": "#/$defs/runCache" },
+        "pricingSnapshot": { "$ref": "#/$defs/pricingSnapshot" },
+        "costProvenance": { "enum": ["reported", "estimated", "unknown"] },
+        "reportedCost": { "$ref": "#/$defs/costAmount" },
+        "estimatedCost": { "$ref": "#/$defs/costAmount" },
+        "effectiveCost": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "amount": { "type": "number", "minimum": 0 },
+            "currency": { "type": "string", "minLength": 1 },
+            "source": { "enum": ["reported", "estimated"] }
+          }
+        },
+        "accounting": { "enum": ["complete", "partial", "unknown"] },
+        "startedAtIso": { "type": ["string", "null"], "format": "date-time" },
+        "endedAtIso": { "type": ["string", "null"], "format": "date-time" },
+        "observedAtIso": { "type": ["string", "null"], "format": "date-time" },
+        "terminalState": { "type": ["string", "null"] },
+        "evidenceRef": { "type": ["string", "null"] }
+      }
     }
   },
   "required": [
@@ -52,6 +124,12 @@
       }
     },
     "providerCost": { "type": "object" },
+    "providerRunLedger": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/providerRunLedgerEntry" }
+    },
+    "providerRunAccounting": { "enum": ["complete", "partial", "legacy"] },
+    "observedAtIso": { "type": ["string", "null"], "format": "date-time" },
     "durationsMs": { "type": "object" },
     "terminalReason": { "type": "string", "minLength": 1 },
     "change": { "type": "object" },

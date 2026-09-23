@@ -22,6 +22,7 @@ test('legacy resume initializes partial observability instead of disabling futur
   const afterWorker = recordControllerProviderObservation(migrated.observability, {
     runId: 10,
     stage: 'implementation',
+    provider: 'copilot',
     usage: { turns: 2 },
     evidenceRef: 'run:10'
   });

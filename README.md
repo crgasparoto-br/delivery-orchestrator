@@ -104,6 +104,119 @@ Compiled `gh-aw` workers retain native `usage` artifacts. The controller ingests
 
 Once operational controller state exists, the observability accumulator is persisted with that state. Re-entry continues the same provider-call/usage record and deduplicates provider runs by run ID; it does not restart operational counters. The final controller artifact records provider calls, implementation/audit attempts, AI usage, CI/audit/end-to-end duration, change size, exact material SHA, evidence references and terminal state. Pre-material bootstrap exhaustion/recovery keeps its provenance on the trusted bootstrap lease instead of fabricating a counter above the configured implementation ceiling. Legacy state that predates persistent observability is labeled rather than reconstructed from guesses.
 
+### AI Usage & Cost Reporting
+
+**Operational source.** There is exactly one cross-delivery source of AI usage/cost history:
+`docs/delivery-v2/evidence/delivery-v2-metrics.json` (override with `DELIVERY_V2_METRICS_FILE`),
+resolved by `src/v2/metrics-store.mjs`. Both the initial and the resume controller persist each
+completed delivery into it through the canonical `upsertDeliveryMetrics` contract in
+`src/v2/metrics.mjs`, keyed by `deliveryId`, so resume/re-entry replaces rather than duplicates a
+delivery. The dispatch workflow publishes the updated store back to the orchestrator's default
+branch and uploads it as run evidence. `npm run metrics:v2`, `npm run ai:usage` and the AI Usage
+Report workflow all read this same file — there is no second store. Reporting against a store
+that does not exist fails loudly rather than quietly producing an empty report; pass
+`--allow-missing-store` to opt into the empty-window case explicitly.
+
+**Per-provider-run ledger.** `createControllerDeliveryMetrics` produces `providerRunLedger`
+operationally, from the provider observations the controller recorded — callers never supply it.
+Entries are keyed by `runId`, the same provider-run identity the controller already deduplicates
+on, which is what makes re-entry, resume and recovery non-duplicating. Where evidence exists an
+entry preserves `workflowRunId`, `materialHeadSha`, `phase`, `provider`, `model`, `worker`,
+`role`, `implementationAttempt`, `remediationAttempt`, token `usage` and `usageAccounting`,
+`cache` counters, `reportedCost`, `estimatedCost`, `effectiveCost`, `costProvenance`,
+`pricingSnapshot`, `startedAtIso`, `endedAtIso`, `observedAtIso`, `terminalState` and
+`evidenceRef`. Fields without evidence stay `null`. The entry schema is a fail-closed allowlist,
+so API keys, provider credentials and Actions secrets cannot reach the ledger, the store, the
+JSON, the CSV, the HTML or the Job Summary.
+
+**Cost precedence and pricing.** Effective cost follows strict
+reported-over-estimated-over-unknown precedence, and reported/estimated are never summed for the
+same run — when a cost is reported, no estimate is computed at all. Estimates come from the
+versioned in-repository catalog `config/delivery-v2-ai-pricing.json` (`src/v2/ai-pricing.mjs`),
+keyed by `provider/model` with an explicit currency; there is never an external pricing lookup
+during a delivery. Each estimate persists a `pricingSnapshot` (catalog version plus the exact
+rates applied), so revising the catalog only prices runs observed after the change — historical
+runs keep their recorded snapshot and cost. An unknown provider/model, or unknown token usage,
+stays unknown instead of becoming a fabricated zero. Totals are grouped by currency; different
+currencies are never added together and never converted.
+
+**Zero calls vs unknown vs legacy.** These three are kept strictly apart. A delivery *proven* to
+have made no provider call has `providerCalls: 0`, an empty ledger and
+`providerRunAccounting: 'complete'`; it contributes `zeroProviderCallEntries`, never
+`unknownCostEntries`, and never gets fabricated tokens or cost. A real provider run whose cost
+could not be determined contributes `unknownCostEntries`. A pre-ledger historical record
+contributes `legacyEntries` and keeps working without inventing run-level attribution that was
+never captured.
+
+**Timestamps.** A provider run's terminal instant is its own `endedAtIso`, never back-filled from
+the delivery-level timestamp or from "now". A run with an unknown terminal instant is excluded
+from any bounded window and reported in `unknownTerminalTimestampEntries`. Period filtering
+compares real instants, so `Z` and `+00:00` are equivalent, and boundaries are inclusive.
+
+**CLI.** `npm run ai:usage` (`scripts/ai-usage-report.mjs`) supports
+`--period all|today|7d|month|custom` (plus the `--today`/`--7d`/`--month[=YYYY-MM]` shorthands),
+`--from`/`--to`, `--timezone` (UTC by default, or a fixed `±HH:MM` offset; named timezones are
+rejected), `--repo`, `--issue`, `--pr`, `--phase`, `--provider`, `--model`, `--group-by`
+(default `repository,phase`; supports `repository`, `issue`, `pr`, `phase`, `provider`, `model`,
+`worker`, `role`, `risk`, `delivery`, `day`, `kind`, `workflow-run`, `implementation-attempt`
+and `remediation-attempt`), `--metrics-file`, `--budget-file`,
+`--allow-missing-store`, `--json` and `--out`. The human output reports period, timezone,
+provider runs, provider calls, ledger entries, input/output/total tokens, credits, known
+effective cost per currency, unknown-cost count, unknown/partial usage counts,
+implementation/audit/remediation attempts, the requested breakdown and budget warnings.
+
+**Calls vs. ledger entries.** `entriesCount` counts rows of the ledger projection; `providerCalls`
+counts real provider calls. They are different quantities and both are exported. A delivery proven
+to have made no provider call is one ledger entry with `providerCalls: 0`, never `calls=1`. A
+pre-ledger legacy row carries no call identity, so it contributes to `unknownProviderCallEntries`
+and leaves `providerCalls` unknown instead of fabricating calls.
+
+**Attempts.** `providerRuns`, `providerCalls`, `entriesCount`, `implementationAttempts`,
+`auditAttempts` and `remediationAttempts` are six distinct quantities and all of them are
+exported; a provider-run count is never used as a substitute for an attempt count.
+`implementationAttempts` and `remediationAttempts` count DISTINCT attempt identities per delivery,
+from the attempt fields the ledger already persists — never the sum of the per-run attempt
+numbers, so two provider runs of the same implementation attempt are 2 runs and 1 attempt.
+
+Every attempt counter is scoped to the rows actually aggregated, including inside a grouping.
+Implementation and remediation attempt identities live on the ledger row itself, so a group only
+counts the attempts its own rows belong to. Audit attempts are the delicate case: `attempts.audit`
+is a DELIVERY-level counter, so it is attributed to a grouping only when that grouping provably
+covers the delivery's whole audit evidence. A group holding only implementation runs therefore
+never shows the delivery's audit attempts: it reports `unknown`. When the provider runs carry the
+run-granular `auditAttempt` identity, every scope — one phase, one workflow run — is counted
+exactly from distinct identities. When history cannot determine an attempt identity, the metric
+stays `unknown`/`partial` instead of being reported as zero.
+
+**Workflow and exports.** The manual **Delivery V2 - AI Usage Report** workflow
+(`workflow_dispatch`, inputs `period`/`from`/`to`/`timezone`/`repository`/`group_by`) runs the
+identical CLI to produce one JSON payload, then `scripts/ai-usage-export.mjs` derives the Job
+Summary plus `ai-usage-report.json`/`.csv`/`.html` from that single payload, so every surface
+agrees on totals by construction. The HTML adds cost per day, per repository, per phase and per
+provider/model, the highest-consumption issues and pull requests, and audit/remediation counts.
+CSV and JSON preserve `unknown` literally and carry usage/calls/attempts, not only cost, with
+explicit `providerCalls` and `implementationAttempts`/`auditAttempts`/`remediationAttempts`
+columns.
+
+**Delivery closing summary.** When telemetry exists, the controller result carries an
+`## AI usage` block (`src/v2/ai-usage-summary.mjs`) with per-phase calls/tokens, known cost per
+currency, unknown-cost run count, tokens and AI calls. It reports `complete` only when every
+provider run of that delivery has known usage and known cost and the controller enumerated every
+run; otherwise it says `partial`.
+
+**Budget.** `config/delivery-v2-ai-budget.json` (`src/v2/ai-budget.mjs`) declares an optional
+`monthly.amount`/`monthly.currency` and `warnings.issueCost`/`warnings.remediationCount`.
+`warnings.remediationCount` is a threshold on remediation ATTEMPTS — the canonical
+`attempts.remediation`/`remediationAttempts` — evaluated for the window overall and per grouping.
+It is deliberately not a count of remediation provider runs: one remediation attempt can execute
+several provider runs, so runs would overstate it. When the remediation attempts of a scope are
+unknown or only partially accounted, the threshold is not silently declared unmet and the unknown
+count is never read as zero; the evaluation emits an informative
+`remediation-count-inconclusive` warning recording that the threshold could not be evaluated
+conclusively for lack of attempt identity. Budget evaluation only ever adds non-blocking,
+informative warnings; it never gates, blocks or delays a delivery. Billing, automatic payment, API key rotation, mandatory
+public publication, automatic currency conversion and hard limits are explicitly out of scope.
+
 ## Release and merge enforcement
 
 Missing or materially `UNKNOWN` exact-head technical hygiene is persisted as `technical-hygiene-pending`, even when CI and audit are green. A verified control-plane SHA change can rearm full evidence-only collection when at least one material infrastructure item is recoverable, including mixed infrastructure/semantic `UNKNOWN`. Recovery retains the prior complete result and existing CI/audit evidence and attempt counters. Same-SHA re-entry cannot automatically retry collection. If material uncertainty persists after any required FAST promotion, the controller escalates for human intervention without authorizing candidate changes or spending implementation/audit-remediation attempts. A proven Technical Hygiene `BLOCK` is different: it remains actionable and follows the existing bounded `ci-failed-remediable` implementation-remediation path with the hygiene evidence attached.

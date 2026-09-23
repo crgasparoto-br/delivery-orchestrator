@@ -127,9 +127,25 @@
       "title": "Observability, token/cost accounting and performance SLO evidence",
       "status": "validated",
       "requiredForV2Default": true,
-      "summary": "Every delivery records provider calls, turns/credits, attempts, CI duration, audit duration, end-to-end duration and terminal reason so V2 can be optimized from evidence.",
-      "implementationRefs": ["file:src/v2/metrics.mjs", "file:schemas/delivery-v2-metrics.schema.json", "file:src/cli.mjs", "file:package.json"],
-      "validationRefs": ["file:test/v2-metrics.test.mjs", "file:test/v2-metrics-live-evidence.test.mjs", "file:docs/delivery-v2/evidence/dv2-011-live-metrics.json", "github:delivery-orchestrator#41", "github-actions:34669122471", "github:controle_calorias#1069", "github-actions:controle_calorias#34664118578", "github:training-system#435", "github-actions:training-system#34664164768"],
+      "summary": "Every delivery records provider calls, turns/credits, attempts, CI duration, audit duration, end-to-end duration and terminal reason so V2 can be optimized from evidence. AI Usage & Cost Reporting evolves the same accumulator: the controller observability accumulator itself produces a per-provider-run ledger (identity, phase, model, worker, attempts, cache, timestamps, cost provenance and pricing snapshot), both controllers persist each completed delivery into the single operational metrics store through the canonical metrics.mjs contract, and the `ai:usage` CLI, the manual Job Summary/artifact workflow and the delivery closing summary all derive from that one source. Cost follows reported-over-estimated-over-unknown precedence with versioned in-repository pricing and persisted pricing snapshots; currencies are never summed or converted; proven zero-provider-call deliveries, unknown-cost runs and legacy records stay distinct; unknown is never coerced to zero; budget warnings are informative only.",
+      "implementationRefs": [
+        "file:src/v2/metrics.mjs", "file:schemas/delivery-v2-metrics.schema.json", "file:src/cli.mjs", "file:package.json",
+        "file:src/v2/controller-observability.mjs", "file:src/v2/usage-telemetry.mjs", "file:src/v2/gh-aw-usage-artifact.mjs",
+        "file:src/v2/metrics-store.mjs", "file:src/v2/ai-pricing.mjs", "file:config/delivery-v2-ai-pricing.json",
+        "file:src/v2/ai-usage-ledger.mjs", "file:src/v2/ai-usage-summary.mjs", "file:src/v2/ai-budget.mjs",
+        "file:config/delivery-v2-ai-budget.json", "file:scripts/run-delivery-v2-controller.mjs",
+        "file:scripts/resume-delivery-v2-controller.mjs", "file:scripts/ai-usage-report.mjs",
+        "file:scripts/ai-usage-export.mjs", "file:.github/workflows/delivery-v2-ai-usage-report.yml",
+        "file:.github/workflows/delivery-v2-dispatch.yml"
+      ],
+      "validationRefs": [
+        "file:test/v2-metrics.test.mjs", "file:test/v2-metrics-live-evidence.test.mjs", "file:docs/delivery-v2/evidence/dv2-011-live-metrics.json",
+        "github:delivery-orchestrator#41", "github-actions:34669122471", "github:controle_calorias#1069", "github-actions:controle_calorias#34664118578",
+        "github:training-system#435", "github-actions:training-system#34664164768",
+        "file:test/v2-ai-usage-ledger.test.mjs", "file:test/v2-ai-usage-report.test.mjs",
+        "file:test/v2-ai-usage-operational-integration.test.mjs", "file:test/v2-controller-observability.test.mjs",
+        "file:docs/delivery-v2/evidence/delivery-v2-metrics.json", "github:delivery-orchestrator#213"
+      ],
       "rolloutRefs": [],
       "trackingIssue": 27
     },

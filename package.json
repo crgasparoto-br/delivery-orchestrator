@@ -23,6 +23,7 @@
     "metrics:v2": "node src/cli.mjs metrics-v2",
     "controller:v2": "node scripts/run-delivery-v2-controller.mjs",
     "normalize-usage:v2": "node scripts/normalize-gh-aw-usage.mjs",
-    "dispatch:v2": "node src/cli.mjs dispatch-v2"
+    "dispatch:v2": "node src/cli.mjs dispatch-v2",
+    "ai:usage": "node scripts/ai-usage-report.mjs"
   }
 }

@@ -1,7 +1,9 @@
 import { createDeliveryMetrics } from './metrics.mjs';
-import { mergeGhAwUsage, normalizeGhAwUsage } from './usage-telemetry.mjs';
+import { mergeGhAwUsage, normalizeGhAwUsage, extractGhAwRunEvidence } from './usage-telemetry.mjs';
+import { estimateProviderRunCost } from './ai-pricing.mjs';
 
 const STAGES = new Set(['implementation', 'audit']);
+const PHASE_RE = /^[a-z0-9][a-z0-9._-]*$/;
 
 function requiredObject(value, label) {
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be an object`);
@@ -36,6 +38,91 @@ function normalizeRunIds(value, label) {
   return normalized;
 }
 
+function nullableIso(value, label) {
+  if (value == null) return null;
+  const iso = requiredString(value, label);
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) throw new Error(`${label} must be a valid ISO-8601 timestamp`);
+  return new Date(ms).toISOString();
+}
+
+function nullableString(value, label, { lower = false } = {}) {
+  if (value == null) return null;
+  const text = requiredString(value, label);
+  return lower ? text.toLowerCase() : text;
+}
+
+function nullableNonNegativeInteger(value, label) {
+  if (value == null) return null;
+  return nonNegativeInteger(value, label);
+}
+
+function normalizeCostInput(value, label) {
+  if (value == null) return null;
+  const cost = requiredObject(value, label);
+  const amount = cost.amount;
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0) {
+    throw new Error(`${label}.amount must be a non-negative finite number`);
+  }
+  return Object.freeze({ amount, currency: requiredString(cost.currency, `${label}.currency`).toUpperCase() });
+}
+
+/**
+ * Normalizes one accumulated provider-run ledger entry.
+ *
+ * The accumulator is persisted between controller invocations (resume/recovery) inside the
+ * managed state comment, so every entry must survive a JSON round-trip unchanged. Nothing is
+ * defaulted to zero here: a counter or timestamp the controller never observed stays `null`.
+ */
+function normalizeLedgerEntry(value, label) {
+  const entry = requiredObject(value, label);
+  const phase = requiredString(entry.phase, `${label}.phase`).toLowerCase();
+  if (!PHASE_RE.test(phase)) throw new Error(`invalid ${label}.phase: ${phase}`);
+  const pricingSnapshot = entry.pricingSnapshot == null ? null : requiredObject(entry.pricingSnapshot, `${label}.pricingSnapshot`);
+  const estimatedCost = normalizeCostInput(entry.estimatedCost, `${label}.estimatedCost`);
+  if (estimatedCost && !pricingSnapshot) {
+    throw new Error(`${label}.estimatedCost requires a pricingSnapshot`);
+  }
+  return Object.freeze({
+    runId: positiveInteger(entry.runId, `${label}.runId`),
+    workflowRunId: entry.workflowRunId == null ? null : positiveInteger(entry.workflowRunId, `${label}.workflowRunId`),
+    materialHeadSha: nullableString(entry.materialHeadSha, `${label}.materialHeadSha`, { lower: true }),
+    phase,
+    provider: requiredString(entry.provider, `${label}.provider`).toLowerCase(),
+    model: nullableString(entry.model, `${label}.model`),
+    worker: nullableString(entry.worker, `${label}.worker`),
+    role: nullableString(entry.role, `${label}.role`, { lower: true }),
+    implementationAttempt: nullableNonNegativeInteger(entry.implementationAttempt, `${label}.implementationAttempt`),
+    remediationAttempt: nullableNonNegativeInteger(entry.remediationAttempt, `${label}.remediationAttempt`),
+    auditAttempt: nullableNonNegativeInteger(entry.auditAttempt, `${label}.auditAttempt`),
+    usage: normalizeGhAwUsage(entry.usage ?? {}),
+    cache: Object.freeze({
+      cacheReadInputTokens: nullableNonNegativeInteger(entry.cache?.cacheReadInputTokens ?? null, `${label}.cache.cacheReadInputTokens`),
+      cacheCreationInputTokens: nullableNonNegativeInteger(entry.cache?.cacheCreationInputTokens ?? null, `${label}.cache.cacheCreationInputTokens`)
+    }),
+    reportedCost: normalizeCostInput(entry.reportedCost, `${label}.reportedCost`),
+    estimatedCost,
+    pricingSnapshot: pricingSnapshot == null ? null : Object.freeze({ ...pricingSnapshot }),
+    startedAtIso: nullableIso(entry.startedAtIso, `${label}.startedAtIso`),
+    endedAtIso: nullableIso(entry.endedAtIso, `${label}.endedAtIso`),
+    observedAtIso: nullableIso(entry.observedAtIso, `${label}.observedAtIso`),
+    terminalState: nullableString(entry.terminalState, `${label}.terminalState`, { lower: true }),
+    evidenceRef: nullableString(entry.evidenceRef, `${label}.evidenceRef`)
+  });
+}
+
+function normalizeLedger(value, label = 'observability.providerRunLedger') {
+  if (value == null) return Object.freeze([]);
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  const entries = value.map((item, index) => normalizeLedgerEntry(item, `${label}[${index}]`));
+  const seen = new Set();
+  for (const entry of entries) {
+    if (seen.has(entry.runId)) throw new Error(`${label} contains duplicate runId: ${entry.runId}`);
+    seen.add(entry.runId);
+  }
+  return Object.freeze(entries);
+}
+
 export function createControllerObservability({ startedAtMs = Date.now() } = {}) {
   return Object.freeze({
     schemaVersion: 1,
@@ -43,6 +130,11 @@ export function createControllerObservability({ startedAtMs = Date.now() } = {})
     providerCalls: 0,
     providerRunIds: Object.freeze([]),
     observedRunIds: Object.freeze([]),
+    // One entry per *billable* provider run, in observation order. A run observed to have made
+    // zero provider calls is deliberately absent here (it is counted in zeroProviderCallRuns)
+    // so it is never mistaken for a provider run of unknown cost.
+    providerRunLedger: Object.freeze([]),
+    zeroProviderCallRuns: 0,
     providerAccountingComplete: true,
     failedAuditRunIds: Object.freeze([]),
     auditTimingComplete: true,
@@ -69,6 +161,11 @@ export function normalizeControllerObservability(raw) {
   }
   const providerCalls = nonNegativeInteger(value.providerCalls, 'observability.providerCalls');
   if (providerCalls !== normalizedRunIds.length) throw new Error('observability.providerCalls must equal providerRunIds length');
+  const providerRunLedger = normalizeLedger(value.providerRunLedger);
+  if (providerRunLedger.length > 0 && providerRunLedger.length !== providerCalls) {
+    throw new Error('observability.providerRunLedger must contain exactly one entry per provider call');
+  }
+  const zeroProviderCallRuns = nonNegativeInteger(value.zeroProviderCallRuns ?? 0, 'observability.zeroProviderCallRuns');
 
   const hasAnyProviderAccountingField = [
     'providerAccountingComplete',
@@ -145,6 +242,8 @@ export function normalizeControllerObservability(raw) {
     providerCalls,
     providerRunIds: Object.freeze(normalizedRunIds),
     observedRunIds: Object.freeze(observedRunIds),
+    providerRunLedger,
+    zeroProviderCallRuns,
     providerAccountingComplete,
     failedAuditRunIds: Object.freeze(failedAuditRunIds),
     auditTimingComplete,
@@ -165,7 +264,48 @@ export function normalizeControllerObservability(raw) {
   });
 }
 
-export function recordControllerProviderObservation(raw, { runId, stage, usage = {}, durationMs = null, evidenceRef = null } = {}) {
+/**
+ * Records one observed provider run into the canonical controller accumulator.
+ *
+ * This is the single operational place where a provider run becomes a ledger entry: the CLI,
+ * the workflow and the closing summary all read what this function accumulated, so there is no
+ * second observability path. Identity/dedup uses `observedRunIds` — exactly the same canonical
+ * provider-run identity the controller already used before this ledger existed — which makes
+ * re-entry, resume and recovery idempotent: re-observing an already-accounted run is a no-op.
+ *
+ * `usage.providerCalls === 0` marks a run *proven* to have made no provider call. Such a run is
+ * recorded as observed (so it is never re-dispatched) and counted in `zeroProviderCallRuns`, but
+ * it produces no ledger entry: a proven zero-call run is not a provider run of unknown cost.
+ *
+ * `rawUsagePayload` is the untouched provider usage artifact, used only to extract model /
+ * reported cost / run timestamps / cache counters. When no cost is reported and a pricing
+ * catalog is supplied, `estimatedCost` is derived from committed pricing and the exact rates are
+ * frozen into `pricingSnapshot`, so a later pricing change cannot rewrite this run's cost.
+ */
+export function recordControllerProviderObservation(raw, {
+  runId,
+  stage,
+  usage = {},
+  durationMs = null,
+  evidenceRef = null,
+  phase = null,
+  provider = null,
+  model = null,
+  worker = null,
+  role = null,
+  workflowRunId = null,
+  materialHeadSha = null,
+  implementationAttempt = null,
+  remediationAttempt = null,
+  auditAttempt = null,
+  terminalState = null,
+  startedAtIso = null,
+  endedAtIso = null,
+  observedAtIso = null,
+  reportedCost = null,
+  rawUsagePayload = null,
+  pricingCatalog = null
+} = {}) {
   const current = normalizeControllerObservability(raw);
   const resolvedRunId = positiveInteger(runId, 'runId');
   const resolvedStage = requiredString(stage, 'stage').toLowerCase();
@@ -181,6 +321,7 @@ export function recordControllerProviderObservation(raw, { runId, stage, usage =
     return Object.freeze({
       ...current,
       observedRunIds,
+      zeroProviderCallRuns: current.zeroProviderCallRuns + 1,
       auditDurationMs,
       evidenceRefs: normalizeRefs(refs)
     });
@@ -188,11 +329,56 @@ export function recordControllerProviderObservation(raw, { runId, stage, usage =
 
   const normalizedUsage = normalizeGhAwUsage(usage);
   const nextUsage = mergeGhAwUsage([current.aiUsageByStage[resolvedStage], normalizedUsage]);
+
+  const evidence = extractGhAwRunEvidence(rawUsagePayload ?? usage);
+  const resolvedProvider = nullableString(provider, 'provider', { lower: true }) ?? evidence.provider;
+  if (!resolvedProvider) {
+    throw new Error(`provider is unknown for provider run ${resolvedRunId}; refusing to record an unattributable ledger entry`);
+  }
+  const resolvedModel = nullableString(model, 'model') ?? evidence.model;
+  const resolvedReportedCost = normalizeCostInput(reportedCost, 'reportedCost') ?? evidence.reportedCost;
+
+  // reported cost always wins; an estimate is only derived when nothing was metered, and the two
+  // are never both applied to the same run.
+  const estimate = resolvedReportedCost
+    ? null
+    : estimateProviderRunCost({ provider: resolvedProvider, model: resolvedModel, usage: normalizedUsage }, pricingCatalog);
+
+  const ledgerEntry = normalizeLedgerEntry({
+    runId: resolvedRunId,
+    workflowRunId,
+    materialHeadSha,
+    phase: nullableString(phase, 'phase', { lower: true }) ?? resolvedStage,
+    provider: resolvedProvider,
+    model: resolvedModel,
+    worker,
+    role,
+    implementationAttempt,
+    remediationAttempt,
+    auditAttempt,
+    usage: normalizedUsage,
+    cache: {
+      cacheReadInputTokens: evidence.cacheReadInputTokens,
+      cacheCreationInputTokens: evidence.cacheCreationInputTokens
+    },
+    reportedCost: resolvedReportedCost,
+    estimatedCost: estimate ? { amount: estimate.amount, currency: estimate.currency } : null,
+    pricingSnapshot: estimate ? estimate.pricingSnapshot : null,
+    startedAtIso: startedAtIso ?? evidence.startedAtIso,
+    // The terminal timestamp is only ever the run's own observed end. It is never back-filled
+    // from the delivery-level timestamp or from "now".
+    endedAtIso: endedAtIso ?? evidence.endedAtIso,
+    observedAtIso,
+    terminalState,
+    evidenceRef
+  }, `providerRunLedger[${resolvedRunId}]`);
+
   return Object.freeze({
     ...current,
     providerCalls: current.providerCalls + 1,
     providerRunIds: Object.freeze([...current.providerRunIds, resolvedRunId]),
     observedRunIds,
+    providerRunLedger: Object.freeze([...current.providerRunLedger, ledgerEntry]),
     aiUsageByStage: Object.freeze({
       ...current.aiUsageByStage,
       [resolvedStage]: nextUsage
@@ -252,6 +438,8 @@ export function createControllerPartialMetrics({
       : null,
     observedProviderCalls: observed.providerCalls,
     providerAccountingComplete: observed.providerAccountingComplete,
+    providerRunLedger: observed.providerRunLedger,
+    zeroProviderCallRuns: observed.zeroProviderCallRuns,
     aiUsageByStage: observed.aiUsageByStage,
     durationsMs: Object.freeze({
       ciQueue: observed.ciTimingHistoryComplete
@@ -316,6 +504,39 @@ export function ciQueueDurationMs(run) {
   return started - created;
 }
 
+/**
+ * Rolls the per-run ledger up into the single-valued, delivery-level `providerCost`.
+ *
+ * This roll-up is deliberately conservative. It only produces a value when every provider run in
+ * the delivery resolved to a known cost in one single currency with one single provenance.
+ * A delivery mixing currencies, mixing reported and estimated runs, or containing any
+ * unknown-cost run reports `unknown` at this level rather than a misleading scalar — the
+ * per-run ledger stays the authoritative source, and the report aggregates it per currency.
+ * Currencies are never added together and reported/estimated are never summed.
+ */
+function deliveryProviderCostFrom(ledger) {
+  const unavailable = { available: false, amount: null, currency: null };
+  if (ledger.length === 0) return unavailable;
+
+  const currencies = new Set();
+  const sources = new Set();
+  let total = 0;
+  for (const entry of ledger) {
+    const cost = entry.reportedCost ?? entry.estimatedCost;
+    if (!cost) return unavailable;
+    currencies.add(cost.currency);
+    sources.add(entry.reportedCost ? 'reported' : 'estimated');
+    total += cost.amount;
+  }
+  if (currencies.size !== 1 || sources.size !== 1) return unavailable;
+
+  const currency = [...currencies][0];
+  const amount = Math.round(total * 1e6) / 1e6;
+  return [...sources][0] === 'reported'
+    ? { reportedCost: { amount, currency }, estimatedCost: null }
+    : { reportedCost: null, estimatedCost: { amount, currency } };
+}
+
 export function createControllerDeliveryMetrics({
   observability,
   repository,
@@ -361,7 +582,12 @@ export function createControllerDeliveryMetrics({
     attempts,
     aiUsage,
     aiUsageByStage: observed.aiUsageByStage,
-    providerCost: { available: false, amount: null, currency: null },
+    providerCost: deliveryProviderCostFrom(observed.providerRunLedger),
+    providerRunLedger: observed.providerRunLedger,
+    // The controller observed every provider run it dispatched, so the ledger is authoritative
+    // for this delivery — including the proven-zero-provider-call case (empty ledger, 0 calls).
+    providerRunAccounting: 'complete',
+    observedAtIso: new Date(nonNegativeInteger(nowMs, 'nowMs')).toISOString(),
     durationsMs: {
       ciQueue: observed.ciQueueDurationMs,
       ciExecution: observed.ciExecutionDurationMs,

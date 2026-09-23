@@ -39,9 +39,9 @@ function metricsInput(observability, overrides = {}) {
 
 test('provider observations survive reentry without double counting run IDs', () => {
   let state = createControllerObservability({ startedAtMs: 1000 });
-  state = recordControllerProviderObservation(state, { runId: 10, stage: 'implementation', usage: { turns: 3, inputTokens: 10, outputTokens: 4, totalTokens: 14 }, evidenceRef: 'run:10' });
-  state = recordControllerProviderObservation(state, { runId: 10, stage: 'implementation', usage: { turns: 99 } });
-  state = recordControllerProviderObservation(state, { runId: 11, stage: 'audit', usage: {}, durationMs: 500, evidenceRef: 'run:11' });
+  state = recordControllerProviderObservation(state, { runId: 10, stage: 'implementation', provider: 'copilot', usage: { turns: 3, inputTokens: 10, outputTokens: 4, totalTokens: 14 }, evidenceRef: 'run:10' });
+  state = recordControllerProviderObservation(state, { runId: 10, stage: 'implementation', provider: 'copilot', usage: { turns: 99 } });
+  state = recordControllerProviderObservation(state, { runId: 11, stage: 'audit', provider: 'copilot', usage: {}, durationMs: 500, evidenceRef: 'run:11' });
   assert.equal(state.providerCalls, 2);
   assert.deepEqual(state.providerRunIds, [10, 11]);
   assert.deepEqual(state.observedRunIds, [10, 11]);
@@ -108,7 +108,7 @@ test('unavailable workflow timing remains unknown while a real zero duration rem
 });
 
 test('final metrics preserve unknown usage instead of fabricating zero', () => {
-  let state = recordControllerProviderObservation(createControllerObservability({ startedAtMs: 1000 }), { runId: 1, stage: 'audit', usage: {}, durationMs: 50 });
+  let state = recordControllerProviderObservation(createControllerObservability({ startedAtMs: 1000 }), { runId: 1, stage: 'audit', provider: 'copilot', usage: {}, durationMs: 50 });
   state = recordControllerCiObservation(state, { run: finalCiRun, evidenceRef: 'ci:501' });
   const metrics = createControllerDeliveryMetrics(metricsInput(state));
   assert.equal(metrics.providerCalls, 1);
@@ -133,6 +133,7 @@ test('provider invocation with unavailable usage is counted without fabricating 
     {
       runId: 77,
       stage: 'implementation',
+      provider: 'copilot',
       usage: {},
       evidenceRef: 'run:77'
     }
@@ -314,4 +315,34 @@ test('legacy observability without failed-audit accounting is explicitly incompl
   assert.equal(normalized.providerAccountingComplete, false);
   assert.deepEqual(normalized.failedAuditRunIds, []);
   assert.equal(normalized.auditTimingComplete, false);
+});
+
+
+test('auditAttempt survives canonical controller observability normalization and ledger persistence', () => {
+  let state = createControllerObservability({ startedAtMs: 1000 });
+
+  state = recordControllerProviderObservation(state, {
+    runId: 88001,
+    stage: 'audit',
+    phase: 'audit',
+    provider: 'copilot',
+    durationMs: 0,
+    implementationAttempt: 2,
+    remediationAttempt: 1,
+    auditAttempt: 3,
+    usage: { turns: 1 },
+    evidenceRef: 'run:88001'
+  });
+
+  assert.equal(state.providerRunLedger.length, 1);
+  assert.equal(state.providerRunLedger[0].phase, 'audit');
+  assert.equal(state.providerRunLedger[0].implementationAttempt, 2);
+  assert.equal(state.providerRunLedger[0].remediationAttempt, 1);
+  assert.equal(state.providerRunLedger[0].auditAttempt, 3);
+
+  const normalized = normalizeControllerObservability(
+    JSON.parse(JSON.stringify(state))
+  );
+
+  assert.equal(normalized.providerRunLedger[0].auditAttempt, 3);
 });
