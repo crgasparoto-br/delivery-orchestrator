@@ -147,13 +147,40 @@ async function dispatchWorkflowAndResolveRun({ repository, workflow, ref, inputs
 }
 
 async function waitWorkflowRun(repository, runId, token) {
-  const deadline = Date.now() + MAX_STAGE_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + MAX_STAGE_MS;
+  let lastHeartbeatAt = 0;
+  let lastStatus = null;
+
   while (Date.now() < deadline) {
-    const run = await api(`https://api.github.com/repos/${repository}/actions/runs/${runId}`, token);
+    const run = await api(
+      `https://api.github.com/repos/${repository}/actions/runs/${runId}`,
+      token
+    );
+
+    const now = Date.now();
+    const statusChanged = run.status !== lastStatus;
+    const heartbeatDue = now - lastHeartbeatAt >= 60_000;
+
+    if (statusChanged || heartbeatDue) {
+      const elapsedSeconds = Math.floor((now - startedAt) / 1000);
+      process.stdout.write(
+        `[delivery-v2] waiting workflow run=${runId} ` +
+        `repository=${repository} status=${run.status} ` +
+        `conclusion=${run.conclusion ?? '-'} elapsed=${elapsedSeconds}s\n`
+      );
+      lastHeartbeatAt = now;
+      lastStatus = run.status;
+    }
+
     if (run.status === 'completed') return run;
     await sleep(POLL_MS);
   }
-  throw new Error(`workflow run ${runId} exceeded bounded stage timeout`);
+
+  throw new Error(
+    `workflow run ${runId} exceeded bounded stage timeout after ` +
+    `${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 async function findManagedPullRequest({ repository, issueNumber, baseBranch, since, token }) {
@@ -214,19 +241,96 @@ async function sourceWorkflowRunForHead({ repository, sha, workflowName, token }
 }
 
 async function waitRequiredCheck({ repository, prNumber, sha, requiredStatusName, workflowName, token }) {
-  const deadline = Date.now() + MAX_STAGE_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + MAX_STAGE_MS;
+  let lastHeartbeatAt = 0;
+  let lastObservedState = null;
+
   while (Date.now() < deadline) {
     const pr = await fetchPullRequest(repository, prNumber, token);
     const current = String(pr.head.sha).toLowerCase();
-    if (current !== sha.toLowerCase()) return { kind: 'head-drift', pullRequest: pr };
-    const sourceRun = await sourceWorkflowRunForHead({ repository, sha, workflowName, token });
-    if (!sourceRun) { await sleep(POLL_MS); continue; }
-    const check = selectCheckForWorkflowRun(await fetchCheckRuns(repository, sha, token), { requiredStatusName, workflowRunId: sourceRun.id });
-    if (sourceRun.status === 'completed' && check?.status === 'completed') return { kind: 'check', check, sourceRun, pullRequest: pr };
-    if (sourceRun.status === 'completed' && !check) throw new Error(`required check ${requiredStatusName} is missing for authoritative workflow run ${sourceRun.id}`);
+
+    if (current !== sha.toLowerCase()) {
+      process.stdout.write(
+        `[delivery-v2] required-check wait detected head drift ` +
+        `pr=${prNumber} expected=${sha} current=${current}\n`
+      );
+      return { kind: 'head-drift', pullRequest: pr };
+    }
+
+    const sourceRun = await sourceWorkflowRunForHead({
+      repository,
+      sha,
+      workflowName,
+      token
+    });
+
+    let check = null;
+    if (sourceRun) {
+      check = selectCheckForWorkflowRun(
+        await fetchCheckRuns(repository, sha, token),
+        {
+          requiredStatusName,
+          workflowRunId: sourceRun.id
+        }
+      );
+    }
+
+    const now = Date.now();
+    const observedState = sourceRun
+      ? `${sourceRun.id}:${sourceRun.status}:${sourceRun.conclusion ?? '-'}:` +
+        `${check?.status ?? 'missing'}:${check?.conclusion ?? '-'}`
+      : 'source-run-missing';
+
+    if (
+      observedState !== lastObservedState ||
+      now - lastHeartbeatAt >= 60_000
+    ) {
+      const elapsedSeconds = Math.floor((now - startedAt) / 1000);
+
+      process.stdout.write(
+        `[delivery-v2] waiting required check ` +
+        `repository=${repository} pr=${prNumber} ` +
+        `sha=${sha} workflow="${workflowName}" ` +
+        `required="${requiredStatusName}" ` +
+        `sourceRun=${sourceRun?.id ?? '-'} ` +
+        `runStatus=${sourceRun?.status ?? 'not-found'} ` +
+        `runConclusion=${sourceRun?.conclusion ?? '-'} ` +
+        `checkStatus=${check?.status ?? 'not-found'} ` +
+        `checkConclusion=${check?.conclusion ?? '-'} ` +
+        `elapsed=${elapsedSeconds}s\n`
+      );
+
+      lastHeartbeatAt = now;
+      lastObservedState = observedState;
+    }
+
+    if (
+      sourceRun?.status === 'completed' &&
+      check?.status === 'completed'
+    ) {
+      return {
+        kind: 'check',
+        check,
+        sourceRun,
+        pullRequest: pr
+      };
+    }
+
+    if (sourceRun?.status === 'completed' && !check) {
+      throw new Error(
+        `required check ${requiredStatusName} is missing for ` +
+        `authoritative workflow run ${sourceRun.id}`
+      );
+    }
+
     await sleep(POLL_MS);
   }
-  throw new Error(`required check ${requiredStatusName} did not become terminal within bounded timeout`);
+
+  throw new Error(
+    `required check ${requiredStatusName} did not become terminal within ` +
+    `bounded timeout after ${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 async function upsertStateComment({ repository, prNumber, state, identity, classifier, workflowChecks, evidenceRefs, token, extra = {} }) {
