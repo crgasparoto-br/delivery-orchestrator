@@ -18,6 +18,54 @@ test('CI remediation requires explicit repository-cause evidence and fails close
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'browser tests', failedStepNames: ['pnpm test'], log: 'Error: Could not find Chrome (ver. 127.0.6533.88). cache path is /home/runner/.cache/puppeteer' }] }), 'actionable');
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'browser tests', failedStepNames: ['pnpm test'], log: 'Browser executable not found in Puppeteer cache' }] }), 'actionable');
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'browser tests', failedStepNames: ['pnpm test'], log: 'Could not find Chrome; runner offline while provisioning browser' }] }), 'external');
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: [
+          '* [new branch] fix/ci-billing-active-fixture -> origin/fix/ci-billing-active-fixture',
+          "server/service.ts(176,9): error TS2304: Cannot find name 'missingSymbol'.",
+          'Process completed with exit code 2.'
+        ].join('\n')
+      }]
+    }),
+    'actionable'
+  );
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'CI',
+        failedStepNames: ['Prepare runner'],
+        log: 'GitHub Actions billing quota exceeded; jobs cannot be started.'
+      }]
+    }),
+    'external'
+  );
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'CI',
+        failedStepNames: ['Prepare runner'],
+        log: 'Hosted runner unavailable while waiting for a runner.'
+      }]
+    }),
+    'external'
+  );
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'CI',
+        failedStepNames: ['Install dependencies'],
+        log: 'Network timeout: ETIMEDOUT while connecting to external service.'
+      }]
+    }),
+    'external'
+  );
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'unknown', failedStepNames: [], log: 'Process completed with exit code 1' }] }), 'external');
   for (const conclusion of ['cancelled', 'timed_out', 'startup_failure', 'stale', 'neutral', 'skipped']) assert.equal(ciFailureClassForEvidence({ conclusion, failedJobs: [] }), 'external');
 });
