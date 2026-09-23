@@ -98,7 +98,7 @@ test('scenario C: zero provider-call delivery contributes no usage or cost rows 
   assert.equal(entries[0].usage, null);
   assert.equal(entries[0].effectiveCost, null);
   const totals = aggregateLedgerEntries(entries);
-  assert.equal(totals.unknownCostEntries, 1);
+  assert.equal(totals.unknownCostEntries, 0);
   assert.equal(totals.usage.totalTokens.total, null);
 });
 

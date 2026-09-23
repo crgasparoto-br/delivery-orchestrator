@@ -304,3 +304,125 @@ test('F-214-05: partial remediation accounting below the threshold stays inconcl
     assert.ok(total.unknownEntries >= 1);
   });
 });
+
+// --- F-214-07: legacy history is distinct from real unknown-cost provider runs --------
+
+test('F-214-07: multi-phase legacy history does not fabricate unknown-cost provider runs', async () => {
+  await withTempDir(async (dir) => {
+    const metricsFile = path.join(dir, 'legacy-distinction.json');
+
+    await upsertDeliveryMetrics(metricsFile, metricsRecord({
+      providerRunLedger: [],
+      providerRunAccounting: 'legacy',
+      aiUsage: { turns: 3 },
+      aiUsageByStage: {
+        implementation: { turns: 2 },
+        audit: { turns: 1 }
+      },
+      providerCost: {
+        available: false,
+        reportedCost: null,
+        estimatedCost: null,
+        effectiveCost: null,
+        accounting: 'unknown'
+      }
+    }));
+
+    const report = await buildAiUsageReport({
+      metricsFile,
+      groupBy: ['phase']
+    });
+
+    // One historical delivery can project several legacy rows, but none of
+    // those rows is a real provider run whose cost was observed as unknown.
+    assert.ok(report.totals.legacyEntries >= 1);
+    assert.equal(report.totals.unknownCostEntries, 0);
+    assert.equal(report.totals.providerCalls, null);
+    assert.equal(report.totals.accounting, 'partial');
+  });
+});
+
+test('F-214-07: a real provider run without cost remains an unknown-cost entry', async () => {
+  await withTempDir(async (dir) => {
+    const metricsFile = path.join(dir, 'real-unknown-cost.json');
+
+    await upsertDeliveryMetrics(metricsFile, metricsRecord({
+      providerCalls: 1,
+      providerRunAccounting: 'complete',
+      providerRunLedger: [{
+        runId: 9701,
+        phase: 'implementation',
+        provider: 'codex',
+        model: 'gpt-5-codex',
+        implementationAttempt: 1,
+        remediationAttempt: 0,
+        usage: { turns: 1 },
+        reportedCost: null,
+        estimatedCost: null,
+        effectiveCost: null,
+        observedAtIso: '2026-09-10T00:00:00.000Z',
+        endedAtIso: '2026-09-10T00:00:00.000Z'
+      }]
+    }));
+
+    const report = await buildAiUsageReport({ metricsFile });
+
+    assert.equal(report.totals.providerRuns, 1);
+    assert.equal(report.totals.legacyEntries, 0);
+    assert.equal(report.totals.unknownCostEntries, 1);
+    assert.equal(report.totals.accounting, 'partial');
+  });
+});
+
+test('F-214-07: legacy incomplete cost keeps monthly budget inconclusive without pretending it is an unknown provider run', async () => {
+  await withTempDir(async (dir) => {
+    const metricsFile = path.join(dir, 'legacy-budget.json');
+
+    await upsertDeliveryMetrics(metricsFile, metricsRecord({
+      providerRunLedger: [],
+      providerRunAccounting: 'legacy',
+      aiUsage: { turns: 1 },
+      aiUsageByStage: {
+        implementation: { turns: 1 }
+      },
+      providerCost: {
+        available: false,
+        reportedCost: null,
+        estimatedCost: null,
+        effectiveCost: null,
+        accounting: 'unknown'
+      }
+    }));
+
+    const report = await buildAiUsageReport({ metricsFile });
+
+    assert.ok(report.totals.legacyEntries >= 1);
+    assert.equal(report.totals.unknownCostEntries, 0);
+    assert.equal(report.totals.accounting, 'partial');
+
+    const result = evaluateAiBudgetWarnings(report, {
+      monthly: {
+        amount: 250,
+        currency: 'USD'
+      }
+    });
+
+    assert.equal(result.blocking, false);
+
+    const warning = result.warnings.find(
+      (item) => item.type === 'monthly-budget-inconclusive'
+    );
+
+    assert.ok(warning);
+    assert.equal(warning.unknownCostEntries, 0);
+    assert.ok(warning.legacyEntries >= 1);
+    assert.equal(warning.accounting, 'partial');
+
+    assert.equal(
+      result.warnings.some(
+        (item) => item.type === 'monthly-budget-exceeded'
+      ),
+      false
+    );
+  });
+});

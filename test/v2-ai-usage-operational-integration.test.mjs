@@ -320,7 +320,8 @@ test('scenario D: a zero-call delivery is distinguishable from an unknown-cost r
 
     const report = await buildAiUsageReport({ metricsFile });
     assert.equal(report.totals.zeroProviderCallEntries, 1, 'proven zero calls');
-    assert.equal(report.totals.unknownCostEntries, 2, 'one unknown-cost run + one legacy row');
+    assert.equal(report.totals.unknownCostEntries, 1, 'only the real unknown-cost provider run counts here');
+    assert.ok(report.totals.legacyEntries >= 1, 'legacy remains separately observable');
     assert.equal(report.totals.legacyEntries, 1, 'legacy records are counted apart');
     assert.equal(report.totals.providerRuns, 1);
 

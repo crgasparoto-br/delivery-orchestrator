@@ -50,7 +50,14 @@ export function evaluateAiBudgetWarnings(report, budgetConfigRaw) {
     const unknownCostEntries = Number.isInteger(report.totals.unknownCostEntries)
       ? report.totals.unknownCostEntries
       : 0;
+    const legacyEntries = Number.isInteger(report.totals.legacyEntries)
+      ? report.totals.legacyEntries
+      : 0;
     const knownSpent = bucket?.effectiveCost ?? null;
+    const costAccountingIncomplete =
+      report.totals.accounting !== 'complete'
+      || unknownCostEntries > 0
+      || legacyEntries > 0;
 
     // A known amount above the budget is conclusively exceeded even when other
     // provider-run costs remain unknown.
@@ -63,17 +70,19 @@ export function evaluateAiBudgetWarnings(report, budgetConfigRaw) {
         accounting: bucket.accounting,
         unknownCostEntries
       }));
-    } else if (unknownCostEntries > 0) {
+    } else if (costAccountingIncomplete) {
       // Known spend below the limit does NOT prove that budget remains available
-      // while one or more provider-run costs are unknown. Keep the budget warning
-      // informative/non-blocking, but make the conclusion explicitly inconclusive.
+      // while accounting is incomplete. Real unknown-cost provider runs and
+      // pre-ledger legacy history remain distinct counters, but either can make
+      // the budget conclusion inconclusive.
       warnings.push(Object.freeze({
         type: 'monthly-budget-inconclusive',
         currency: config.monthly.currency,
         spent: knownSpent,
         limit: config.monthly.amount,
         accounting: report.totals.accounting ?? 'partial',
-        unknownCostEntries
+        unknownCostEntries,
+        legacyEntries
       }));
     }
   }

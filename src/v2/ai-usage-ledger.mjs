@@ -449,7 +449,13 @@ export function aggregateLedgerEntries(entries, { phaseScoped = false } = {}) {
     }
 
     if (!entry.effectiveCost) {
-      unknownCostEntries += 1;
+      // `unknownCostEntries` represents REAL provider runs whose cost could not
+      // be determined. Legacy aggregate rows have no run-level identity and
+      // are accounted separately through `legacyEntries`; counting them here
+      // would fabricate unknown provider runs and can multiply one historical
+      // delivery into several unknown-cost entries (for example, one per
+      // legacy phase).
+      if (entry.kind === 'run') unknownCostEntries += 1;
       continue;
     }
     const currency = entry.effectiveCost.currency;
