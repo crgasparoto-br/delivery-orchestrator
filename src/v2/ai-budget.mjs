@@ -47,13 +47,33 @@ export function evaluateAiBudgetWarnings(report, budgetConfigRaw) {
 
   if (config.monthly) {
     const bucket = report.totals.costByCurrency[config.monthly.currency];
-    if (bucket && bucket.effectiveCost > config.monthly.amount) {
+    const unknownCostEntries = Number.isInteger(report.totals.unknownCostEntries)
+      ? report.totals.unknownCostEntries
+      : 0;
+    const knownSpent = bucket?.effectiveCost ?? null;
+
+    // A known amount above the budget is conclusively exceeded even when other
+    // provider-run costs remain unknown.
+    if (knownSpent != null && knownSpent > config.monthly.amount) {
       warnings.push(Object.freeze({
         type: 'monthly-budget-exceeded',
         currency: config.monthly.currency,
-        spent: bucket.effectiveCost,
+        spent: knownSpent,
         limit: config.monthly.amount,
-        accounting: bucket.accounting
+        accounting: bucket.accounting,
+        unknownCostEntries
+      }));
+    } else if (unknownCostEntries > 0) {
+      // Known spend below the limit does NOT prove that budget remains available
+      // while one or more provider-run costs are unknown. Keep the budget warning
+      // informative/non-blocking, but make the conclusion explicitly inconclusive.
+      warnings.push(Object.freeze({
+        type: 'monthly-budget-inconclusive',
+        currency: config.monthly.currency,
+        spent: knownSpent,
+        limit: config.monthly.amount,
+        accounting: report.totals.accounting ?? 'partial',
+        unknownCostEntries
       }));
     }
   }
