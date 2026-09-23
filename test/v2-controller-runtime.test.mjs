@@ -154,3 +154,47 @@ test('merge-preview release evidence requires a successful named job from the ex
   assert.equal(unbound.status, 'pending');
   assert.throws(() => mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: { ...run, head_sha: 'e'.repeat(40) }, jobs: [], requiredJobName: 'Merge preview compatibility' }), /head mismatch/);
 });
+
+test('CI remediation treats billing in repository path as incidental when TypeScript failure is strong', () => {
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: [
+          "src/billing-service.ts(176,9): error TS2304: Cannot find name 'missingSymbol'.",
+          'Process completed with exit code 2.'
+        ].join('\n')
+      }]
+    }),
+    'actionable'
+  );
+
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'CI',
+        failedStepNames: ['Prepare runner'],
+        log: 'GitHub Actions billing quota exceeded; jobs cannot be started.'
+      }]
+    }),
+    'external'
+  );
+
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: [
+          "src/billing-service.ts(176,9): error TS2304: Cannot find name 'missingSymbol'.",
+          'Network timeout: ETIMEDOUT while connecting to external service.'
+        ].join('\n')
+      }]
+    }),
+    'external'
+  );
+});

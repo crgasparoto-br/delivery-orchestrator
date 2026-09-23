@@ -37,7 +37,7 @@ async function fetchJson(url, token) {
   return response.json();
 }
 
-const EXTERNAL_CI_FAILURE_RE = /(runner.{0,40}(?:lost|offline|unavailable|disconnect)|no (?:hosted )?runner|timed out waiting for (?:a )?runner|startup_failure|service unavailable|bad gateway|gateway timeout|rate limit|artifact storage quota|billing.{0,80}(?:quota|limit|disabled|suspended|payment|spending|problem|issue|failure|failed|error|exceeded|unavailable)|(?:quota|limit|spending).{0,80}billing|econnreset|etimedout|enetunreach|connection (?:reset|refused)|network.{0,40}(?:unreachable|timeout|reset)|temporary failure|secret.{0,40}(?:missing|not found))/i;
+const EXTERNAL_CI_FAILURE_RE = /(runner.{0,40}(?:lost|offline|unavailable|disconnect)|no (?:hosted )?runner|timed out waiting for (?:a )?runner|startup_failure|service unavailable|bad gateway|gateway timeout|rate limit|artifact storage quota|billing.{0,80}(?:quota|limit|disabled|suspended|payment|spending|exceeded|unavailable)|(?:quota|limit|disabled|suspended|payment|spending|exceeded|unavailable).{0,80}billing|econnreset|etimedout|enetunreach|connection (?:reset|refused)|network.{0,40}(?:unreachable|timeout|reset)|temporary failure|secret.{0,40}(?:missing|not found))/i;
 const REPOSITORY_CI_FAILURE_RE = /(assertionerror|testinglibraryelementerror|tests? (?:failed|failing)|\bfail(?:ed|ure)?\b.{0,80}(?:test|spec|assert)|error TS\d{4}|eslint|lint(?:ing)? (?:error|failed)|type(?:check| error)|build failed|compilation failed|compile error|migration.{0,40}failed|schema.{0,40}failed|could not find (?:chrome|chromium)|browser executable.{0,40}(?:missing|not found)|puppeteer.{0,80}(?:cache|browser).{0,40}(?:missing|not found))/i;
 
 function ciFailureEvidenceLines(failedJobs = []) {
