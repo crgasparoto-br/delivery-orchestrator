@@ -469,3 +469,118 @@ test('provider ledger declared complete still requires exact historical coverage
     /complete provider ledger history requires/
   );
 });
+
+
+test('delivery metrics persist known runs from a partial historical provider ledger without claiming complete cost', () => {
+  let observability = createControllerObservability({
+    startedAtMs: 1000
+  });
+
+  observability = recordControllerProviderObservation(
+    observability,
+    {
+      runId: 95001,
+      stage: 'implementation',
+      provider: 'codex',
+      usage: {
+        turns: 1,
+        inputTokens: 100,
+        outputTokens: 50
+      },
+      reportedCost: {
+        amount: 1.25,
+        currency: 'USD'
+      },
+      evidenceRef: 'run:95001'
+    }
+  );
+
+  observability = recordControllerProviderObservation(
+    observability,
+    {
+      runId: 95002,
+      stage: 'implementation',
+      provider: 'codex',
+      usage: {
+        turns: 1,
+        inputTokens: 200,
+        outputTokens: 100
+      },
+      reportedCost: {
+        amount: 2.50,
+        currency: 'USD'
+      },
+      evidenceRef: 'run:95002'
+    }
+  );
+
+  observability = recordControllerCiObservation(
+    observability,
+    {
+      run: {
+        id: 95100,
+        created_at: '2026-09-23T20:00:00.000Z',
+        run_started_at: '2026-09-23T20:00:01.000Z',
+        updated_at: '2026-09-23T20:00:05.000Z'
+      },
+      evidenceRef: 'ci:95100'
+    }
+  );
+
+  const persisted = JSON.parse(JSON.stringify(observability));
+
+  delete persisted.providerLedgerHistoryComplete;
+  persisted.providerRunLedger =
+    persisted.providerRunLedger.slice(1);
+
+  const partial = normalizeControllerObservability(persisted);
+
+  assert.equal(partial.providerCalls, 2);
+  assert.equal(partial.providerRunLedger.length, 1);
+  assert.equal(partial.providerLedgerHistoryComplete, false);
+
+  const metrics = createControllerDeliveryMetrics({
+    observability: partial,
+    repository: 'crgasparoto-br/delivery-orchestrator',
+    issueNumber: 213,
+    pullRequestNumber: 228,
+    materialHeadSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    risk: 'critical',
+    provider: 'codex',
+    classifier: {
+      version: 'test',
+      fingerprint: 'partial-ledger-test'
+    },
+    attempts: {
+      implementation: 1,
+      audit: 0
+    },
+    change: {
+      files: 4,
+      additions: 1,
+      deletions: 0
+    },
+    terminalReason: 'ready-for-human-merge',
+    nowMs: 6000
+  });
+
+  assert.equal(metrics.providerCalls, 2);
+  assert.equal(metrics.providerRunAccounting, 'partial');
+
+  assert.deepEqual(
+    metrics.providerRunLedger.map((entry) => entry.runId),
+    [95002]
+  );
+
+  // The known run remains reportable.
+  assert.equal(
+    metrics.providerRunLedger[0].reportedCost.amount,
+    2.50
+  );
+
+  // But the delivery-level total must stay unknown because the
+  // missing historical ledger entry could contain additional cost.
+  assert.equal(metrics.providerCost.available, false);
+  assert.equal(metrics.providerCost.amount, null);
+  assert.equal(metrics.providerCost.currency, null);
+});

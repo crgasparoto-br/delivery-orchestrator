@@ -619,11 +619,17 @@ export function createControllerDeliveryMetrics({
     attempts,
     aiUsage,
     aiUsageByStage: observed.aiUsageByStage,
-    providerCost: deliveryProviderCostFrom(observed.providerRunLedger),
+    // A partial historical ledger must never be promoted to a complete
+    // delivery-level cost. Known per-run values remain reportable through
+    // providerRunLedger, while the aggregate stays unknown until every
+    // provider call has a ledger entry.
+    providerCost: observed.providerLedgerHistoryComplete
+      ? deliveryProviderCostFrom(observed.providerRunLedger)
+      : { available: false, amount: null, currency: null },
     providerRunLedger: observed.providerRunLedger,
-    // The controller observed every provider run it dispatched, so the ledger is authoritative
-    // for this delivery — including the proven-zero-provider-call case (empty ledger, 0 calls).
-    providerRunAccounting: 'complete',
+    providerRunAccounting: observed.providerLedgerHistoryComplete
+      ? 'complete'
+      : 'partial',
     observedAtIso: new Date(nonNegativeInteger(nowMs, 'nowMs')).toISOString(),
     durationsMs: {
       ciQueue: observed.ciQueueDurationMs,

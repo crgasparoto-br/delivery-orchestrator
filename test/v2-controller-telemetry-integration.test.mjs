@@ -245,3 +245,21 @@ test('resume marks a partial historical provider ledger as incomplete history wh
 
   assert.equal(resumed.historyComplete, false);
 });
+
+
+test('resume persists metrics when only provider ledger history is partial', () => {
+  assert.match(
+    resumeController,
+    /const metricsHistoryPublishable =[\s\S]*?observability\.providerAccountingComplete[\s\S]*?observability\.ciRunIds\.length > 0/
+  );
+
+  assert.match(
+    resumeController,
+    /providerLedgerHistoryComplete[\s\S]*?'partial-provider-ledger'/
+  );
+
+  assert.doesNotMatch(
+    resumeController,
+    /const metrics = observabilityHistoryComplete \? createControllerDeliveryMetrics/
+  );
+});
