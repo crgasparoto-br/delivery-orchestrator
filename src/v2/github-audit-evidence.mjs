@@ -44,6 +44,33 @@ function requiredString(value, label) {
   return result;
 }
 
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function splitUtf8Chunks(value, maxBytes) {
+  const chunks = [];
+  let current = '';
+  let currentBytes = 0;
+
+  for (const char of String(value ?? '')) {
+    const charBytes = Buffer.byteLength(char, 'utf8');
+
+    if (current && currentBytes + charBytes > maxBytes) {
+      chunks.push(current);
+      current = '';
+      currentBytes = 0;
+    }
+
+    current += char;
+    currentBytes += charBytes;
+  }
+
+  if (current || chunks.length === 0) chunks.push(current);
+
+  return chunks;
+}
+
 function headers(token, accept = 'application/vnd.github+json') {
   return {
     Accept: accept,
@@ -168,6 +195,8 @@ export async function fetchBoundedAuditContext(repository, ref, changedPaths, to
   const allowedChangedPaths = allChangedPaths.filter(auditContextPathAllowed);
   const orderedChangedPaths = fairChangedPathOrder(allowedChangedPaths.filter((filePath) => !represented.has(filePath)));
   const files = [];
+  const chunks = [];
+  const chunkedPaths = new Set();
   const omitted = allChangedPaths
     .filter((filePath) => !auditContextPathAllowed(filePath))
     .map((filePath) => ({ path: filePath, kind: 'changed', reason: 'non-material-or-generated', importedBy: null }));
@@ -177,23 +206,87 @@ export async function fetchBoundedAuditContext(repository, ref, changedPaths, to
   const seen = new Set(represented);
   let totalBytes = 0;
 
+  function representedFileCount() {
+    return files.length + chunkedPaths.size;
+  }
+
   function appendEvidence(evidence, kind, importedBy = null) {
     if (!evidence || seen.has(evidence.path)) return false;
-    if (files.length >= resolvedLimits.maxFiles) {
-      omitted.push({ path: evidence.path, kind, reason: 'max-files', importedBy });
+
+    if (representedFileCount() >= resolvedLimits.maxFiles) {
+      omitted.push({
+        path: evidence.path,
+        kind,
+        reason: 'max-files',
+        importedBy
+      });
       return false;
     }
+
     const bytes = Buffer.byteLength(evidence.content, 'utf8');
-    if (bytes > resolvedLimits.maxFileBytes) {
-      omitted.push({ path: evidence.path, kind, reason: 'max-file-bytes', bytes, importedBy });
-      return false;
-    }
+
     if (totalBytes + bytes > resolvedLimits.maxTotalBytes) {
-      omitted.push({ path: evidence.path, kind, reason: 'max-total-bytes', bytes, importedBy });
+      omitted.push({
+        path: evidence.path,
+        kind,
+        reason: bytes > resolvedLimits.maxFileBytes
+          ? 'max-file-bytes'
+          : 'max-total-bytes',
+        bytes,
+        importedBy
+      });
       return false;
     }
+
+    if (bytes > resolvedLimits.maxFileBytes) {
+      const parts = splitUtf8Chunks(
+        evidence.content,
+        resolvedLimits.maxFileBytes
+      );
+
+      const fileSha256 = sha256(evidence.content);
+      let byteOffset = 0;
+
+      for (let index = 0; index < parts.length; index += 1) {
+        const content = parts[index];
+        const chunkBytes = Buffer.byteLength(content, 'utf8');
+        const startByte = byteOffset;
+        const endByte = startByte + chunkBytes;
+
+        chunks.push(Object.freeze({
+          path: evidence.path,
+          blobSha: evidence.blobSha,
+          kind,
+          importedBy,
+          category: auditSemanticCategory(evidence.path),
+          chunkIndex: index,
+          chunkCount: parts.length,
+          startByte,
+          endByte,
+          bytes: chunkBytes,
+          fileBytes: bytes,
+          fileSha256,
+          content
+        }));
+
+        byteOffset = endByte;
+      }
+
+      if (byteOffset !== bytes) {
+        throw new Error(
+          `audit chunk coverage mismatch for ${evidence.path}`
+        );
+      }
+
+      seen.add(evidence.path);
+      chunkedPaths.add(evidence.path);
+      totalBytes += bytes;
+      return true;
+    }
+
     seen.add(evidence.path);
     totalBytes += bytes;
+
     files.push(Object.freeze({
       path: evidence.path,
       blobSha: evidence.blobSha,
@@ -203,23 +296,47 @@ export async function fetchBoundedAuditContext(repository, ref, changedPaths, to
       bytes,
       content: evidence.content
     }));
+
     return true;
   }
 
-  for (const filePath of orderedChangedPaths) {
-    if (files.length >= resolvedLimits.maxFiles || totalBytes >= resolvedLimits.maxTotalBytes) {
-      omitted.push({ path: filePath, kind: 'changed', reason: 'context-budget', importedBy: null });
-      continue;
-    }
-    const evidence = await fetchOptionalFileEvidenceAtRef(repository, filePath, ref, token);
-    if (!evidence) {
-      omitted.push({ path: filePath, kind: 'changed', reason: 'not-present-at-candidate', importedBy: null });
-      continue;
-    }
-    appendEvidence(evidence, 'changed');
-  }
+  const dependencySeeds = [];
 
-  const dependencySeeds = files.filter((item) => item.kind === 'changed');
+  for (const filePath of orderedChangedPaths) {
+    if (
+      representedFileCount() >= resolvedLimits.maxFiles ||
+      totalBytes >= resolvedLimits.maxTotalBytes
+    ) {
+      omitted.push({
+        path: filePath,
+        kind: 'changed',
+        reason: 'context-budget',
+        importedBy: null
+      });
+      continue;
+    }
+
+    const evidence = await fetchOptionalFileEvidenceAtRef(
+      repository,
+      filePath,
+      ref,
+      token
+    );
+
+    if (!evidence) {
+      omitted.push({
+        path: filePath,
+        kind: 'changed',
+        reason: 'not-present-at-candidate',
+        importedBy: null
+      });
+      continue;
+    }
+
+    if (appendEvidence(evidence, 'changed')) {
+      dependencySeeds.push(evidence);
+    }
+  }
   for (const filePath of allowedChangedPaths.filter((item) => represented.has(item) && auditSemanticCategory(item) === 'executable')) {
     const evidence = await fetchOptionalFileEvidenceAtRef(repository, filePath, ref, token);
     if (evidence) dependencySeeds.push(evidence);
@@ -230,7 +347,11 @@ export async function fetchBoundedAuditContext(repository, ref, changedPaths, to
   for (const changedFile of dependencySeeds) {
     for (const specifier of directRelativeImportSpecifiers(changedFile.content)) {
       for (const candidate of dependencyCandidates(changedFile.path, specifier)) {
-        if (dependencyProbes >= resolvedLimits.maxDependencyProbes || files.length >= resolvedLimits.maxFiles || totalBytes >= resolvedLimits.maxTotalBytes) break dependencyLoop;
+        if (
+          dependencyProbes >= resolvedLimits.maxDependencyProbes ||
+          representedFileCount() >= resolvedLimits.maxFiles ||
+          totalBytes >= resolvedLimits.maxTotalBytes
+        ) break dependencyLoop;
         dependencyProbes += 1;
         if (seen.has(candidate) || !auditContextPathAllowed(candidate)) continue;
         const evidence = await fetchOptionalFileEvidenceAtRef(repository, candidate, ref, token);
@@ -242,14 +363,16 @@ export async function fetchBoundedAuditContext(repository, ref, changedPaths, to
   }
 
   return Object.freeze({
-    schemaVersion: 2,
+    schemaVersion: 3,
     candidateSha,
-    strategy: 'supplemental-changed-files-plus-direct-relative-dependencies',
+    strategy: 'supplemental-changed-files-plus-direct-relative-dependencies-with-chunks',
     limits: resolvedLimits,
     totalBytes,
     dependencyProbes,
     representedPaths: Object.freeze([...represented]),
     files: Object.freeze(files),
+    chunks: Object.freeze(chunks),
+    chunkedPaths: Object.freeze([...chunkedPaths]),
     omitted: Object.freeze(omitted)
   });
 }
