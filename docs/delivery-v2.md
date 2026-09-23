@@ -55,6 +55,8 @@ All compiled provider/risk workers have an initial mode and a remediation mode. 
 
 A remediation worker cannot create a replacement PR. FAST applies the same file allowlist to both create-PR and remediation-push outputs. The trusted scope detector runs for Copilot, Codex and Claude at FAST, STANDARD and CRITICAL before either safe-output write path. Protected-file policy, repository allowlists, resolved provider/model policy and write-token isolation remain unchanged.
 
+A terminal remediation-worker failure may be re-armed without consuming another remediation attempt only when the material PR head is unchanged and deterministic recovery evidence exists. Recovery is allowed after a verified control-plane SHA change, at most once per controller SHA epoch, or after a persisted Safe Outputs metadata precondition is observably corrected, such as adding the required managed-PR title prefix. The original remediation context and attempt counters are preserved; ambiguous context, material-head drift, or repeated failure in the same recovery epoch remains fail-closed.
+
 ## Adaptive CI and exact-head release
 
 Target repositories continue to own concrete validation commands. The controller observes the target's stable required status and trusted source CI workflow from `config/delivery-v2-controller-targets.json`.

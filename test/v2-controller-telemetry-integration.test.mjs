@@ -54,7 +54,7 @@ test('resume controller persists partial legacy telemetry without fabricating hi
 
 test('resume persists failed remediation worker observation before surfacing failure', () => {
   const recoveredThrow = resumeController.indexOf(
-    'throw new Error(`persisted remediation worker failed: ${run.html_url}`);'
+    'persisted remediation worker failed: ${run.html_url}'
   );
   const recoveredRecord = resumeController.lastIndexOf(
     'await recordWorkerUsage(run);',
