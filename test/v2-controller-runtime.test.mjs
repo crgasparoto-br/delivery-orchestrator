@@ -410,3 +410,54 @@ test('CI remediation keeps real external failure fail-closed after standalone re
     'external'
   );
 });
+
+
+test('CI remediation preserves real external failures on remote-prefixed lines', () => {
+  for (const externalLine of [
+    'remote: Network timeout: ETIMEDOUT while connecting to external service.',
+    'remote: GitHub Actions billing quota exceeded; jobs cannot be started.',
+    'remote: API rate limit exceeded while contacting GitHub.'
+  ]) {
+    assert.equal(
+      ciFailureClassForEvidence({
+        conclusion: 'failure',
+        failedJobs: [{
+          name: 'Merge preview integration',
+          failedStepNames: ['TypeScript integration check'],
+          log: [
+            "server/service.ts(1,1): error TS2304: Cannot find name 'missingSymbol'.",
+            externalLine,
+            'Process completed with exit code 2.'
+          ].join('\n')
+        }]
+      }),
+      'external',
+      externalLine
+    );
+  }
+});
+
+test('CI remediation still ignores remote-prefixed Git metadata with infrastructure-like ref names', () => {
+  for (const metadataLine of [
+    'remote: * [new branch] fix/billing-quota-active -> origin/fix/billing-quota-active',
+    "remote: branch 'fix/billing-quota-active' set up to track 'origin/fix/billing-quota-active'.",
+    'remote: refs/heads/fix/billing-quota-active'
+  ]) {
+    assert.equal(
+      ciFailureClassForEvidence({
+        conclusion: 'failure',
+        failedJobs: [{
+          name: 'Merge preview integration',
+          failedStepNames: ['TypeScript integration check'],
+          log: [
+            metadataLine,
+            "server/service.ts(1,1): error TS2304: Cannot find name 'missingSymbol'.",
+            'Process completed with exit code 2.'
+          ].join('\n')
+        }]
+      }),
+      'actionable',
+      metadataLine
+    );
+  }
+});

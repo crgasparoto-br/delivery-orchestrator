@@ -51,21 +51,25 @@ function ciFailureEvidenceLines(failedJobs = []) {
 function isIncidentalCiMetadataLine(line) {
   const value = String(line ?? '').trim();
 
+  // Git can prefix transport metadata with `remote:`. Strip that prefix
+  // only while deciding whether the line is Git metadata. Real failures
+  // such as `remote: network timeout` must remain causal CI evidence.
+  const metadataValue = value.replace(/^remote:\s*/i, '');
+
   return (
-    /^\*?\s*\[(?:new|deleted) (?:branch|tag)\]/i.test(value)
-    || /(?:->|=>)\s*(?:origin\/)?[^\s]+$/i.test(value)
-    || /^from https?:\/\/github\.com\//i.test(value)
-    || /^remote:/i.test(value)
-    || /^switched to (?:a )?(?:new )?branch\b/i.test(value)
-    || /^already on ['"].+['"]\.?$/i.test(value)
-    || /^your branch is (?:up to date with|ahead of|behind) ['"].+['"]/i.test(value)
-    || /^branch ['"].+['"] set up to track\b/i.test(value)
-    || /^head is now at [0-9a-f]{7,40}\b/i.test(value)
-    || /^head detached (?:at|from)\b/i.test(value)
-    || /^refs\/(?:heads|remotes|tags)\/[^\s]+$/i.test(value)
+    /^\*?\s*\[(?:new|deleted) (?:branch|tag)\]/i.test(metadataValue)
+    || /(?:->|=>)\s*(?:origin\/)?[^\s]+$/i.test(metadataValue)
+    || /^from https?:\/\/github\.com\//i.test(metadataValue)
+    || /^switched to (?:a )?(?:new )?branch\b/i.test(metadataValue)
+    || /^already on ['"].+['"]\.?$/i.test(metadataValue)
+    || /^your branch is (?:up to date with|ahead of|behind) ['"].+['"]/i.test(metadataValue)
+    || /^branch ['"].+['"] set up to track\b/i.test(metadataValue)
+    || /^head is now at [0-9a-f]{7,40}\b/i.test(metadataValue)
+    || /^head detached (?:at|from)\b/i.test(metadataValue)
+    || /^refs\/(?:heads|remotes|tags)\/[^\s]+$/i.test(metadataValue)
     // Git commands and wrappers sometimes print only the checked-out ref.
     // A standalone ref-like token is metadata, not causal CI evidence.
-    || /^(?:[a-z0-9._-]+\/)+[a-z0-9._/-]+$/i.test(value)
+    || /^(?:[a-z0-9._-]+\/)+[a-z0-9._/-]+$/i.test(metadataValue)
   );
 }
 
