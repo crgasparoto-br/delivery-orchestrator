@@ -101,6 +101,15 @@ function formatTotal(summary) {
   return summary.total == null ? 'unknown' : String(summary.total);
 }
 
+/** Renders a counter that may be genuinely unknown, never coercing it to 0. */
+function formatCount(value) {
+  return value == null ? 'unknown' : String(value);
+}
+
+function formatAttempt(summary) {
+  return `${formatCount(summary.total)} (${summary.accounting})`;
+}
+
 export function printHumanSummary(payload, log = console.log) {
   const { period, totals } = payload;
   log('AI Usage & Cost Report');
@@ -109,6 +118,8 @@ export function printHumanSummary(payload, log = console.log) {
   log(`  store:             ${payload.storePath}`);
   log(`  deliveries:        ${totals.deliveries} in window (${payload.totalDeliveries} in store)`);
   log(`  provider runs:     ${totals.providerRuns}`);
+  // provider calls != ledger entries: zero-call and legacy rows are entries, not calls.
+  log(`  provider calls:    ${formatCount(totals.providerCalls)} (${totals.providerCallsAccounting})`);
   log(`  ledger entries:    ${totals.entriesCount}`);
   log(`  input tokens:      ${formatTotal(totals.usage.inputTokens)}`);
   log(`  output tokens:     ${formatTotal(totals.usage.outputTokens)}`);
@@ -131,6 +142,9 @@ export function printHumanSummary(payload, log = console.log) {
   log(`  legacy entries:    ${totals.legacyEntries}`);
   log(`  remediation runs:  ${totals.remediationRuns}`);
   log(`  audit runs:        ${totals.auditRuns}`);
+  log(`  implementation attempts: ${formatAttempt(totals.attempts.implementation)}`);
+  log(`  audit attempts:          ${formatAttempt(totals.attempts.audit)}`);
+  log(`  remediation attempts:    ${formatAttempt(totals.attempts.remediation)}`);
   if (payload.unknownTerminalTimestampEntries > 0) {
     log(`  excluded (unknown terminal timestamp): ${payload.unknownTerminalTimestampEntries}`);
   }
@@ -144,7 +158,7 @@ export function printHumanSummary(payload, log = console.log) {
     const cost = Object.entries(group.costByCurrency)
       .map(([currency, value]) => `${currency} ${value.effectiveCost}`)
       .join(' + ') || 'unknown';
-    log(`    ${key}: runs=${group.providerRuns} calls=${group.entriesCount} in=${formatTotal(group.usage.inputTokens)} out=${formatTotal(group.usage.outputTokens)} cost=${cost} unknownCost=${group.unknownCostEntries} (${group.accounting})`);
+    log(`    ${key}: runs=${group.providerRuns} calls=${formatCount(group.providerCalls)} entries=${group.entriesCount} implAttempts=${formatCount(group.implementationAttempts)} auditAttempts=${formatCount(group.auditAttempts)} remedAttempts=${formatCount(group.remediationAttempts)} in=${formatTotal(group.usage.inputTokens)} out=${formatTotal(group.usage.outputTokens)} cost=${cost} unknownCost=${group.unknownCostEntries} (${group.accounting})`);
   }
 
   if (payload.budget.warnings.length > 0) {

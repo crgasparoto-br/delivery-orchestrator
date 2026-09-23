@@ -687,15 +687,29 @@ below is derived exclusively from those facts:
   `--period`/`--today`/`--7d`/`--month`/`--from`/`--to`/`--timezone`/`--repo`/`--issue`/`--pr`/
   `--phase`/`--provider`/`--model`/`--group-by`. `--group-by` supports at least `repository`,
   `issue`, `pr`, `phase`, `provider` and `model` (plus `worker`, `role`, `risk`, `delivery`,
-  `day`, `kind`). The human output reports period, timezone, provider runs/calls, input/output/
+  `day`, `kind`, `workflow-run`, `implementation-attempt` and `remediation-attempt`). The human
+  output reports period, timezone, provider runs, provider calls, ledger entries, input/output/
   total tokens, credits, known effective cost per currency, unknown-cost count, unknown/partial
-  usage counts, the requested breakdown and budget warnings. The manual
+  usage counts, implementation/audit/remediation attempts, the requested breakdown and budget
+  warnings. The manual
   `Delivery V2 - AI Usage Report` workflow (`.github/workflows/delivery-v2-ai-usage-report.yml`,
   `workflow_dispatch` with `period`/`from`/`to`/`timezone`/`repository`/`group_by`) runs the
   identical CLI to produce one JSON payload, then `scripts/ai-usage-export.mjs` derives the Job
   Summary, `ai-usage-report.csv` and `ai-usage-report.html` from that single payload, so every
   surface reports the same totals by construction. CSV and JSON preserve `unknown` literally and
-  carry usage/calls/attempts, not only cost.
+  carry usage/calls/attempts, not only cost, with explicit `providerCalls` and
+  `implementationAttempts`/`auditAttempts`/`remediationAttempts` columns.
+- **Calls are not ledger rows.** `entriesCount` counts rows of the ledger projection;
+  `providerCalls` counts real provider calls. A delivery proven to have made no provider call is
+  one ledger entry with `providerCalls: 0`. A pre-ledger legacy row carries no call identity, so
+  it is counted in `unknownProviderCallEntries` and leaves `providerCalls` unknown instead of
+  fabricating calls.
+- **Contractual attempts.** `implementationAttempts` and `remediationAttempts` are counts of
+  DISTINCT attempt identities per delivery, taken from the attempt fields the ledger already
+  persists — never the sum of the per-run attempt numbers, so several provider runs of one
+  attempt stay one attempt. `auditAttempts` is the canonical delivery-level `attempts.audit`,
+  read once per delivery. When history cannot determine an attempt identity, the metric stays
+  `unknown`/`partial` rather than being reported as zero.
 - **Delivery closing summary.** When telemetry exists, the controller result carries an
   `## AI usage` block (`src/v2/ai-usage-summary.mjs`) with per-phase calls/tokens, known cost per
   currency, unknown-cost run count, input/output tokens and AI calls. Its accounting line says

@@ -32,7 +32,10 @@ on:
         required: false
         type: string
       group_by:
-        description: Comma-separated grouping dimensions.
+        description: >-
+          Comma-separated grouping dimensions: repository, issue, pr, phase, provider, model,
+          worker, role, risk, delivery, day, kind, workflow-run, implementation-attempt,
+          remediation-attempt. Validated by scripts/ai-usage-report.mjs.
         required: false
         default: repository,phase
         type: string

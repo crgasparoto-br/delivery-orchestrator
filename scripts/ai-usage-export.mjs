@@ -19,6 +19,11 @@ function totalOrUnknown(summary) {
   return summary?.total == null ? UNKNOWN : summary.total;
 }
 
+/** A counter that may be genuinely unknown is rendered as `unknown`, never as 0. */
+function countOrUnknown(value) {
+  return value == null ? UNKNOWN : value;
+}
+
 function costCells(group) {
   const currencies = Object.keys(group.costByCurrency);
   if (currencies.length === 0) return [[UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN]];
@@ -36,22 +41,35 @@ function costCells(group) {
 export function toCsv(report) {
   const rows = [[
     'group', 'currency', 'reportedCost', 'estimatedCost', 'effectiveCost', 'costAccounting',
-    'entries', 'providerRuns', 'deliveries', 'zeroProviderCallEntries', 'legacyEntries',
+    // `entries` counts ledger/projection rows; `providerCalls` counts real provider calls.
+    // They are different quantities and both are exported.
+    'entries', 'providerRuns', 'providerCalls', 'providerCallsAccounting',
+    'unknownProviderCallEntries',
+    'deliveries', 'zeroProviderCallEntries', 'legacyEntries',
     'unknownCostEntries', 'unknownUsageEntries', 'partialUsageEntries',
     'inputTokens', 'outputTokens', 'totalTokens', 'turns', 'credits',
-    'remediationRuns', 'auditRuns'
+    'remediationRuns', 'auditRuns',
+    'implementationAttempts', 'implementationAttemptsAccounting',
+    'auditAttempts', 'auditAttemptsAccounting',
+    'remediationAttempts', 'remediationAttemptsAccounting'
   ]];
   for (const [key, group] of Object.entries(report.groups)) {
     for (const [currency, reported, estimated, effective] of costCells(group)) {
       rows.push([
         key, currency, reported, estimated, effective, group.accounting,
-        group.entriesCount, group.providerRuns, group.deliveries,
+        group.entriesCount, group.providerRuns,
+        countOrUnknown(group.providerCalls), group.providerCallsAccounting,
+        group.unknownProviderCallEntries,
+        group.deliveries,
         group.zeroProviderCallEntries, group.legacyEntries,
         group.unknownCostEntries, group.unknownUsageEntries, group.partialUsageEntries,
         totalOrUnknown(group.usage.inputTokens), totalOrUnknown(group.usage.outputTokens),
         totalOrUnknown(group.usage.totalTokens), totalOrUnknown(group.usage.turns),
         totalOrUnknown(group.usage.credits),
-        group.remediationRuns, group.auditRuns
+        group.remediationRuns, group.auditRuns,
+        countOrUnknown(group.attempts.implementation.total), group.attempts.implementation.accounting,
+        countOrUnknown(group.attempts.audit.total), group.attempts.audit.accounting,
+        countOrUnknown(group.attempts.remediation.total), group.attempts.remediation.accounting
       ]);
     }
   }
@@ -76,6 +94,11 @@ function breakdownTable(title, groups, { labelHeader = 'Group' } = {}) {
     <td>${escapeHtml(key)}</td>
     <td>${escapeHtml(formatCost(group))}</td>
     <td>${group.providerRuns}</td>
+    <td>${escapeHtml(String(countOrUnknown(group.providerCalls)))}</td>
+    <td>${group.entriesCount}</td>
+    <td>${escapeHtml(String(countOrUnknown(group.attempts.implementation.total)))}</td>
+    <td>${escapeHtml(String(countOrUnknown(group.attempts.audit.total)))}</td>
+    <td>${escapeHtml(String(countOrUnknown(group.attempts.remediation.total)))}</td>
     <td>${escapeHtml(String(totalOrUnknown(group.usage.inputTokens)))}</td>
     <td>${escapeHtml(String(totalOrUnknown(group.usage.outputTokens)))}</td>
     <td>${group.unknownCostEntries}</td>
@@ -83,9 +106,9 @@ function breakdownTable(title, groups, { labelHeader = 'Group' } = {}) {
   </tr>`).join('\n');
   return `<h2>${escapeHtml(title)}</h2>
 <table>
-<thead><tr><th>${escapeHtml(labelHeader)}</th><th>Known effective cost</th><th>Provider runs</th><th>Input tokens</th><th>Output tokens</th><th>Unknown cost</th><th>Accounting</th></tr></thead>
+<thead><tr><th>${escapeHtml(labelHeader)}</th><th>Known effective cost</th><th>Provider runs</th><th>Provider calls</th><th>Ledger entries</th><th>Impl attempts</th><th>Audit attempts</th><th>Remediation attempts</th><th>Input tokens</th><th>Output tokens</th><th>Unknown cost</th><th>Accounting</th></tr></thead>
 <tbody>
-${rows || '<tr><td colspan="7">no entries in window</td></tr>'}
+${rows || '<tr><td colspan="12">no entries in window</td></tr>'}
 </tbody>
 </table>`;
 }
@@ -155,7 +178,7 @@ export function toHtml(report) {
   <dt>Generated</dt><dd>${escapeHtml(report.generatedAtIso)}</dd>
   <dt>Store</dt><dd>${escapeHtml(report.storePath)}</dd>
   <dt>Deliveries</dt><dd>${totals.deliveries} in window (${report.totalDeliveries} in store)</dd>
-  <dt>Provider runs / calls</dt><dd>${totals.providerRuns} runs, ${totals.entriesCount} ledger entries</dd>
+  <dt>Provider runs / calls</dt><dd>${totals.providerRuns} runs, ${escapeHtml(String(countOrUnknown(totals.providerCalls)))} provider calls (${escapeHtml(totals.providerCallsAccounting)}), ${totals.entriesCount} ledger entries</dd>
   <dt>Input tokens</dt><dd>${escapeHtml(String(totalOrUnknown(totals.usage.inputTokens)))}</dd>
   <dt>Output tokens</dt><dd>${escapeHtml(String(totalOrUnknown(totals.usage.outputTokens)))}</dd>
   <dt>Total tokens</dt><dd>${escapeHtml(String(totalOrUnknown(totals.usage.totalTokens)))}</dd>
@@ -166,6 +189,9 @@ export function toHtml(report) {
   <dt>Legacy entries</dt><dd>${totals.legacyEntries}</dd>
   <dt>Audits</dt><dd>${totals.auditRuns}</dd>
   <dt>Remediations</dt><dd>${totals.remediationRuns}</dd>
+  <dt>Implementation attempts</dt><dd>${escapeHtml(String(countOrUnknown(totals.attempts.implementation.total)))} (${escapeHtml(totals.attempts.implementation.accounting)})</dd>
+  <dt>Audit attempts</dt><dd>${escapeHtml(String(countOrUnknown(totals.attempts.audit.total)))} (${escapeHtml(totals.attempts.audit.accounting)})</dd>
+  <dt>Remediation attempts</dt><dd>${escapeHtml(String(countOrUnknown(totals.attempts.remediation.total)))} (${escapeHtml(totals.attempts.remediation.accounting)})</dd>
   <dt>Excluded (unknown terminal timestamp)</dt><dd>${report.unknownTerminalTimestampEntries}</dd>
   <dt>Overall accounting</dt><dd><strong>${escapeHtml(totals.accounting)}</strong></dd>
 </dl>
@@ -205,6 +231,7 @@ export function toJobSummary(report) {
   lines.push('| --- | --- |');
   lines.push(`| Deliveries in window | ${totals.deliveries} (${report.totalDeliveries} in store) |`);
   lines.push(`| Provider runs | ${totals.providerRuns} |`);
+  lines.push(`| Provider calls | ${countOrUnknown(totals.providerCalls)} (${totals.providerCallsAccounting}) |`);
   lines.push(`| Ledger entries | ${totals.entriesCount} |`);
   lines.push(`| Input tokens | ${totalOrUnknown(totals.usage.inputTokens)} |`);
   lines.push(`| Output tokens | ${totalOrUnknown(totals.usage.outputTokens)} |`);
@@ -216,6 +243,9 @@ export function toJobSummary(report) {
   lines.push(`| Legacy entries | ${totals.legacyEntries} |`);
   lines.push(`| Audits | ${totals.auditRuns} |`);
   lines.push(`| Remediations | ${totals.remediationRuns} |`);
+  lines.push(`| Implementation attempts | ${countOrUnknown(totals.attempts.implementation.total)} (${totals.attempts.implementation.accounting}) |`);
+  lines.push(`| Audit attempts | ${countOrUnknown(totals.attempts.audit.total)} (${totals.attempts.audit.accounting}) |`);
+  lines.push(`| Remediation attempts | ${countOrUnknown(totals.attempts.remediation.total)} (${totals.attempts.remediation.accounting}) |`);
   lines.push(`| Excluded (unknown terminal timestamp) | ${report.unknownTerminalTimestampEntries} |`);
   lines.push(`| Accounting | **${totals.accounting}** |`);
   lines.push('');
@@ -234,15 +264,15 @@ export function toJobSummary(report) {
   lines.push('');
   lines.push('### Requested breakdown');
   lines.push('');
-  lines.push('| Group | Known effective cost | Provider runs | Input | Output | Unknown cost | Accounting |');
-  lines.push('| --- | --- | --- | --- | --- | --- | --- |');
+  lines.push('| Group | Known effective cost | Provider runs | Provider calls | Ledger entries | Impl attempts | Audit attempts | Remediation attempts | Input | Output | Unknown cost | Accounting |');
+  lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
   const groupKeys = Object.keys(report.groups);
   if (groupKeys.length === 0) {
-    lines.push('| _(no entries in window)_ | - | - | - | - | - | - |');
+    lines.push('| _(no entries in window)_ | - | - | - | - | - | - | - | - | - | - | - |');
   }
   for (const key of groupKeys) {
     const group = report.groups[key];
-    lines.push(`| ${key} | ${formatCost(group)} | ${group.providerRuns} | ${totalOrUnknown(group.usage.inputTokens)} | ${totalOrUnknown(group.usage.outputTokens)} | ${group.unknownCostEntries} | ${group.accounting} |`);
+    lines.push(`| ${key} | ${formatCost(group)} | ${group.providerRuns} | ${countOrUnknown(group.providerCalls)} | ${group.entriesCount} | ${countOrUnknown(group.attempts.implementation.total)} | ${countOrUnknown(group.attempts.audit.total)} | ${countOrUnknown(group.attempts.remediation.total)} | ${totalOrUnknown(group.usage.inputTokens)} | ${totalOrUnknown(group.usage.outputTokens)} | ${group.unknownCostEntries} | ${group.accounting} |`);
   }
   if (report.budget.warnings.length > 0) {
     lines.push('');

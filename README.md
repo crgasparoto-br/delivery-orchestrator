@@ -158,10 +158,25 @@ compares real instants, so `Z` and `+00:00` are equivalent, and boundaries are i
 `--from`/`--to`, `--timezone` (UTC by default, or a fixed `±HH:MM` offset; named timezones are
 rejected), `--repo`, `--issue`, `--pr`, `--phase`, `--provider`, `--model`, `--group-by`
 (default `repository,phase`; supports `repository`, `issue`, `pr`, `phase`, `provider`, `model`,
-`worker`, `role`, `risk`, `delivery`, `day`, `kind`), `--metrics-file`, `--budget-file`,
+`worker`, `role`, `risk`, `delivery`, `day`, `kind`, `workflow-run`, `implementation-attempt`
+and `remediation-attempt`), `--metrics-file`, `--budget-file`,
 `--allow-missing-store`, `--json` and `--out`. The human output reports period, timezone,
-provider runs/calls, input/output/total tokens, credits, known effective cost per currency,
-unknown-cost count, unknown/partial usage counts, the requested breakdown and budget warnings.
+provider runs, provider calls, ledger entries, input/output/total tokens, credits, known
+effective cost per currency, unknown-cost count, unknown/partial usage counts,
+implementation/audit/remediation attempts, the requested breakdown and budget warnings.
+
+**Calls vs. ledger entries.** `entriesCount` counts rows of the ledger projection; `providerCalls`
+counts real provider calls. They are different quantities and both are exported. A delivery proven
+to have made no provider call is one ledger entry with `providerCalls: 0`, never `calls=1`. A
+pre-ledger legacy row carries no call identity, so it contributes to `unknownProviderCallEntries`
+and leaves `providerCalls` unknown instead of fabricating calls.
+
+**Attempts.** `implementationAttempts` and `remediationAttempts` count DISTINCT attempt identities
+per delivery, from the attempt fields the ledger already persists — never the sum of the per-run
+attempt numbers, so two provider runs of the same implementation attempt are 2 runs and 1 attempt.
+`auditAttempts` is the canonical delivery-level `attempts.audit`, read once per delivery rather
+than once per run. When history cannot determine an attempt identity, the metric stays
+`unknown`/`partial` instead of being reported as zero.
 
 **Workflow and exports.** The manual **Delivery V2 - AI Usage Report** workflow
 (`workflow_dispatch`, inputs `period`/`from`/`to`/`timezone`/`repository`/`group_by`) runs the
@@ -169,7 +184,9 @@ identical CLI to produce one JSON payload, then `scripts/ai-usage-export.mjs` de
 Summary plus `ai-usage-report.json`/`.csv`/`.html` from that single payload, so every surface
 agrees on totals by construction. The HTML adds cost per day, per repository, per phase and per
 provider/model, the highest-consumption issues and pull requests, and audit/remediation counts.
-CSV and JSON preserve `unknown` literally and carry usage/calls/attempts, not only cost.
+CSV and JSON preserve `unknown` literally and carry usage/calls/attempts, not only cost, with
+explicit `providerCalls` and `implementationAttempts`/`auditAttempts`/`remediationAttempts`
+columns.
 
 **Delivery closing summary.** When telemetry exists, the controller result carries an
 `## AI usage` block (`src/v2/ai-usage-summary.mjs`) with per-phase calls/tokens, known cost per

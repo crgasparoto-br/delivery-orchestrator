@@ -290,6 +290,21 @@ function summarizeUsage(entries) {
  * - `unknownCostEntries`: real provider runs whose cost could not be determined;
  * - `zeroProviderCallEntries`: deliveries proven to have made no provider call (not unknown);
  * - `legacyEntries`: pre-ledger records with delivery-level evidence only.
+ *
+ * `entriesCount` and `providerCalls` are NOT interchangeable and both are reported:
+ * - `entriesCount`: rows of this ledger/projection, including `zero-calls` and `legacy-aggregate`
+ *   rows that are not provider calls at all;
+ * - `providerCalls`: real provider calls actually known. A `run` row is one call, a `zero-calls`
+ *   row proves zero calls, and a `legacy-aggregate` row carries no call identity, so it is
+ *   counted in `unknownProviderCallEntries` instead of fabricating calls. A window whose only
+ *   evidence is legacy keeps `providerCalls: null` (unknown), never 0.
+ *
+ * Attempts (`attempts.implementation`/`audit`/`remediation`) are derived from DISTINCT identities,
+ * never by summing per-run attempt numbers: several provider runs of the same delivery can belong
+ * to the same implementation attempt. Implementation/remediation attempts use the attempt fields
+ * persisted in the ledger keyed by `deliveryId`; audit attempts use the canonical delivery-level
+ * `attempts.audit` of the record. An entry that cannot carry attempt identity is counted as
+ * unknown, so incomplete history stays `partial`/`unknown` instead of being reported as 0.
  */
 export function aggregateLedgerEntries(entries) {
   const byCurrency = new Map();
@@ -302,11 +317,26 @@ export function aggregateLedgerEntries(entries) {
   let remediationRuns = 0;
   let auditRuns = 0;
   const deliveries = new Set();
+  // Distinct attempt identities, so N provider runs of one attempt stay ONE attempt.
+  const implementationAttemptIds = new Set();
+  const remediationAttemptIds = new Set();
+  const auditAttemptsByDelivery = new Map();
+  let unknownImplementationAttemptEntries = 0;
+  let unknownRemediationAttemptEntries = 0;
+  let unknownAuditAttemptEntries = 0;
 
   for (const entry of entries) {
     deliveries.add(entry.deliveryId);
+    // `attempts.audit` is the canonical delivery-level count the controller persisted; it is read
+    // once per delivery, never summed per entry.
+    if (entry.auditAttempts == null) unknownAuditAttemptEntries += 1;
+    else auditAttemptsByDelivery.set(entry.deliveryId, entry.auditAttempts);
     if (entry.kind === 'zero-calls') {
       zeroProviderCallEntries += 1;
+      // A proven zero-call delivery carries no run-level attempt identity; it is unknown here
+      // rather than an implementation/remediation attempt of 0.
+      unknownImplementationAttemptEntries += 1;
+      unknownRemediationAttemptEntries += 1;
       continue;
     }
     if (entry.kind === 'legacy-aggregate') legacyEntries += 1;
@@ -317,6 +347,11 @@ export function aggregateLedgerEntries(entries) {
       if (entry.usageAccounting === 'unknown') unknownUsageEntries += 1;
       else if (entry.usageAccounting === 'partial') partialUsageEntries += 1;
     }
+    if (entry.implementationAttempt == null) unknownImplementationAttemptEntries += 1;
+    else implementationAttemptIds.add(`${entry.deliveryId}#${entry.implementationAttempt}`);
+    if (entry.remediationAttempt == null) unknownRemediationAttemptEntries += 1;
+    // `remediationAttempt === 0` means "no remediation happened yet", not a remediation attempt.
+    else if (entry.remediationAttempt > 0) remediationAttemptIds.add(`${entry.deliveryId}#${entry.remediationAttempt}`);
 
     if (!entry.effectiveCost) {
       unknownCostEntries += 1;
@@ -352,10 +387,49 @@ export function aggregateLedgerEntries(entries) {
     ? 'unknown'
     : (unknownCostEntries > 0 || legacyEntries > 0 || anyCurrencyPartial ? 'partial' : 'complete');
 
+  // Real provider calls. Only `run` (one call each) and `zero-calls` (proven zero) rows carry
+  // call identity; legacy rows do not, so a window with no such evidence stays unknown.
+  const callEvidenceEntries = providerRuns + zeroProviderCallEntries;
+  const providerCalls = callEvidenceEntries > 0 ? providerRuns : null;
+  const providerCallsAccounting = providerCalls == null
+    ? 'unknown'
+    : (legacyEntries > 0 ? 'partial' : 'complete');
+
+  const attemptSummary = (knownCount, unknownEntries, hasKnown) => Object.freeze({
+    // Never coerced to zero: no attempt identity at all means genuinely unknown.
+    total: hasKnown ? knownCount : null,
+    unknownEntries,
+    accounting: !hasKnown ? 'unknown' : (unknownEntries > 0 ? 'partial' : 'complete')
+  });
+
+  const auditAttemptsTotal = [...auditAttemptsByDelivery.values()].reduce((sum, value) => sum + value, 0);
+  const attempts = Object.freeze({
+    implementation: attemptSummary(
+      implementationAttemptIds.size,
+      unknownImplementationAttemptEntries,
+      implementationAttemptIds.size > 0
+    ),
+    audit: attemptSummary(auditAttemptsTotal, unknownAuditAttemptEntries, auditAttemptsByDelivery.size > 0),
+    remediation: attemptSummary(
+      remediationAttemptIds.size,
+      unknownRemediationAttemptEntries,
+      // A run row with a known `remediationAttempt` of 0 proves "zero remediation attempts"; it
+      // is a known identity even though it adds nothing to the distinct set.
+      unknownRemediationAttemptEntries < entries.length
+    )
+  });
+
   return Object.freeze({
     entriesCount: entries.length,
     deliveries: deliveries.size,
     providerRuns,
+    providerCalls,
+    providerCallsAccounting,
+    unknownProviderCallEntries: legacyEntries,
+    implementationAttempts: attempts.implementation.total,
+    auditAttempts: attempts.audit.total,
+    remediationAttempts: attempts.remediation.total,
+    attempts,
     zeroProviderCallEntries,
     legacyEntries,
     unknownCostEntries,
@@ -382,7 +456,12 @@ export const GROUP_BY_DIMENSIONS = Object.freeze({
   risk: 'risk',
   delivery: 'deliveryId',
   day: '__day',
-  kind: 'kind'
+  kind: 'kind',
+  // Issue #213 requires aggregating by workflow run and by implementation/remediation attempt.
+  // The ledger already persists these; these are their CLI-facing names.
+  'workflow-run': 'workflowRunId',
+  'implementation-attempt': 'implementationAttempt',
+  'remediation-attempt': 'remediationAttempt'
 });
 
 function dimensionValue(entry, dimension) {
