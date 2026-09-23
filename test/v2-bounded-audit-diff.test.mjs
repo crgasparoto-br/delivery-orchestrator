@@ -281,3 +281,36 @@ test('GitHub-native auditor uses one deterministic preflight barrier before supp
   assert.match(script, /'CANDIDATE\.diff': diffEvidence\.text/);
   assert.doesNotMatch(script, /'CANDIDATE\.diff': compareEvidence\.diffText/);
 });
+
+test('GitHub-native audit prompt explicitly accepts complete exact-SHA chunked material', async () => {
+  const script = await import('node:fs/promises').then(
+    ({ readFile }) =>
+      readFile(
+        new URL(
+          '../scripts/run-delivery-v2-github-audit.mjs',
+          import.meta.url
+        ),
+        'utf8'
+      )
+  );
+
+  assert.match(
+    script,
+    /MATERIAL_CONTEXT\.json may represent a large exact-SHA text file as ordered chunks/
+  );
+
+  assert.match(
+    script,
+    /contiguous byte coverage from 0 through fileBytes/
+  );
+
+  assert.match(
+    script,
+    /A fully covered chunked file is represented material, not omitted context/
+  );
+
+  assert.match(
+    script,
+    /chunkCount: materialContext\.chunks\?\.length/
+  );
+});

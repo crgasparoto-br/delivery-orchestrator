@@ -82,7 +82,7 @@ function auditPrompt(request) {
     '',
     'Your entire allowed context is the sanitized bundle in the current working directory: AUDIT_REQUEST.json, DELIVERY_CONTRACT.md, ISSUE.json, PULL_REQUEST.json, CANDIDATE.diff, DIFF_MANIFEST.json and MATERIAL_CONTEXT.json. ISSUE.json and PULL_REQUEST.json are deterministic bounded projections, not raw GitHub API objects. Do not seek implementation conversation history, hidden implementer reasoning, retired delivery snapshots, generated workflow locks or unrelated repository inventory. Do not modify files or Git state.',
     '',
-    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, derives each represented path from its own Git diff identity, and uses the same shared semantic classifier as MATERIAL_CONTEXT.json. Before any supplemental file reads or model invocation, the runtime requires exact diff-path alignment and complete representation of every material required semantic class present in the candidate: executable source, tests, contract/config, evidence, canonical docs and active worker prompts. File-count, per-file, aggregate-byte, malformed-path and reservation failures all use the same deterministic fail-closed preflight and produce a zero-provider-call context-insufficient rejection. Only a ready bounded diff may seed supplemental material context; represented paths are never charged twice. Generated locks never displace semantic material and every changed path remains represented or explicitly omitted with a reason. Respect both manifests and their fixed limits. If a release-blocking conclusion genuinely depends on still-omitted context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
+    'CANDIDATE.diff is a deterministic bounded subset of the exact base-to-candidate unified diff. DIFF_MANIFEST.json binds the full diff by SHA-256 and byte count, derives each represented path from its own Git diff identity, and uses the same shared semantic classifier as MATERIAL_CONTEXT.json. MATERIAL_CONTEXT.json may represent a large exact-SHA text file as ordered chunks. For a chunked file, require one common path/blobSha/fileSha256, contiguous byte coverage from 0 through fileBytes, chunkIndex 0..chunkCount-1 with no gaps, and use the ordered concatenation as the complete file evidence. A fully covered chunked file is represented material, not omitted context. Before any supplemental file reads or model invocation, the runtime requires exact diff-path alignment and complete representation of every material required semantic class present in the candidate: executable source, tests, contract/config, evidence, canonical docs and active worker prompts. File-count, aggregate-byte, malformed-path and reservation failures all use the same deterministic fail-closed preflight and produce a zero-provider-call context-insufficient rejection. Only a ready bounded diff may seed supplemental material context; represented paths are never charged twice. Generated locks never displace semantic material and every changed path remains represented, chunked with complete coverage, or explicitly omitted with a reason. Respect both manifests and their fixed limits. If a release-blocking conclusion genuinely depends on still-omitted context, report a concrete audit-context-insufficient finding instead of guessing or browsing outside the bundle.',
     '',
     `Audit exactly candidate ${request.candidate.materialHeadSha}. Treat AUDIT_REQUEST.json identity/check evidence as authoritative. First verify the issue acceptance contract against the bounded candidate diff and supplemental material context available in the bundle, then apply Delivery V2 invariants. Return all cheap blocking findings in one pass. Findings must identify concrete candidate behavior/configuration and discriminating evidence. Do not reject hypothetical future code that is absent from this candidate.`,
     '',
@@ -126,6 +126,8 @@ function blockedMaterialContext(candidateSha, changedPaths, riskProfile, preflig
     dependencyProbes: 0,
     representedPaths: Object.freeze([]),
     files: Object.freeze([]),
+    chunks: Object.freeze([]),
+    chunkedPaths: Object.freeze([]),
     omitted: Object.freeze(uniqueChangedPaths.map((filePath) => Object.freeze({
       path: filePath,
       kind: 'changed',
@@ -167,6 +169,8 @@ function auditContextPayload({ budget, diffEvidence, materialContext }) {
       limits: materialContext.limits,
       totalBytes: materialContext.totalBytes,
       fileCount: materialContext.files.length,
+      chunkCount: materialContext.chunks?.length ?? 0,
+      chunkedPathCount: materialContext.chunkedPaths?.length ?? 0,
       representedPathCount: materialContext.representedPaths?.length ?? 0,
       omittedCount: materialContext.omitted.length
     }
