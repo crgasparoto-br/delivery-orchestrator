@@ -1069,6 +1069,7 @@ export async function main() {
     role,
     implementationAttempt: state?.implementationAttempts ?? null,
     remediationAttempt: state?.auditRemediationAttempts ?? null,
+    auditAttempt: phase === 'audit' ? (state?.auditAttempts ?? null) : null,
     startedAtIso: run.run_started_at ?? null,
     endedAtIso: run.updated_at ?? null,
     terminalState: run.conclusion ?? null,

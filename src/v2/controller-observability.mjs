@@ -94,6 +94,7 @@ function normalizeLedgerEntry(value, label) {
     role: nullableString(entry.role, `${label}.role`, { lower: true }),
     implementationAttempt: nullableNonNegativeInteger(entry.implementationAttempt, `${label}.implementationAttempt`),
     remediationAttempt: nullableNonNegativeInteger(entry.remediationAttempt, `${label}.remediationAttempt`),
+    auditAttempt: nullableNonNegativeInteger(entry.auditAttempt, `${label}.auditAttempt`),
     usage: normalizeGhAwUsage(entry.usage ?? {}),
     cache: Object.freeze({
       cacheReadInputTokens: nullableNonNegativeInteger(entry.cache?.cacheReadInputTokens ?? null, `${label}.cache.cacheReadInputTokens`),
@@ -296,6 +297,7 @@ export function recordControllerProviderObservation(raw, {
   materialHeadSha = null,
   implementationAttempt = null,
   remediationAttempt = null,
+  auditAttempt = null,
   terminalState = null,
   startedAtIso = null,
   endedAtIso = null,
@@ -353,6 +355,7 @@ export function recordControllerProviderObservation(raw, {
     role,
     implementationAttempt,
     remediationAttempt,
+    auditAttempt,
     usage: normalizedUsage,
     cache: {
       cacheReadInputTokens: evidence.cacheReadInputTokens,

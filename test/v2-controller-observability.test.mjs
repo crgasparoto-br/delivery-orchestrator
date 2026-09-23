@@ -316,3 +316,33 @@ test('legacy observability without failed-audit accounting is explicitly incompl
   assert.deepEqual(normalized.failedAuditRunIds, []);
   assert.equal(normalized.auditTimingComplete, false);
 });
+
+
+test('auditAttempt survives canonical controller observability normalization and ledger persistence', () => {
+  let state = createControllerObservability({ startedAtMs: 1000 });
+
+  state = recordControllerProviderObservation(state, {
+    runId: 88001,
+    stage: 'audit',
+    phase: 'audit',
+    provider: 'copilot',
+    durationMs: 0,
+    implementationAttempt: 2,
+    remediationAttempt: 1,
+    auditAttempt: 3,
+    usage: { turns: 1 },
+    evidenceRef: 'run:88001'
+  });
+
+  assert.equal(state.providerRunLedger.length, 1);
+  assert.equal(state.providerRunLedger[0].phase, 'audit');
+  assert.equal(state.providerRunLedger[0].implementationAttempt, 2);
+  assert.equal(state.providerRunLedger[0].remediationAttempt, 1);
+  assert.equal(state.providerRunLedger[0].auditAttempt, 3);
+
+  const normalized = normalizeControllerObservability(
+    JSON.parse(JSON.stringify(state))
+  );
+
+  assert.equal(normalized.providerRunLedger[0].auditAttempt, 3);
+});

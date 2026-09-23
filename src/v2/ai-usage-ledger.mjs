@@ -342,11 +342,12 @@ function summarizeUsage(entries) {
  * never by summing per-run attempt numbers: several provider runs of the same delivery can belong
  * to the same implementation attempt.
  *
- * Every attempt counter is scoped to the entries actually aggregated here, because this function
- * is also what `groupLedgerEntries` runs over each group. Implementation and remediation attempts
- * come from the run-granular attempt identity the ledger persists, and only from the runs of the
- * corresponding phase, so a group of audit runs never reports the implementation attempts those
- * runs merely happened under.
+ * Every attempt counter is scoped to the entries actually aggregated here. For whole-delivery
+ * aggregation, run-granular implementation/remediation identities may legitimately be carried by
+ * later phases as delivery context and still identify the same distinct attempt. When
+ * `groupLedgerEntries` explicitly groups by `phase`, however, implementation/remediation counts
+ * are restricted to their corresponding semantic phase so an audit subgroup never inherits the
+ * implementation/remediation attempts those runs merely happened under.
  *
  * Audit attempts are the delicate case, because the canonical `attempts.audit` is DELIVERY-level.
  * It may only be attributed to this scope when the scope provably covers that delivery's whole
@@ -361,7 +362,7 @@ function summarizeUsage(entries) {
  * substitute for an attempt count: `providerRuns`, `providerCalls`, `entriesCount` and the three
  * attempt counters are distinct quantities and all of them are reported.
  */
-export function aggregateLedgerEntries(entries) {
+export function aggregateLedgerEntries(entries, { phaseScoped = false } = {}) {
   const byCurrency = new Map();
   let unknownCostEntries = 0;
   let zeroProviderCallEntries = 0;
@@ -422,14 +423,30 @@ export function aggregateLedgerEntries(entries) {
       if (entry.usageAccounting === 'unknown') unknownUsageEntries += 1;
       else if (entry.usageAccounting === 'partial') partialUsageEntries += 1;
     }
-    // Implementation and remediation attempts are already scope-safe: the identity lives on the
-    // entry itself (`deliveryId#attempt`), so a group only ever counts the attempts its own
-    // entries belong to, and several runs of one attempt collapse into that one attempt.
-    if (entry.implementationAttempt == null) unknownImplementationAttemptEntries += 1;
-    else implementationAttemptIds.add(`${entry.deliveryId}#${entry.implementationAttempt}`);
-    if (entry.remediationAttempt == null) unknownRemediationAttemptEntries += 1;
-    // `remediationAttempt === 0` means "no remediation happened yet", not a remediation attempt.
-    else if (entry.remediationAttempt > 0) remediationAttemptIds.add(`${entry.deliveryId}#${entry.remediationAttempt}`);
+    // Attempt identities may travel with later phases as delivery context.
+    //
+    // Whole-delivery/window aggregation:
+    //   contextual identities remain valid evidence and distinct attempts are counted.
+    //
+    // Explicit phase aggregation:
+    //   a subgroup describes only attempts of its own semantic phase. Therefore an audit
+    //   subgroup must not inherit implementation/remediation attempts merely carried as context.
+    if (!phaseScoped || entry.phase === 'implementation') {
+      if (entry.implementationAttempt == null) {
+        unknownImplementationAttemptEntries += 1;
+      } else {
+        implementationAttemptIds.add(`${entry.deliveryId}#${entry.implementationAttempt}`);
+      }
+    }
+
+    if (!phaseScoped || entry.phase === 'remediation') {
+      if (entry.remediationAttempt == null) {
+        unknownRemediationAttemptEntries += 1;
+      // remediationAttempt === 0 proves that no remediation attempt happened yet.
+      } else if (entry.remediationAttempt > 0) {
+        remediationAttemptIds.add(`${entry.deliveryId}#${entry.remediationAttempt}`);
+      }
+    }
 
     if (!entry.effectiveCost) {
       unknownCostEntries += 1;
@@ -505,19 +522,29 @@ export function aggregateLedgerEntries(entries) {
     unknownAuditAttemptEntries += scope.entriesInScope;
   }
 
+  const remediationEvidenceEntries = phaseScoped
+    ? entries.filter((entry) => entry.phase === 'remediation')
+    : entries;
+
   const attempts = Object.freeze({
     implementation: attemptSummary(
       implementationAttemptIds.size,
       unknownImplementationAttemptEntries,
       implementationAttemptIds.size > 0
     ),
-    audit: attemptSummary(auditAttemptsTotal, unknownAuditAttemptEntries, resolvedAuditDeliveries > 0),
+    audit: attemptSummary(
+      auditAttemptsTotal,
+      unknownAuditAttemptEntries,
+      resolvedAuditDeliveries > 0
+    ),
     remediation: attemptSummary(
       remediationAttemptIds.size,
       unknownRemediationAttemptEntries,
-      // A run row with a known `remediationAttempt` of 0 proves "zero remediation attempts"; it
-      // is a known identity even though it adds nothing to the distinct set.
-      unknownRemediationAttemptEntries < entries.length
+      remediationAttemptIds.size > 0
+        || (
+          remediationEvidenceEntries.length > 0
+          && unknownRemediationAttemptEntries < remediationEvidenceEntries.length
+        )
     )
   });
 
@@ -587,7 +614,9 @@ export function groupLedgerEntries(entries, groupBy = ['repository', 'phase']) {
   }
   const result = {};
   for (const [key, group] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    result[key] = aggregateLedgerEntries(group);
+    result[key] = aggregateLedgerEntries(group, {
+      phaseScoped: groupBy.includes('phase')
+    });
   }
   return Object.freeze(result);
 }

@@ -426,6 +426,87 @@ test('F-214-04: run-granular audit attempt identity scopes audit attempts exactl
   assert.equal(byPhase.implementation.attempts.audit.accounting, 'complete');
 });
 
+
+test('F-214-04: audit phase does not inherit implementation/remediation attempts carried as context', () => {
+  const record = createDeliveryMetrics(baseInput({
+    providerCalls: 3,
+    attempts: { implementation: 1, audit: 2 },
+    providerRunLedger: [
+      run({
+        runId: 9915,
+        workflowRunId: 701,
+        phase: 'implementation',
+        implementationAttempt: 1,
+        remediationAttempt: 0
+      }),
+      run({
+        runId: 9916,
+        workflowRunId: 702,
+        phase: 'audit',
+        implementationAttempt: 1,
+        remediationAttempt: 2,
+        auditAttempt: 1
+      }),
+      run({
+        runId: 9917,
+        workflowRunId: 703,
+        phase: 'audit',
+        implementationAttempt: 1,
+        remediationAttempt: 2,
+        auditAttempt: 2
+      })
+    ]
+  }));
+
+  const entries = deriveLedgerEntries([record]);
+  const byPhase = groupLedgerEntries(entries, ['phase']);
+
+  assert.equal(byPhase.implementation.implementationAttempts, 1);
+  assert.equal(byPhase.implementation.remediationAttempts, null);
+
+  assert.equal(byPhase.audit.auditAttempts, 2);
+
+  // The audit rows carry these fields as execution context, but they are not
+  // implementation/remediation evidence and therefore cannot become attempt counts.
+  assert.equal(byPhase.audit.implementationAttempts, null);
+  assert.equal(byPhase.audit.remediationAttempts, null);
+  assert.equal(byPhase.audit.attempts.implementation.accounting, 'unknown');
+  assert.equal(byPhase.audit.attempts.remediation.accounting, 'unknown');
+});
+
+test('F-214-04: remediation group counts remediation attempts without inheriting implementation attempts', () => {
+  const record = createDeliveryMetrics(baseInput({
+    providerCalls: 3,
+    attempts: { implementation: 1, audit: 0 },
+    providerRunLedger: [
+      run({
+        runId: 9918,
+        phase: 'implementation',
+        implementationAttempt: 1,
+        remediationAttempt: 0
+      }),
+      run({
+        runId: 9919,
+        phase: 'remediation',
+        implementationAttempt: 1,
+        remediationAttempt: 1
+      }),
+      run({
+        runId: 9920,
+        phase: 'remediation',
+        implementationAttempt: 1,
+        remediationAttempt: 2
+      })
+    ]
+  }));
+
+  const byPhase = groupLedgerEntries(deriveLedgerEntries([record]), ['phase']);
+
+  assert.equal(byPhase.remediation.remediationAttempts, 2);
+  assert.equal(byPhase.remediation.implementationAttempts, null);
+  assert.equal(byPhase.implementation.implementationAttempts, 1);
+});
+
 test('F-214-04: two provider runs of one implementation attempt stay one attempt in every grouping', () => {
   const record = createDeliveryMetrics(baseInput({
     providerCalls: 2,
