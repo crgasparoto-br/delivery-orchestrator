@@ -621,6 +621,53 @@ Metrics must be usable for per-repository and cross-repository comparisons. Prov
 
 The first measured FAST pilot in `controle_calorias` observed approximately 128 seconds versus an earlier approximately 1,255-second full baseline (~89.8% reduction, ~9.8x faster). This is evidence, not a universal SLA.
 
+### 15.1 AI Usage & Cost Reporting
+
+DV2-011 evolves the same accumulator above into operational AI usage/cost reporting instead of a
+parallel system. The canonical facts remain the controller observability accumulator
+(`src/v2/controller-observability.mjs`, dedup by provider run identity) and the Delivery V2
+metrics record/store (`src/v2/metrics.mjs`, `schemas/delivery-v2-metrics.schema.json`). Everything
+below is derived exclusively from those facts:
+
+- **Per-provider-run ledger.** A metrics record may carry `providerRunLedger`, an array of
+  entries keyed by `runId` (the same identity the controller already deduplicates provider
+  observations by). Each entry attributes usage/cost to `repository`, `issueNumber`,
+  `pullRequestNumber` (already on the record), `workflowRunId`, `provider`, `model`, `worker` and
+  `phase`. Records produced before this ledger existed have no `providerRunLedger`; reporting
+  falls back to their existing `aiUsageByStage`/`providerCost` without inventing run-level
+  identity that was never captured (`runGranularity: 'aggregate'` vs `'run'`).
+- **Phase taxonomy.** Phases are `implementation`, `audit`, `remediation` and
+  `technical-hygiene`. Deterministic phases that make no provider call (structural hygiene,
+  deterministic gates) never receive a ledger entry — never a zero-cost/zero-token row — since
+  that would fabricate a fact that was never observed.
+- **Cost precedence.** Each ledger entry may carry `reportedCost` and/or `estimatedCost`
+  (`{amount, currency}`). `effectiveCost` is computed with strict precedence — reported cost when
+  present, otherwise estimated cost, otherwise unknown — and is never the sum of both for the same
+  entry. Aggregation across entries sums `effectiveCost` **per currency**; different currencies
+  are never added together. An aggregate is `complete` only when every contributing entry resolved
+  to a reported cost; any estimated or unknown-cost entry makes it `partial`.
+- **Unknown semantics.** Missing/null usage or cost is preserved as unknown; it is never coerced
+  to zero. A deterministic zero-provider-call phase is distinct from an unknown-cost provider
+  call: the former simply has no ledger entry, the latter has an entry with `effectiveCost: null`
+  and `accounting: 'unknown'`.
+- **Timestamps and period.** Each ledger entry carries `observedAtIso` (the provider run's
+  terminal timestamp, UTC). Period filters (`--today`, `--month`, `--from/--to`) resolve
+  deterministically in UTC only; other timezones are rejected rather than silently reinterpreted.
+- **Reporting surfaces.** `npm run ai:usage` (`scripts/ai-usage-report.mjs`) filters by
+  `--today`/`--month`/`--from`/`--to`/`--repo`/`--issue`/`--pr`/`--phase`/`--group-by` and reads
+  the same canonical metrics store as `npm run metrics:v2`. The manual
+  `Delivery V2 - AI Usage Report` GitHub Actions workflow
+  (`.github/workflows/delivery-v2-ai-usage-report.yml`, `workflow_dispatch`) runs the identical CLI
+  to produce one JSON payload, then `scripts/ai-usage-export.mjs` derives the Job Summary,
+  `ai-usage-report.csv` and `ai-usage-report.html` artifacts from that single payload so every
+  surface reports the same totals by construction.
+- **Budget.** `config/delivery-v2-ai-budget.json` declares an optional
+  `monthly.amount`/`monthly.currency` and `warnings.issueCost`/`warnings.remediationCount`
+  (`src/v2/ai-budget.mjs`). Budget evaluation is strictly informative: it only ever adds
+  non-blocking warnings to the report and never gates, blocks or delays a delivery. Billing,
+  automatic payment, API key rotation, mandatory public publication, automatic currency
+  conversion and hard limits are explicitly out of scope.
+
 ## 16. DV2-012 — `controle_calorias` pilot
 
 The first pilot proved the central hypothesis:

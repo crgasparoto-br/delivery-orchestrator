@@ -15,6 +15,43 @@
         "outputTokens": { "type": ["integer", "null"], "minimum": 0 },
         "totalTokens": { "type": ["integer", "null"], "minimum": 0 }
       }
+    },
+    "costAmount": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": { "type": "number", "minimum": 0 },
+        "currency": { "type": "string", "minLength": 1 }
+      }
+    },
+    "providerRunLedgerEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "phase", "provider", "usage", "reportedCost", "estimatedCost", "accounting"],
+      "properties": {
+        "runId": { "type": "integer", "minimum": 1 },
+        "workflowRunId": { "type": ["integer", "null"], "minimum": 1 },
+        "phase": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": ["string", "null"] },
+        "worker": { "type": ["string", "null"] },
+        "usage": { "$ref": "#/$defs/aiUsage" },
+        "reportedCost": { "$ref": "#/$defs/costAmount" },
+        "estimatedCost": { "$ref": "#/$defs/costAmount" },
+        "effectiveCost": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "amount": { "type": "number", "minimum": 0 },
+            "currency": { "type": "string", "minLength": 1 },
+            "source": { "enum": ["reported", "estimated"] }
+          }
+        },
+        "accounting": { "enum": ["complete", "partial", "unknown"] },
+        "observedAtIso": { "type": ["string", "null"], "format": "date-time" },
+        "evidenceRef": { "type": ["string", "null"] }
+      }
     }
   },
   "required": [
@@ -52,6 +89,11 @@
       }
     },
     "providerCost": { "type": "object" },
+    "providerRunLedger": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/providerRunLedgerEntry" }
+    },
+    "observedAtIso": { "type": ["string", "null"], "format": "date-time" },
     "durationsMs": { "type": "object" },
     "terminalReason": { "type": "string", "minLength": 1 },
     "change": { "type": "object" },

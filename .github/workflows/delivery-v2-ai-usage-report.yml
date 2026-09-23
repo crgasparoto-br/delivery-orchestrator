@@ -1,0 +1,96 @@
+name: Delivery V2 - AI Usage Report
+
+on:
+  workflow_dispatch:
+    inputs:
+      period:
+        description: Reporting period shortcut (all|today|month).
+        required: false
+        default: month
+        type: choice
+        options:
+          - all
+          - today
+          - month
+      from:
+        description: Optional explicit period start (ISO-8601 UTC). Overrides `period` when set together with `to`.
+        required: false
+        type: string
+      to:
+        description: Optional explicit period end (ISO-8601 UTC). Overrides `period` when set together with `from`.
+        required: false
+        type: string
+      repository:
+        description: Optional repository filter (owner/repo).
+        required: false
+        type: string
+      group_by:
+        description: Comma-separated grouping fields (repository,phase,provider,model,worker,workflowRunId).
+        required: false
+        default: repository,phase
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delivery-v2-ai-usage-report-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Build AI usage & cost report
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build AI usage report (JSON)
+        env:
+          PERIOD: ${{ inputs.period }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          REPOSITORY: ${{ inputs.repository }}
+          GROUP_BY: ${{ inputs.group_by }}
+        run: |
+          set -euo pipefail
+          mkdir -p ai-usage-report
+          ARGS=()
+          if [ -n "${FROM}" ] && [ -n "${TO}" ]; then
+            ARGS+=(--from "${FROM}" --to "${TO}")
+          elif [ "${PERIOD}" = "today" ]; then
+            ARGS+=(--today)
+          elif [ "${PERIOD}" = "month" ]; then
+            ARGS+=(--month)
+          fi
+          if [ -n "${REPOSITORY}" ]; then
+            ARGS+=(--repo "${REPOSITORY}")
+          fi
+          if [ -n "${GROUP_BY}" ]; then
+            ARGS+=(--group-by "${GROUP_BY}")
+          fi
+          node scripts/ai-usage-report.mjs "${ARGS[@]}" --out ai-usage-report/ai-usage-report.json
+
+      - name: Export CSV/HTML and publish Job Summary
+        run: node scripts/ai-usage-export.mjs ai-usage-report/ai-usage-report.json ai-usage-report
+
+      - name: Upload AI usage report artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-usage-report
+          path: |
+            ai-usage-report/ai-usage-report.json
+            ai-usage-report/ai-usage-report.csv
+            ai-usage-report/ai-usage-report.html
+          if-no-files-found: error
+          retention-days: 90
