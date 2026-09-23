@@ -59,6 +59,24 @@ function isIncidentalCiMetadataLine(line) {
   );
 }
 
+function ciFailureExternalEvidenceLine(line) {
+  const value = String(line ?? '');
+  const repositoryFailure = REPOSITORY_CI_FAILURE_RE.exec(value);
+
+  if (!repositoryFailure || repositoryFailure.index <= 0) return value;
+
+  const prefix = value.slice(0, repositoryFailure.index);
+
+  const isSourceLocationPrefix = (
+    /\.(?:[cm]?[jt]sx?)\(\d+,\d+\):\s*$/i.test(prefix)
+    || /\.(?:[cm]?[jt]sx?):\d+(?::\d+)?:\s*$/i.test(prefix)
+  );
+
+  return isSourceLocationPrefix
+    ? value.slice(repositoryFailure.index)
+    : value;
+}
+
 export function ciFailureClassForEvidence({ conclusion, failedJobs = [] } = {}) {
   if (String(conclusion ?? '').toLowerCase() !== 'failure') return 'external';
   if (!Array.isArray(failedJobs) || failedJobs.length === 0) return 'external';
@@ -69,6 +87,7 @@ export function ciFailureClassForEvidence({ conclusion, failedJobs = [] } = {}) 
   const corpus = lines.join('\n');
   const failureCorpus = lines
     .filter((line) => !isIncidentalCiMetadataLine(line))
+    .map(ciFailureExternalEvidenceLine)
     .join('\n');
 
   const hasRepositoryFailure = REPOSITORY_CI_FAILURE_RE.test(corpus);

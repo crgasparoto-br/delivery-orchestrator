@@ -198,3 +198,56 @@ test('CI remediation treats billing in repository path as incidental when TypeSc
     'external'
   );
 });
+
+test('CI remediation ignores billing quota tokens in TypeScript source paths without weakening mixed-evidence fail-closed behavior', () => {
+  for (const sourcePath of [
+    'src/billing-quota.ts(176,9)',
+    'src/quota-billing.ts(176,9)',
+    'src/billing-quota.ts:176:9',
+    'src/quota-billing.ts:176:9'
+  ]) {
+    assert.equal(
+      ciFailureClassForEvidence({
+        conclusion: 'failure',
+        failedJobs: [{
+          name: 'Merge preview integration',
+          failedStepNames: ['TypeScript integration check'],
+          log: [
+            `${sourcePath}: error TS2304: Cannot find name 'missingSymbol'.`,
+            'Process completed with exit code 2.'
+          ].join('\n')
+        }]
+      }),
+      'actionable',
+      sourcePath
+    );
+  }
+
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: [
+          'Network timeout: ETIMEDOUT while contacting external service; error TS2304: Cannot find name missingSymbol.',
+          'Process completed with exit code 2.'
+        ].join('\n')
+      }]
+    }),
+    'external'
+  );
+
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: "src/billing-quota.ts(176,9): error TS2304: GitHub Actions billing quota exceeded."
+      }]
+    }),
+    'external'
+  );
+});
+
