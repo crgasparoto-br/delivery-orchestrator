@@ -57,6 +57,8 @@ function isIncidentalCiMetadataLine(line) {
     || /^from https?:\/\/github\.com\//i.test(value)
     || /^remote:/i.test(value)
     || /^switched to (?:a )?(?:new )?branch\b/i.test(value)
+    || /^already on ['"].+['"]\.?$/i.test(value)
+    || /^your branch is (?:up to date with|ahead of|behind) ['"].+['"]/i.test(value)
     || /^branch ['"].+['"] set up to track\b/i.test(value)
   );
 }
