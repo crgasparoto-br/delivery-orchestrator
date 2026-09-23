@@ -49,7 +49,8 @@ function metricsRecord(overrides = {}) {
       usage: { turns: 1 },
       reportedCost: { amount: 1.25, currency: 'USD' },
       estimatedCost: null,
-      observedAtIso: '2026-09-10T00:00:00.000Z'
+      observedAtIso: '2026-09-10T00:00:00.000Z',
+      endedAtIso: '2026-09-10T00:00:00.000Z'
     }],
     ...overrides
   };
@@ -139,8 +140,8 @@ test('CLI/JSON/CSV/HTML/Job-Summary exports agree on the same totals from the sa
     const html = toHtml(payload);
     const summary = toJobSummary(payload);
     assert.match(csv, /1\.25/);
-    assert.match(html, /1\.2500/);
-    assert.match(summary, /1\.2500/);
+    assert.match(html, /1\.25/);
+    assert.match(summary, /1\.25/);
     assert.equal(payload.budget.configured, false);
   });
 });
@@ -175,7 +176,7 @@ test('CLI filters by repository/issue/pr/phase', async () => {
 test('writeFile smoke: export script writes csv/html/json files to disk', async () => {
   await withTempDir(async (dir) => {
     const reportPath = path.join(dir, 'report.json');
-    const report = await buildAiUsageReport({ metricsFile: path.join(dir, 'nonexistent.json') });
+    const report = await buildAiUsageReport({ metricsFile: path.join(dir, 'nonexistent.json'), allowMissingStore: true });
     await writeFile(reportPath, JSON.stringify({ ...report, budget: { configured: false, warnings: [] } }));
     const { execFileSync } = await import('node:child_process');
     execFileSync(process.execPath, [path.resolve('scripts/ai-usage-export.mjs'), reportPath, dir]);

@@ -69,5 +69,32 @@ export function evaluateAiBudgetWarnings(report, budgetConfigRaw) {
     }
   }
 
+  // Remediation-volume warning. The report knows how many remediation provider runs fall in the
+  // window, both overall and per grouping, so the threshold is evaluated at both levels. This is
+  // informative only: an exceeded remediation threshold never blocks a delivery.
+  if (config.warnings.remediationCount != null) {
+    const limit = config.warnings.remediationCount;
+    if (report.totals.remediationRuns > limit) {
+      warnings.push(Object.freeze({
+        type: 'remediation-count-warning',
+        scope: 'total',
+        group: null,
+        remediationRuns: report.totals.remediationRuns,
+        limit
+      }));
+    }
+    for (const [groupKey, group] of Object.entries(report.groups)) {
+      if (group.remediationRuns > limit) {
+        warnings.push(Object.freeze({
+          type: 'remediation-count-warning',
+          scope: 'group',
+          group: groupKey,
+          remediationRuns: group.remediationRuns,
+          limit
+        }));
+      }
+    }
+  }
+
   return Object.freeze({ configured: true, blocking: false, warnings: Object.freeze(warnings) });
 }

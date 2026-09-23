@@ -32,7 +32,10 @@ run-name: "Delivery V2 controller ${{ inputs.target_repository }} #${{ inputs.ta
 
 permissions:
   actions: write
-  contents: read
+  # `contents: write` lets the controller publish the updated operational Delivery V2 metrics
+  # store (docs/delivery-v2/evidence/delivery-v2-metrics.json) back to the orchestrator's
+  # default branch, so cross-delivery AI usage/cost history survives the ephemeral runner.
+  contents: write
 
 concurrency:
   group: delivery-v2-${{ inputs.target_repository }}-${{ inputs.target_issue }}
@@ -162,6 +165,38 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # The controller wrote the completed delivery into the operational metrics store during the
+      # run. Publishing it back to the default branch is what makes the cross-delivery history
+      # durable and is the single source `npm run ai:usage` and the AI Usage Report workflow read.
+      - name: Publish operational Delivery V2 metrics store
+        if: always() && steps.reentry.outputs.run_controller == 'true'
+        shell: bash
+        env:
+          METRICS_STORE: docs/delivery-v2/evidence/delivery-v2-metrics.json
+        run: |
+          set -euo pipefail
+          if [ ! -f "$METRICS_STORE" ]; then
+            echo "No operational metrics store produced by this run; nothing to publish."
+            exit 0
+          fi
+          if git diff --quiet -- "$METRICS_STORE"; then
+            echo "Operational metrics store unchanged; nothing to publish."
+            exit 0
+          fi
+          git config user.name "delivery-v2-controller"
+          git config user.email "delivery-v2-controller@users.noreply.github.com"
+          git add "$METRICS_STORE"
+          git commit -m "chore(delivery-v2): record delivery metrics for run ${GITHUB_RUN_ID} [skip ci]"
+          # Rebase onto any concurrent delivery that published first, then publish.
+          for attempt in 1 2 3; do
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "Could not publish the operational metrics store after 3 attempts." >&2
+          exit 1
+
       - name: Upload delivery evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -170,5 +205,6 @@ jobs:
           path: |
             ${{ runner.temp }}/delivery-v2-initial-plan.json
             ${{ env.CONTROLLER_RESULT_PATH }}
+            docs/delivery-v2/evidence/delivery-v2-metrics.json
           if-no-files-found: warn
           retention-days: 30

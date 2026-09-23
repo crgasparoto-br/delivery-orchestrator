@@ -106,13 +106,83 @@ Once operational controller state exists, the observability accumulator is persi
 
 ### AI Usage & Cost Reporting
 
-`npm run ai:usage` (`scripts/ai-usage-report.mjs`) reports AI usage and cost from the same canonical Delivery V2 metrics store that `npm run metrics:v2` already reads — it is an additional view, never a second source of truth. It supports `--today`, `--month` (optionally `--month=YYYY-MM`), `--from`/`--to` (ISO-8601 UTC), `--repo`, `--issue`, `--pr`, `--phase`, `--group-by` (default `repository,phase`), `--metrics-file`, `--budget-file`, `--json` and `--out`.
+**Operational source.** There is exactly one cross-delivery source of AI usage/cost history:
+`docs/delivery-v2/evidence/delivery-v2-metrics.json` (override with `DELIVERY_V2_METRICS_FILE`),
+resolved by `src/v2/metrics-store.mjs`. Both the initial and the resume controller persist each
+completed delivery into it through the canonical `upsertDeliveryMetrics` contract in
+`src/v2/metrics.mjs`, keyed by `deliveryId`, so resume/re-entry replaces rather than duplicates a
+delivery. The dispatch workflow publishes the updated store back to the orchestrator's default
+branch and uploads it as run evidence. `npm run metrics:v2`, `npm run ai:usage` and the AI Usage
+Report workflow all read this same file — there is no second store. Reporting against a store
+that does not exist fails loudly rather than quietly producing an empty report; pass
+`--allow-missing-store` to opt into the empty-window case explicitly.
 
-Metrics records can optionally carry a `providerRunLedger`: an array of per-provider-run entries keyed by the same `runId` the controller observability accumulator already deduplicates on, each attributing usage/cost to a `workflowRunId`, `provider`, `model`, `worker` and `phase` (`implementation`, `audit`, `remediation`, `technical-hygiene`). Every entry may carry `reportedCost` and/or `estimatedCost`; the effective cost always follows reported-over-estimated-over-unknown precedence and reported/estimated amounts are never summed together for the same entry. Totals are grouped by currency — different currencies are never added together — and an aggregate is `complete` only when every contributing entry resolved to a reported cost. Records written before this ledger existed keep working: reporting falls back to their existing `aiUsageByStage`/`providerCost` without inventing run-level attribution that was never captured. A deterministic phase that makes no provider call (for example structural technical hygiene) never gets a fabricated zero-cost/zero-token row.
+**Per-provider-run ledger.** `createControllerDeliveryMetrics` produces `providerRunLedger`
+operationally, from the provider observations the controller recorded — callers never supply it.
+Entries are keyed by `runId`, the same provider-run identity the controller already deduplicates
+on, which is what makes re-entry, resume and recovery non-duplicating. Where evidence exists an
+entry preserves `workflowRunId`, `materialHeadSha`, `phase`, `provider`, `model`, `worker`,
+`role`, `implementationAttempt`, `remediationAttempt`, token `usage` and `usageAccounting`,
+`cache` counters, `reportedCost`, `estimatedCost`, `effectiveCost`, `costProvenance`,
+`pricingSnapshot`, `startedAtIso`, `endedAtIso`, `observedAtIso`, `terminalState` and
+`evidenceRef`. Fields without evidence stay `null`. The entry schema is a fail-closed allowlist,
+so API keys, provider credentials and Actions secrets cannot reach the ledger, the store, the
+JSON, the CSV, the HTML or the Job Summary.
 
-The manual **Delivery V2 - AI Usage Report** GitHub Actions workflow (`workflow_dispatch`, inputs `period`/`from`/`to`/`repository`/`group_by`) runs the identical CLI to produce one JSON payload and then derives the Job Summary plus `ai-usage-report.json`/`.csv`/`.html` artifacts from that single payload (`scripts/ai-usage-export.mjs`), so the CLI, JSON, CSV, HTML and Job Summary always agree on totals by construction.
+**Cost precedence and pricing.** Effective cost follows strict
+reported-over-estimated-over-unknown precedence, and reported/estimated are never summed for the
+same run — when a cost is reported, no estimate is computed at all. Estimates come from the
+versioned in-repository catalog `config/delivery-v2-ai-pricing.json` (`src/v2/ai-pricing.mjs`),
+keyed by `provider/model` with an explicit currency; there is never an external pricing lookup
+during a delivery. Each estimate persists a `pricingSnapshot` (catalog version plus the exact
+rates applied), so revising the catalog only prices runs observed after the change — historical
+runs keep their recorded snapshot and cost. An unknown provider/model, or unknown token usage,
+stays unknown instead of becoming a fabricated zero. Totals are grouped by currency; different
+currencies are never added together and never converted.
 
-`config/delivery-v2-ai-budget.json` (`src/v2/ai-budget.mjs`) declares an optional `monthly.amount`/`monthly.currency` and `warnings.issueCost`/`warnings.remediationCount`. Budget evaluation only ever adds non-blocking, informative warnings to the report; it never gates, blocks or delays a delivery. Billing, automatic payment, API key rotation, mandatory public publication, automatic currency conversion and hard limits are explicitly out of scope for this reporting layer.
+**Zero calls vs unknown vs legacy.** These three are kept strictly apart. A delivery *proven* to
+have made no provider call has `providerCalls: 0`, an empty ledger and
+`providerRunAccounting: 'complete'`; it contributes `zeroProviderCallEntries`, never
+`unknownCostEntries`, and never gets fabricated tokens or cost. A real provider run whose cost
+could not be determined contributes `unknownCostEntries`. A pre-ledger historical record
+contributes `legacyEntries` and keeps working without inventing run-level attribution that was
+never captured.
+
+**Timestamps.** A provider run's terminal instant is its own `endedAtIso`, never back-filled from
+the delivery-level timestamp or from "now". A run with an unknown terminal instant is excluded
+from any bounded window and reported in `unknownTerminalTimestampEntries`. Period filtering
+compares real instants, so `Z` and `+00:00` are equivalent, and boundaries are inclusive.
+
+**CLI.** `npm run ai:usage` (`scripts/ai-usage-report.mjs`) supports
+`--period all|today|7d|month|custom` (plus the `--today`/`--7d`/`--month[=YYYY-MM]` shorthands),
+`--from`/`--to`, `--timezone` (UTC by default, or a fixed `±HH:MM` offset; named timezones are
+rejected), `--repo`, `--issue`, `--pr`, `--phase`, `--provider`, `--model`, `--group-by`
+(default `repository,phase`; supports `repository`, `issue`, `pr`, `phase`, `provider`, `model`,
+`worker`, `role`, `risk`, `delivery`, `day`, `kind`), `--metrics-file`, `--budget-file`,
+`--allow-missing-store`, `--json` and `--out`. The human output reports period, timezone,
+provider runs/calls, input/output/total tokens, credits, known effective cost per currency,
+unknown-cost count, unknown/partial usage counts, the requested breakdown and budget warnings.
+
+**Workflow and exports.** The manual **Delivery V2 - AI Usage Report** workflow
+(`workflow_dispatch`, inputs `period`/`from`/`to`/`timezone`/`repository`/`group_by`) runs the
+identical CLI to produce one JSON payload, then `scripts/ai-usage-export.mjs` derives the Job
+Summary plus `ai-usage-report.json`/`.csv`/`.html` from that single payload, so every surface
+agrees on totals by construction. The HTML adds cost per day, per repository, per phase and per
+provider/model, the highest-consumption issues and pull requests, and audit/remediation counts.
+CSV and JSON preserve `unknown` literally and carry usage/calls/attempts, not only cost.
+
+**Delivery closing summary.** When telemetry exists, the controller result carries an
+`## AI usage` block (`src/v2/ai-usage-summary.mjs`) with per-phase calls/tokens, known cost per
+currency, unknown-cost run count, tokens and AI calls. It reports `complete` only when every
+provider run of that delivery has known usage and known cost and the controller enumerated every
+run; otherwise it says `partial`.
+
+**Budget.** `config/delivery-v2-ai-budget.json` (`src/v2/ai-budget.mjs`) declares an optional
+`monthly.amount`/`monthly.currency` and `warnings.issueCost`/`warnings.remediationCount`.
+`warnings.remediationCount` is evaluated against the remediation provider runs in the window,
+overall and per grouping. Budget evaluation only ever adds non-blocking, informative warnings; it
+never gates, blocks or delays a delivery. Billing, automatic payment, API key rotation, mandatory
+public publication, automatic currency conversion and hard limits are explicitly out of scope.
 
 ## Release and merge enforcement
 

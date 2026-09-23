@@ -1,26 +1,23 @@
-import { loadDeliveryMetricsStore } from './metrics.mjs';
+import { loadOperationalMetricsStore } from './metrics-store.mjs';
 
 export const AI_USAGE_LEDGER_SCHEMA_VERSION = 1;
 
 /**
  * AI Usage & Cost Reporting ledger/projection.
  *
- * This module derives an evidence-preserving, per-provider-run projection from the
- * canonical Delivery V2 metrics store (`src/v2/metrics.mjs`, `schemas/delivery-v2-metrics.schema.json`).
- * It is deliberately a *projection*, not a second source of truth: every field it emits is
- * copied or deterministically recomputed from a `deliveryMetrics` record already produced by
- * the controller observability accumulator (`src/v2/controller-observability.mjs`).
+ * This module derives an evidence-preserving, per-provider-run projection from the single
+ * operational Delivery V2 metrics store (`src/v2/metrics-store.mjs`, written by the controllers
+ * through the canonical `src/v2/metrics.mjs` contract). It is a *projection*, not a second
+ * source of truth: every field it emits is copied or deterministically recomputed from a metrics
+ * record that the controller observability accumulator already produced.
  *
- * Identity and dedup reuse the same canonical keys the controller already uses:
- * - a provider run is identified by `providerRunLedger[].runId` (the same run identity the
- *   controller deduplicates on via `observedRunIds`);
- * - re-deriving the ledger from the same metrics store is idempotent because the store itself
- *   is keyed by `deliveryId` (`repository#pullRequestNumber@materialHeadSha`) and each record's
- *   `providerRunLedger` entries are unique by `runId` (enforced in `metrics.mjs`).
+ * Identity and dedup reuse the canonical provider-run identity the controller deduplicates on
+ * (`providerRunLedger[].runId`, mirroring `observedRunIds`). Re-deriving from the same store is
+ * idempotent because the store is keyed by `deliveryId` and each record's ledger is unique by
+ * `runId`.
  *
- * Cost precedence: reported > estimated > unknown. `effectiveCost` is never a sum of reported
- * and estimated cost for the same entry; it is the higher-precedence value, tagged with its
- * `source`. Currencies are never summed together; aggregation always groups by currency.
+ * Cost precedence: reported > estimated > unknown. `effectiveCost` is never a sum of reported and
+ * estimated for the same run. Currencies are never summed together and never converted.
  */
 
 function requireString(value, label) {
@@ -29,18 +26,25 @@ function requireString(value, label) {
   return result;
 }
 
+/** Parses an ISO-8601 instant into epoch milliseconds. Offsets like `Z` and `+00:00` are equivalent. */
+export function toInstantMs(value, label) {
+  if (value == null) return null;
+  const text = requireString(value, label);
+  const ms = Date.parse(text);
+  if (!Number.isFinite(ms)) throw new Error(`${label} must be a valid ISO-8601 instant: ${text}`);
+  return ms;
+}
+
 /**
- * Flattens delivery metrics records into per-provider-run ledger entries.
- *
- * Records that already carry a `providerRunLedger` (the forward-looking, run-granular shape)
- * contribute one entry per provider run, with workflow run, provider, model, worker, phase and
- * cost precedence preserved exactly as recorded.
- *
- * Legacy records (pre-existing metrics without `providerRunLedger`) fall back to aggregate rows
- * derived from `aiUsageByStage`/`providerCost` without fabricating run identity, model or worker
- * attribution that was never captured; those rows are marked `runGranularity: 'aggregate'` so
- * reporting can distinguish known run-level provenance from legacy delivery-level provenance.
+ * Entry kinds, which reporting must keep distinct:
+ * - `run`: a real provider run with run-granular evidence. Its cost may still be unknown.
+ * - `zero-calls`: a delivery *proven* to have made no provider call. It contributes calls=0 and
+ *   is never counted as a provider run of unknown cost, and never gets fabricated tokens/cost.
+ * - `legacy-aggregate`: a pre-ledger historical record, where only delivery-level aggregates
+ *   exist. Its incompleteness is reported separately from a genuinely unknown run cost.
  */
+export const LEDGER_ENTRY_KINDS = Object.freeze(['run', 'zero-calls', 'legacy-aggregate']);
+
 export function deriveLedgerEntries(records) {
   if (!Array.isArray(records)) throw new Error('records must be an array');
   const entries = [];
@@ -50,25 +54,44 @@ export function deriveLedgerEntries(records) {
       repository: record.repository,
       issueNumber: record.issueNumber,
       pullRequestNumber: record.pullRequestNumber,
-      risk: record.risk
+      risk: record.risk,
+      escalated: record.escalated,
+      auditAttempts: record.attempts.audit,
+      implementationAttempts: record.attempts.implementation,
+      deliveryObservedAtIso: record.observedAtIso
     };
+    const runAccounting = record.providerRunAccounting ?? 'legacy';
 
     if (record.providerRunLedger.length > 0) {
       for (const run of record.providerRunLedger) {
         entries.push({
           ...base,
+          kind: 'run',
           runId: run.runId,
           workflowRunId: run.workflowRunId,
+          materialHeadSha: run.materialHeadSha ?? record.materialHeadSha,
           phase: run.phase,
           provider: run.provider,
           model: run.model,
           worker: run.worker,
+          role: run.role,
+          implementationAttempt: run.implementationAttempt,
+          remediationAttempt: run.remediationAttempt,
           usage: run.usage,
+          usageAccounting: run.usageAccounting,
+          cache: run.cache,
           reportedCost: run.reportedCost,
           estimatedCost: run.estimatedCost,
           effectiveCost: run.effectiveCost,
+          costProvenance: run.costProvenance,
+          pricingSnapshot: run.pricingSnapshot,
           accounting: run.accounting,
-          observedAtIso: run.observedAtIso ?? record.observedAtIso,
+          startedAtIso: run.startedAtIso,
+          // The terminal instant of a provider run is the run's OWN observed end. It is never
+          // back-filled from the delivery-level timestamp: an unknown end stays unknown.
+          endedAtIso: run.endedAtIso,
+          observedAtIso: run.observedAtIso,
+          terminalState: run.terminalState,
           evidenceRef: run.evidenceRef,
           runGranularity: 'run'
         });
@@ -76,24 +99,75 @@ export function deriveLedgerEntries(records) {
       continue;
     }
 
-    const stages = Object.keys(record.aiUsageByStage);
-    for (const stage of stages) {
+    if (runAccounting === 'complete' && record.providerCalls === 0) {
+      // Proven zero provider calls: calls=0, no tokens, no cost, and explicitly NOT an
+      // unknown-cost provider run.
       entries.push({
         ...base,
+        kind: 'zero-calls',
         runId: null,
         workflowRunId: null,
-        phase: stage,
+        materialHeadSha: record.materialHeadSha,
+        phase: null,
         provider: record.provider,
         model: null,
         worker: null,
-        usage: record.aiUsageByStage[stage],
+        role: null,
+        implementationAttempt: null,
+        remediationAttempt: null,
+        usage: null,
+        usageAccounting: 'zero-calls',
+        cache: null,
         reportedCost: null,
         estimatedCost: null,
         effectiveCost: null,
-        accounting: 'unknown',
+        costProvenance: 'zero-calls',
+        pricingSnapshot: null,
+        accounting: 'complete',
+        startedAtIso: null,
+        endedAtIso: record.observedAtIso,
         observedAtIso: record.observedAtIso,
+        terminalState: record.terminalReason,
         evidenceRef: null,
-        runGranularity: 'aggregate'
+        runGranularity: 'delivery'
+      });
+      continue;
+    }
+
+    const legacyBase = {
+      ...base,
+      kind: 'legacy-aggregate',
+      runId: null,
+      workflowRunId: null,
+      materialHeadSha: record.materialHeadSha,
+      model: null,
+      worker: null,
+      role: null,
+      implementationAttempt: null,
+      remediationAttempt: null,
+      cache: null,
+      pricingSnapshot: null,
+      startedAtIso: null,
+      endedAtIso: record.observedAtIso,
+      observedAtIso: record.observedAtIso,
+      terminalState: record.terminalReason,
+      evidenceRef: null,
+      runGranularity: 'aggregate'
+    };
+
+    const stages = Object.keys(record.aiUsageByStage);
+    for (const stage of stages) {
+      entries.push({
+        ...legacyBase,
+        phase: stage,
+        provider: record.provider,
+        usage: record.aiUsageByStage[stage],
+        usageAccounting: 'partial',
+        reportedCost: null,
+        estimatedCost: null,
+        effectiveCost: null,
+        costProvenance: 'unknown',
+        accounting: 'unknown'
       });
     }
 
@@ -101,66 +175,80 @@ export function deriveLedgerEntries(records) {
     // separately from stage usage rows, so cost is never duplicated across stages.
     if (record.providerCost.available) {
       entries.push({
-        ...base,
-        runId: null,
-        workflowRunId: null,
+        ...legacyBase,
         phase: null,
         provider: record.provider,
-        model: null,
-        worker: null,
         usage: null,
+        usageAccounting: 'unknown',
         reportedCost: record.providerCost.reportedCost,
         estimatedCost: record.providerCost.estimatedCost,
         effectiveCost: record.providerCost.effectiveCost,
-        accounting: record.providerCost.accounting,
-        observedAtIso: record.observedAtIso,
-        evidenceRef: null,
-        runGranularity: 'aggregate'
+        costProvenance: record.providerCost.reportedCost ? 'reported' : 'estimated',
+        accounting: record.providerCost.accounting
       });
     } else if (stages.length === 0) {
-      // A delivery with zero known usage and zero known cost still counts as an observed,
-      // fully-accounted-for (zero-provider-call) delivery; represent it explicitly rather than
-      // silently dropping it from totals.
       entries.push({
-        ...base,
-        runId: null,
-        workflowRunId: null,
+        ...legacyBase,
         phase: null,
         provider: record.provider,
-        model: null,
-        worker: null,
         usage: null,
+        usageAccounting: 'unknown',
         reportedCost: null,
         estimatedCost: null,
         effectiveCost: null,
-        accounting: 'unknown',
-        observedAtIso: record.observedAtIso,
-        evidenceRef: null,
-        runGranularity: 'aggregate'
+        costProvenance: 'unknown',
+        accounting: 'unknown'
       });
     }
   }
   return entries;
 }
 
+/**
+ * Filters ledger entries.
+ *
+ * Temporal filtering compares real instants (epoch milliseconds), never ISO strings
+ * lexicographically, so `...Z` and `...+00:00` behave identically. An entry is in the window
+ * when its own terminal instant falls inside it; an entry whose terminal instant is unknown is
+ * excluded from any bounded window rather than silently attributed to it, and is reported via
+ * `unknownTerminalTimestampEntries`.
+ */
 export function filterLedgerEntries(entries, {
   from = null,
   to = null,
   repository = null,
   issueNumber = null,
   pullRequestNumber = null,
-  phase = null
+  phase = null,
+  provider = null,
+  model = null
 } = {}) {
+  const fromMs = toInstantMs(from, 'period.from');
+  const toMs = toInstantMs(to, 'period.to');
+  if (fromMs != null && toMs != null && toMs < fromMs) {
+    throw new Error('invalid period: --to must not precede --from');
+  }
   return entries.filter((entry) => {
     if (repository && entry.repository !== repository) return false;
     if (issueNumber != null && entry.issueNumber !== issueNumber) return false;
     if (pullRequestNumber != null && entry.pullRequestNumber !== pullRequestNumber) return false;
     if (phase && entry.phase !== phase) return false;
-    if ((from || to) && !entry.observedAtIso) return false;
-    if (from && entry.observedAtIso < from) return false;
-    if (to && entry.observedAtIso > to) return false;
+    if (provider && entry.provider !== provider) return false;
+    if (model && entry.model !== model) return false;
+    if (fromMs == null && toMs == null) return true;
+    const endedMs = toInstantMs(entry.endedAtIso, 'entry.endedAtIso');
+    if (endedMs == null) return false;
+    // Inclusive on both edges: a run terminating exactly on the boundary is inside the window.
+    if (fromMs != null && endedMs < fromMs) return false;
+    if (toMs != null && endedMs > toMs) return false;
     return true;
   });
+}
+
+/** Counts entries that a bounded window had to drop because their terminal instant is unknown. */
+export function countUnknownTerminalTimestamps(entries, { from = null, to = null } = {}) {
+  if (from == null && to == null) return 0;
+  return entries.filter((entry) => entry.endedAtIso == null).length;
 }
 
 const TOKEN_FIELDS = Object.freeze(['turns', 'credits', 'inputTokens', 'outputTokens', 'totalTokens']);
@@ -184,6 +272,7 @@ function summarizeUsage(entries) {
     result[field] = Object.freeze({
       known: knownCount[field],
       unknown: usageObservations - knownCount[field],
+      // Never coerced to zero: no known observation means the total is genuinely unknown.
       total: knownCount[field] > 0 ? known[field] : null
     });
   }
@@ -191,20 +280,44 @@ function summarizeUsage(entries) {
 }
 
 /**
- * Aggregates ledger entries into per-currency cost totals plus usage totals.
+ * Aggregates ledger entries into per-currency cost totals plus usage/call totals.
  *
- * Currencies are never mixed: `costByCurrency` always groups by currency. Within a currency,
- * `reportedCost`/`estimatedCost` are kept as separate running totals for transparency, while
- * `effectiveCost` is the sum of each entry's own precedence-resolved effective cost (never the
- * sum of reported+estimated for the same entry). `accounting` is `complete` only when every
- * contributing entry/currency resolved to a reported cost; the presence of any estimated or
- * unknown-cost entry makes the aggregate `partial`.
+ * Currencies are never mixed and never converted. Within a currency, reported and estimated are
+ * kept as separate running totals for transparency, while `effectiveCost` sums each entry's own
+ * precedence-resolved cost (never reported+estimated for the same entry).
+ *
+ * The unknown counters are deliberately separate, because they mean different things:
+ * - `unknownCostEntries`: real provider runs whose cost could not be determined;
+ * - `zeroProviderCallEntries`: deliveries proven to have made no provider call (not unknown);
+ * - `legacyEntries`: pre-ledger records with delivery-level evidence only.
  */
 export function aggregateLedgerEntries(entries) {
   const byCurrency = new Map();
   let unknownCostEntries = 0;
+  let zeroProviderCallEntries = 0;
+  let legacyEntries = 0;
+  let providerRuns = 0;
+  let unknownUsageEntries = 0;
+  let partialUsageEntries = 0;
+  let remediationRuns = 0;
+  let auditRuns = 0;
+  const deliveries = new Set();
 
   for (const entry of entries) {
+    deliveries.add(entry.deliveryId);
+    if (entry.kind === 'zero-calls') {
+      zeroProviderCallEntries += 1;
+      continue;
+    }
+    if (entry.kind === 'legacy-aggregate') legacyEntries += 1;
+    if (entry.kind === 'run') {
+      providerRuns += 1;
+      if (entry.phase === 'remediation') remediationRuns += 1;
+      if (entry.phase === 'audit') auditRuns += 1;
+      if (entry.usageAccounting === 'unknown') unknownUsageEntries += 1;
+      else if (entry.usageAccounting === 'partial') partialUsageEntries += 1;
+    }
+
     if (!entry.effectiveCost) {
       unknownCostEntries += 1;
       continue;
@@ -226,32 +339,68 @@ export function aggregateLedgerEntries(entries) {
   const costByCurrency = {};
   for (const [currency, bucket] of [...byCurrency.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     costByCurrency[currency] = Object.freeze({
-      reportedCost: bucket.reported,
-      estimatedCost: bucket.estimated,
-      effectiveCost: bucket.effective,
+      reportedCost: Math.round(bucket.reported * 1e6) / 1e6,
+      estimatedCost: Math.round(bucket.estimated * 1e6) / 1e6,
+      effectiveCost: Math.round(bucket.effective * 1e6) / 1e6,
       accounting: bucket.partial ? 'partial' : 'complete'
     });
   }
 
   const anyCurrencyPartial = [...byCurrency.values()].some((bucket) => bucket.partial);
+  // A window containing only proven zero-provider-call deliveries is COMPLETE, not unknown.
   const accounting = entries.length === 0
     ? 'unknown'
-    : (unknownCostEntries > 0 || anyCurrencyPartial ? 'partial' : 'complete');
+    : (unknownCostEntries > 0 || legacyEntries > 0 || anyCurrencyPartial ? 'partial' : 'complete');
 
   return Object.freeze({
     entriesCount: entries.length,
+    deliveries: deliveries.size,
+    providerRuns,
+    zeroProviderCallEntries,
+    legacyEntries,
     unknownCostEntries,
+    unknownUsageEntries,
+    partialUsageEntries,
+    remediationRuns,
+    auditRuns,
     costByCurrency: Object.freeze(costByCurrency),
     accounting,
     usage: summarizeUsage(entries)
   });
 }
 
+/** Grouping dimensions. `issue`/`pr` are the CLI-facing aliases of the record fields. */
+export const GROUP_BY_DIMENSIONS = Object.freeze({
+  repository: 'repository',
+  issue: 'issueNumber',
+  pr: 'pullRequestNumber',
+  phase: 'phase',
+  provider: 'provider',
+  model: 'model',
+  worker: 'worker',
+  role: 'role',
+  risk: 'risk',
+  delivery: 'deliveryId',
+  day: '__day',
+  kind: 'kind'
+});
+
+function dimensionValue(entry, dimension) {
+  const field = GROUP_BY_DIMENSIONS[dimension];
+  if (!field) throw new Error(`unsupported group-by dimension: ${dimension}`);
+  if (field === '__day') return entry.endedAtIso ? entry.endedAtIso.slice(0, 10) : 'unknown';
+  const value = entry[field];
+  return value == null ? 'unknown' : String(value);
+}
+
 export function groupLedgerEntries(entries, groupBy = ['repository', 'phase']) {
   if (!Array.isArray(groupBy) || groupBy.length === 0) throw new Error('groupBy must be a non-empty array');
+  for (const dimension of groupBy) {
+    if (!GROUP_BY_DIMENSIONS[dimension]) throw new Error(`unsupported group-by dimension: ${dimension}`);
+  }
   const groups = new Map();
   for (const entry of entries) {
-    const key = groupBy.map((field) => String(entry[field] ?? 'unknown')).join('|');
+    const key = groupBy.map((dimension) => dimensionValue(entry, dimension)).join('|');
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(entry);
   }
@@ -263,39 +412,81 @@ export function groupLedgerEntries(entries, groupBy = ['repository', 'phase']) {
 }
 
 /**
- * Resolves a deterministic UTC period window from CLI-style filters.
- * `--today`/`--month` are computed at UTC; other timezones are rejected rather than silently
- * reinterpreted, to keep report boundaries reproducible across CI/local runs.
+ * Resolves a deterministic period window from CLI-style filters.
+ *
+ * Boundaries are real instants. UTC is the default; another timezone is accepted only when it is
+ * a fixed `±HH:MM` offset, so a window stays reproducible between a local run and CI. A named
+ * timezone is rejected rather than silently reinterpreted as UTC.
  */
-export function resolvePeriod({ today = false, month = null, from = null, to = null, timezone = 'UTC', nowMs = Date.now() } = {}) {
-  const resolvedTimezone = requireString(timezone, 'timezone').toUpperCase();
-  if (resolvedTimezone !== 'UTC') {
-    throw new Error('only the UTC timezone is currently supported for deterministic AI usage report period boundaries');
+export function resolvePeriod({
+  period = null, today = false, month = null, from = null, to = null,
+  timezone = 'UTC', nowMs = Date.now()
+} = {}) {
+  const requestedTimezone = requireString(timezone, 'timezone');
+  const offsetMatch = /^([+-])(\d{2}):?(\d{2})$/.exec(requestedTimezone);
+  const isUtc = requestedTimezone.toUpperCase() === 'UTC' || requestedTimezone === 'Z';
+  if (!isUtc && !offsetMatch) {
+    throw new Error(`unsupported timezone: ${requestedTimezone} (use UTC or a fixed ±HH:MM offset)`);
   }
-  if (today) {
-    const day = new Date(nowMs).toISOString().slice(0, 10);
-    return Object.freeze({ from: `${day}T00:00:00.000Z`, to: `${day}T23:59:59.999Z`, timezone: 'UTC' });
+  const offsetMs = offsetMatch
+    ? (offsetMatch[1] === '-' ? -1 : 1) * ((Number(offsetMatch[2]) * 60) + Number(offsetMatch[3])) * 60_000
+    : 0;
+  const resolvedTimezone = isUtc ? 'UTC' : requestedTimezone;
+
+  const windowOf = (startMs, endMs) => Object.freeze({
+    from: new Date(startMs).toISOString(),
+    to: new Date(endMs).toISOString(),
+    timezone: resolvedTimezone
+  });
+
+  const resolvedPeriod = period ?? (today ? 'today' : (month ? 'month' : null));
+
+  if (resolvedPeriod === 'today') {
+    // Local-day boundaries in the requested fixed offset, expressed as real UTC instants.
+    const localDayStart = Math.floor((nowMs + offsetMs) / 86_400_000) * 86_400_000 - offsetMs;
+    return windowOf(localDayStart, localDayStart + 86_400_000 - 1);
   }
-  if (month) {
-    const now = new Date(nowMs);
+
+  if (resolvedPeriod === '7d') {
+    const localDayStart = Math.floor((nowMs + offsetMs) / 86_400_000) * 86_400_000 - offsetMs;
+    return windowOf(localDayStart - (6 * 86_400_000), localDayStart + 86_400_000 - 1);
+  }
+
+  if (resolvedPeriod === 'month') {
+    const anchor = new Date(nowMs + offsetMs);
     const isExplicit = typeof month === 'string' && /^\d{4}-\d{2}$/.test(month);
     const [year, monthNumber] = isExplicit
       ? month.split('-').map(Number)
-      : [now.getUTCFullYear(), now.getUTCMonth() + 1];
-    const start = new Date(Date.UTC(year, monthNumber - 1, 1));
-    const end = new Date(Date.UTC(year, monthNumber, 1) - 1);
-    return Object.freeze({ from: start.toISOString(), to: end.toISOString(), timezone: 'UTC' });
+      : [anchor.getUTCFullYear(), anchor.getUTCMonth() + 1];
+    const start = Date.UTC(year, monthNumber - 1, 1) - offsetMs;
+    const end = Date.UTC(year, monthNumber, 1) - offsetMs - 1;
+    return windowOf(start, end);
   }
-  return Object.freeze({ from, to, timezone: 'UTC' });
+
+  if (resolvedPeriod === 'custom' && (from == null || to == null)) {
+    throw new Error('period "custom" requires both --from and --to');
+  }
+
+  const fromMs = toInstantMs(from, '--from');
+  const toMs = toInstantMs(to, '--to');
+  if (fromMs != null && toMs != null && toMs < fromMs) {
+    throw new Error('invalid period: --to must not precede --from');
+  }
+  return Object.freeze({
+    from: fromMs == null ? null : new Date(fromMs).toISOString(),
+    to: toMs == null ? null : new Date(toMs).toISOString(),
+    timezone: resolvedTimezone
+  });
 }
 
 /**
- * Builds the full AI Usage & Cost report from the canonical metrics store. This is the single
- * aggregation function every consumer (CLI, JSON export, CSV/HTML export, GitHub Job Summary)
- * must call, so totals never diverge between output formats.
+ * Builds the full AI Usage & Cost report from the single operational metrics store. This is the
+ * one aggregation function every consumer (CLI human output, JSON, CSV, HTML, Job Summary) must
+ * call, so totals never diverge between output formats.
  */
 export async function buildAiUsageReport({
   metricsFile,
+  period = null,
   today = false,
   month = null,
   from = null,
@@ -305,28 +496,38 @@ export async function buildAiUsageReport({
   issueNumber = null,
   pullRequestNumber = null,
   phase = null,
+  provider = null,
+  model = null,
   groupBy = ['repository', 'phase'],
+  allowMissingStore = false,
   nowMs = Date.now()
 } = {}) {
-  const store = await loadDeliveryMetricsStore(metricsFile);
+  const store = await loadOperationalMetricsStore(metricsFile, { allowMissing: allowMissingStore });
   const entries = deriveLedgerEntries(store.records);
-  const period = resolvePeriod({ today, month, from, to, timezone, nowMs });
-  const filtered = filterLedgerEntries(entries, {
-    from: period.from,
-    to: period.to,
-    repository,
-    issueNumber,
-    pullRequestNumber,
-    phase
-  });
+  const resolved = resolvePeriod({ period, today, month, from, to, timezone, nowMs });
+  const filters = { repository, issueNumber, pullRequestNumber, phase, provider, model };
+  const filtered = filterLedgerEntries(entries, { from: resolved.from, to: resolved.to, ...filters });
+  const scoped = filterLedgerEntries(entries, filters);
 
   return Object.freeze({
     schemaVersion: AI_USAGE_LEDGER_SCHEMA_VERSION,
     generatedAtIso: new Date(nowMs).toISOString(),
-    period,
-    filters: Object.freeze({ repository, issueNumber, pullRequestNumber, phase }),
+    storePath: store.storePath,
+    storePresent: store.present,
+    period: resolved,
+    filters: Object.freeze(filters),
     totalDeliveries: store.records.length,
+    // Entries dropped from a bounded window purely because their own terminal instant is
+    // unknown; surfaced so an empty window is never mistaken for "nothing was spent".
+    unknownTerminalTimestampEntries: countUnknownTerminalTimestamps(scoped, { from: resolved.from, to: resolved.to }),
     totals: aggregateLedgerEntries(filtered),
-    groups: groupLedgerEntries(filtered, groupBy)
+    groups: groupLedgerEntries(filtered, groupBy),
+    byDay: groupLedgerEntries(filtered, ['day']),
+    byRepository: groupLedgerEntries(filtered, ['repository']),
+    byPhase: groupLedgerEntries(filtered, ['phase']),
+    byProviderModel: groupLedgerEntries(filtered, ['provider', 'model']),
+    byIssue: groupLedgerEntries(filtered, ['repository', 'issue']),
+    byPullRequest: groupLedgerEntries(filtered, ['repository', 'pr']),
+    entries: Object.freeze(filtered)
   });
 }

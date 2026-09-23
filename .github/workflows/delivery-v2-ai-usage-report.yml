@@ -4,28 +4,35 @@ on:
   workflow_dispatch:
     inputs:
       period:
-        description: Reporting period shortcut (all|today|month).
+        description: Reporting period (all|today|7d|month|custom). `custom` requires `from` and `to`.
         required: false
         default: month
         type: choice
         options:
           - all
           - today
+          - 7d
           - month
+          - custom
       from:
-        description: Optional explicit period start (ISO-8601 UTC). Overrides `period` when set together with `to`.
+        description: Period start (ISO-8601 instant), required when period=custom.
         required: false
         type: string
       to:
-        description: Optional explicit period end (ISO-8601 UTC). Overrides `period` when set together with `from`.
+        description: Period end (ISO-8601 instant), required when period=custom.
         required: false
+        type: string
+      timezone:
+        description: UTC (default) or a fixed ±HH:MM offset. Named timezones are rejected.
+        required: false
+        default: UTC
         type: string
       repository:
         description: Optional repository filter (owner/repo).
         required: false
         type: string
       group_by:
-        description: Comma-separated grouping fields (repository,phase,provider,model,worker,workflowRunId).
+        description: Comma-separated grouping dimensions.
         required: false
         default: repository,phase
         type: string
@@ -55,23 +62,31 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Reads the single operational metrics store committed under
+      # docs/delivery-v2/evidence/delivery-v2-metrics.json, which the Delivery V2 controllers
+      # write through the canonical metrics.mjs contract. A missing store fails this step
+      # loudly instead of silently publishing an empty report.
       - name: Build AI usage report (JSON)
         env:
           PERIOD: ${{ inputs.period }}
           FROM: ${{ inputs.from }}
           TO: ${{ inputs.to }}
+          TIMEZONE: ${{ inputs.timezone }}
           REPOSITORY: ${{ inputs.repository }}
           GROUP_BY: ${{ inputs.group_by }}
         run: |
           set -euo pipefail
           mkdir -p ai-usage-report
-          ARGS=()
-          if [ -n "${FROM}" ] && [ -n "${TO}" ]; then
+          ARGS=(--period "${PERIOD:-month}")
+          if [ "${PERIOD}" = "custom" ]; then
+            if [ -z "${FROM}" ] || [ -z "${TO}" ]; then
+              echo "period=custom requires both 'from' and 'to'" >&2
+              exit 1
+            fi
             ARGS+=(--from "${FROM}" --to "${TO}")
-          elif [ "${PERIOD}" = "today" ]; then
-            ARGS+=(--today)
-          elif [ "${PERIOD}" = "month" ]; then
-            ARGS+=(--month)
+          fi
+          if [ -n "${TIMEZONE}" ]; then
+            ARGS+=(--timezone "${TIMEZONE}")
           fi
           if [ -n "${REPOSITORY}" ]; then
             ARGS+=(--repo "${REPOSITORY}")
@@ -81,6 +96,8 @@ jobs:
           fi
           node scripts/ai-usage-report.mjs "${ARGS[@]}" --out ai-usage-report/ai-usage-report.json
 
+      # CSV, HTML and the Job Summary are all rendered from that one JSON payload, so every
+      # surface agrees on totals by construction.
       - name: Export CSV/HTML and publish Job Summary
         run: node scripts/ai-usage-export.mjs ai-usage-report/ai-usage-report.json ai-usage-report
 

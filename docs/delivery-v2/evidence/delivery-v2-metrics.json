@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "records": [
+    {
+      "schemaVersion": 1,
+      "deliveryId": "crgasparoto-br/controle_calorias#1069@0f0cf57ab5c541093d2b7928b3cdac998620ee1e",
+      "repository": "crgasparoto-br/controle_calorias",
+      "issueNumber": null,
+      "pullRequestNumber": 1069,
+      "materialHeadSha": "0f0cf57ab5c541093d2b7928b3cdac998620ee1e",
+      "risk": "critical",
+      "provider": "github-actions",
+      "classifier": {
+        "version": "generated-policy-schema-1",
+        "fingerprint": "35914f89844e0a6c35a436af1a1856e6a2b37ab7f5e0f3d3c1749e7a89d3ad24"
+      },
+      "providerCalls": 0,
+      "attempts": {
+        "implementation": 1,
+        "audit": 0
+      },
+      "aiUsage": {
+        "turns": null,
+        "credits": null,
+        "inputTokens": null,
+        "outputTokens": null,
+        "totalTokens": null
+      },
+      "aiUsageByStage": {},
+      "technicalHygiene": null,
+      "providerCost": {
+        "available": false,
+        "amount": null,
+        "currency": null,
+        "reportedCost": null,
+        "estimatedCost": null,
+        "effectiveCost": null,
+        "accounting": "unknown"
+      },
+      "providerRunLedger": [],
+      "providerRunAccounting": "legacy",
+      "observedAtIso": null,
+      "durationsMs": {
+        "ciQueue": 0,
+        "ciExecution": 567000,
+        "audit": 0,
+        "endToEnd": 3263000
+      },
+      "terminalReason": "merged-after-exact-head-ci",
+      "change": {
+        "files": 7,
+        "additions": 272,
+        "deletions": 102,
+        "linesChanged": 374
+      },
+      "escalated": false,
+      "evidenceRefs": [
+        "github:controle_calorias#1069",
+        "github-actions:controle_calorias#34664118578",
+        "github-job:controle_calorias#103472455017",
+        "commit:controle_calorias@0f0cf57ab5c541093d2b7928b3cdac998620ee1e",
+        "classifier-lock:controle_calorias@0f0cf57ab5c541093d2b7928b3cdac998620ee1e"
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "deliveryId": "crgasparoto-br/training-system#435@ae0fade7be03c6c66f00fbd605bd85d9259aa622",
+      "repository": "crgasparoto-br/training-system",
+      "issueNumber": 431,
+      "pullRequestNumber": 435,
+      "materialHeadSha": "ae0fade7be03c6c66f00fbd605bd85d9259aa622",
+      "risk": "critical",
+      "provider": "github-actions",
+      "classifier": {
+        "version": "generated-policy-schema-1",
+        "fingerprint": "35914f89844e0a6c35a436af1a1856e6a2b37ab7f5e0f3d3c1749e7a89d3ad24"
+      },
+      "providerCalls": 0,
+      "attempts": {
+        "implementation": 1,
+        "audit": 0
+      },
+      "aiUsage": {
+        "turns": null,
+        "credits": null,
+        "inputTokens": null,
+        "outputTokens": null,
+        "totalTokens": null
+      },
+      "aiUsageByStage": {},
+      "technicalHygiene": null,
+      "providerCost": {
+        "available": false,
+        "amount": null,
+        "currency": null,
+        "reportedCost": null,
+        "estimatedCost": null,
+        "effectiveCost": null,
+        "accounting": "unknown"
+      },
+      "providerRunLedger": [],
+      "providerRunAccounting": "legacy",
+      "observedAtIso": null,
+      "durationsMs": {
+        "ciQueue": 0,
+        "ciExecution": 993000,
+        "audit": 0,
+        "endToEnd": 30167000
+      },
+      "terminalReason": "merged-after-exact-head-ci",
+      "change": {
+        "files": 11,
+        "additions": 839,
+        "deletions": 277,
+        "linesChanged": 1116
+      },
+      "escalated": false,
+      "evidenceRefs": [
+        "github:training-system#435",
+        "github-actions:training-system#34664164768",
+        "github-job:training-system#103472597615",
+        "commit:training-system@ae0fade7be03c6c66f00fbd605bd85d9259aa622",
+        "classifier-lock:training-system@ae0fade7be03c6c66f00fbd605bd85d9259aa622"
+      ]
+    }
+  ]
+}

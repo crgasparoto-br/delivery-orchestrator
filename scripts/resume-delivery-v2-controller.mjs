@@ -33,6 +33,9 @@ import {
   runDurationMs
 } from '../src/v2/controller-observability.mjs';
 import { downloadGhAwUsageArtifact } from '../src/v2/gh-aw-usage-artifact.mjs';
+import { loadAiPricingCatalog, DEFAULT_AI_PRICING_FILE } from '../src/v2/ai-pricing.mjs';
+import { persistOperationalDeliveryMetrics } from '../src/v2/metrics-store.mjs';
+import { summarizeDeliveryAiUsage, renderDeliveryAiUsageSummary } from '../src/v2/ai-usage-summary.mjs';
 import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
 import { attachLegacyAdoptionAuditRun, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
@@ -674,6 +677,8 @@ async function mutateLegacyAdoptionCheckpoint({
 
 export async function main() {
   const resumeStartedAtMs = Date.now();
+  // Pricing is read once, from the version committed to this repository; never over the network.
+  const pricingCatalog = await loadAiPricingCatalog(path.resolve(process.cwd(), DEFAULT_AI_PRICING_FILE));
   const targetRepository = requiredEnv('TARGET_REPOSITORY');
   const issueNumber = positiveInteger(requiredEnv('TARGET_ISSUE'), 'TARGET_ISSUE');
   const baseBranch = requiredEnv('BASE_BRANCH');
@@ -1052,12 +1057,32 @@ export async function main() {
     });
   };
 
+  // Single attribution point for resumed deliveries, mirroring the initial controller so a
+  // resumed run lands in the ledger with the same canonical identity and evidence shape.
+  // Re-observing an already-accounted run is a no-op (dedup on the canonical run identity),
+  // which is what makes resume/recovery non-duplicating.
+  const attribution = ({ run, phase, role }) => ({
+    workflowRunId: run.id,
+    materialHeadSha: /^[0-9a-f]{40}$/i.test(String(materialHeadSha ?? '')) ? materialHeadSha : null,
+    phase,
+    provider,
+    role,
+    implementationAttempt: state?.implementationAttempts ?? null,
+    remediationAttempt: state?.auditRemediationAttempts ?? null,
+    startedAtIso: run.run_started_at ?? null,
+    endedAtIso: run.updated_at ?? null,
+    terminalState: run.conclusion ?? null,
+    pricingCatalog
+  });
+
   const recordWorkerUsage = async (run) => {
     const usage = await downloadGhAwUsageArtifact({ repository: orchestratorRepository, runId: run.id, token: actionsToken });
     observability = recordControllerProviderObservation(observability, {
       runId: run.id,
       stage: 'implementation',
       usage: usage.usage,
+      rawUsagePayload: usage.rawUsagePayload,
+      ...attribution({ run, phase: 'implementation', role: 'implementation-worker' }),
       evidenceRef: usage.evidenceRef ?? run.html_url
     });
   };
@@ -1499,6 +1524,8 @@ export async function main() {
         runId: auditRun.id,
         stage: 'audit',
         usage: result.providerCalls === 0 ? { providerCalls: 0 } : (result.modelUsage ?? {}),
+        rawUsagePayload: result.modelUsage ?? null,
+        ...attribution({ run: auditRun, phase: 'audit', role: 'independent-auditor' }),
         durationMs: runDurationMs(auditRun),
         evidenceRef: auditRun.html_url
       });
@@ -1772,6 +1799,8 @@ export async function main() {
       if (auditResult.decision !== 'approved') throw new Error('release gate requires approved authoritative audit');
       observability = recordControllerProviderObservation(observability, {
         runId: auditRun.id, stage: 'audit', usage: auditResult.providerCalls === 0 ? { providerCalls: 0 } : (auditResult.modelUsage ?? {}),
+        rawUsagePayload: auditResult.modelUsage ?? null,
+        ...attribution({ run: auditRun, phase: 'audit', role: 'independent-auditor' }),
         durationMs: runDurationMs(auditRun), evidenceRef: auditRun.html_url
       });
       audit = { candidateSha: materialHeadSha, decision: 'approved', mode: state.auditMode, requestFingerprint: auditResult.requestFingerprint, evidenceRef: auditRun.html_url };
@@ -1826,11 +1855,19 @@ export async function main() {
     },
     evidenceRefs: observability.evidenceRefs
   };
+  // Resumed deliveries publish to the same single operational store as the initial controller;
+  // the upsert is keyed by deliveryId, so a resume never duplicates an already-stored delivery.
+  const metricsStore = await persistOperationalDeliveryMetrics(metrics);
+  const aiUsage = summarizeDeliveryAiUsage(metrics);
+
   const payload = {
     schemaVersion: 1,
     status: state.status,
     repository: targetRepository,
     issueNumber,
+    metricsStore,
+    aiUsage,
+    aiUsageSummary: renderDeliveryAiUsageSummary(aiUsage),
     pullRequestNumber: resumePr,
     materialHeadSha: String(pullRequest.head.sha).toLowerCase(),
     risk: state.riskProfile,

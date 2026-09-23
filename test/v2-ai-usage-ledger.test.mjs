@@ -143,7 +143,11 @@ test('scenario H: reported cost takes precedence over estimated cost and they ar
       provider: 'codex',
       usage: {},
       reportedCost: { amount: 1.5, currency: 'USD' },
-      estimatedCost: { amount: 9.99, currency: 'USD' }
+      estimatedCost: { amount: 9.99, currency: 'USD' },
+      pricingSnapshot: {
+        version: '2026-09-01', key: 'codex/gpt-5', currency: 'USD',
+        inputPerMillionTokens: 1.25, outputPerMillionTokens: 10
+      }
     }]
   }));
   const [entry] = deriveLedgerEntries([record]);
@@ -175,12 +179,12 @@ test('scenario G: two currencies are aggregated separately, never summed', () =>
 test('scenario L: period filtering uses the provider run terminal timestamp', () => {
   const record = createDeliveryMetrics(baseInput({
     providerRunLedger: [
-      { runId: 6001, phase: 'implementation', provider: 'codex', usage: {}, reportedCost: null, estimatedCost: null, observedAtIso: '2026-08-31T23:59:59.999Z' },
-      { runId: 6002, phase: 'implementation', provider: 'codex', usage: {}, reportedCost: null, estimatedCost: null, observedAtIso: '2026-09-01T00:00:00.000Z' }
+      { runId: 6001, phase: 'implementation', provider: 'codex', usage: {}, reportedCost: null, estimatedCost: null, endedAtIso: '2026-08-31T23:59:59.999Z' },
+      { runId: 6002, phase: 'implementation', provider: 'codex', usage: {}, reportedCost: null, estimatedCost: null, endedAtIso: '2026-09-01T00:00:00.000Z' }
     ]
   }));
   const entries = deriveLedgerEntries([record]);
-  const period = resolvePeriod({ month: '2026-09' });
+  const period = resolvePeriod({ period: 'month', month: '2026-09' });
   const filtered = filterLedgerEntries(entries, { from: period.from, to: period.to });
   assert.deepEqual(filtered.map((e) => e.runId), [6002]);
 });
