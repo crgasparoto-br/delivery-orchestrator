@@ -41,6 +41,7 @@ import { attachLegacyAdoptionAuditRun, legacyAdoptionComment, parseLegacyAdoptio
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
 import { fetchImmutableCompareEvidence } from '../src/v2/github-audit-evidence.mjs';
 import { resolveCheckedOutControlPlaneHeadSha } from './guard-delivery-v2-reentry.mjs';
+import { recordControllerTechnicalError } from '../src/v2/controller-summary.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
@@ -711,6 +712,7 @@ export async function main() {
   let classifier;
   let latestCheck = null;
   let latestSourceRun = null;
+  let releaseEvaluation = null;
 
   if (!stateEnvelope) {
     const envelope = parseLegacyAdoptionEnvelope(comments, targetRepository);
@@ -1822,6 +1824,7 @@ export async function main() {
     if (!release.readiness) throw new Error(`release gate did not become ready: ${release.reasons.join(', ')}`);
     await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'success', description: 'Delivery V2 exact-head release gate approved', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
     await persist({ nextAction: 'human-merge-policy', release });
+    releaseEvaluation = release;
   }
 
   pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
@@ -1872,6 +1875,11 @@ export async function main() {
     pullRequestNumber: resumePr,
     materialHeadSha: String(pullRequest.head.sha).toLowerCase(),
     risk: state.riskProfile,
+    // Canonical release evaluation, exposed for the operator summary. The summary re-checks that
+    // the gate candidate is still the PR head observed above before it reports completion.
+    releaseReady: releaseEvaluation?.readiness === true,
+    release: releaseEvaluation,
+    nextAction: controller.nextAction ?? null,
     providerCalls: metrics?.providerCalls ?? null,
     observedProviderCalls: observability.providerCalls,
     observabilityHistoryComplete,
@@ -1891,8 +1899,11 @@ export async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((error) => {
+  main().catch(async (error) => {
     process.stderr.write(`${error.stack || error.message}\n`);
     process.exitCode = 1;
+    await recordControllerTechnicalError(error, { source: 'controller' }).catch((recordError) => {
+      process.stderr.write(`failed to record controller technical error: ${recordError.message}\n`);
+    });
   });
 }

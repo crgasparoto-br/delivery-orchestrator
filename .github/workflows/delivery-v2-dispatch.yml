@@ -81,6 +81,7 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       ORCHESTRATOR_WORKER_REF: ${{ github.event.repository.default_branch }}
       CONTROLLER_RESULT_PATH: /tmp/delivery-v2-controller-${{ github.run_id }}.json
+      CONTROLLER_ERROR_PATH: /tmp/delivery-v2-controller-errors-${{ github.run_id }}.jsonl
     steps:
       - name: Restrict target repository and base branch
         shell: bash
@@ -135,6 +136,7 @@ jobs:
         run: node src/cli.mjs plan-v2 | tee "${RUNNER_TEMP}/delivery-v2-initial-plan.json"
 
       - name: Run bounded Delivery V2 controller
+        id: controller
         if: steps.reentry.outputs.run_controller == 'true'
         env:
           DELIVERY_V2_RESUME_PR: ${{ steps.reentry.outputs.resume_pr }}
@@ -151,19 +153,6 @@ jobs:
       - name: Finalize terminal release status
         if: always() && steps.reentry.outputs.run_controller == 'true'
         run: node scripts/finalize-delivery-v2-controller-status.mjs
-
-      - name: Publish controller summary
-        if: always()
-        shell: bash
-        run: |
-          if [ -f "$CONTROLLER_RESULT_PATH" ]; then
-            {
-              echo '## Delivery V2 controller'
-              echo '```json'
-              cat "$CONTROLLER_RESULT_PATH"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
 
       # The controller wrote the completed delivery into the operational metrics store during the
       # run. Publishing it back to the default branch is what makes the cross-delivery history
@@ -208,3 +197,16 @@ jobs:
             docs/delivery-v2/evidence/delivery-v2-metrics.json
           if-no-files-found: warn
           retention-days: 30
+
+      # This must remain the final operational step: job.status must already include failures from
+      # evidence publication and every other preceding step before we render the terminal summary.
+      # Functional delivery state for the operator. A green job is technical success only; the
+      # summary reports CONCLUIDA exclusively from the exact-head release gate in the controller
+      # result, and distinguishes functional blocks from technical failures of this job.
+      - name: Publish controller summary
+        if: always()
+        env:
+          DELIVERY_V2_JOB_STATUS: ${{ job.status }}
+          DELIVERY_V2_GUARD_OUTCOME: ${{ steps.reentry.outcome }}
+          DELIVERY_V2_CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
+        run: node scripts/publish-delivery-v2-controller-summary.mjs

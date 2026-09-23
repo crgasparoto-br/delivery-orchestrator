@@ -11,6 +11,7 @@ import { expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/co
 import { parseTrustedJsonEnvelope, selectExistingPullRequest, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 import { createLegacyAdoption, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { withTransientFetchRetry } from '../src/v2/github-api-retry.mjs';
+import { recordControllerTechnicalError } from '../src/v2/controller-summary.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
@@ -772,8 +773,11 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((error) => {
+  main().catch(async (error) => {
     process.stderr.write(`${error.stack || error.message}\n`);
     process.exitCode = 1;
+    await recordControllerTechnicalError(error, { source: 'reentry-guard' }).catch((recordError) => {
+      process.stderr.write(`failed to record reentry guard technical error: ${recordError.message}\n`);
+    });
   });
 }

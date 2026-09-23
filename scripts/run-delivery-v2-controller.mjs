@@ -35,6 +35,7 @@ import {
   recordControllerProviderObservation,
   runDurationMs
 } from '../src/v2/controller-observability.mjs';
+import { recordControllerTechnicalError } from '../src/v2/controller-summary.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const SHA_RE = /^[0-9a-f]{40}$/i;
@@ -469,6 +470,7 @@ export async function main() {
   let latestCheck = null;
   let latestSourceRun = null;
   let lastAudit = null;
+  let releaseEvaluation = null;
   let controller = { controllerRunId, controllerRepository: orchestratorRepository, controllerRef: orchestratorRef, controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml', observability };
   // Single place where an observed provider run is attributed, so every phase (implementation,
   // remediation, technical hygiene, audit) records the same canonical identity/evidence shape.
@@ -886,6 +888,7 @@ export async function main() {
       if (!release.readiness) throw new Error(`release gate did not become ready: ${release.reasons.join(', ')}`);
       await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'success', description: 'Delivery V2 exact-head release gate approved', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
       await persist({ nextAction: 'human-merge-policy', release });
+      releaseEvaluation = release;
       break;
     }
     if (state.status === 'escalated') break;
@@ -926,6 +929,11 @@ export async function main() {
     pullRequestNumber: pullRequest.number,
     materialHeadSha: String(pullRequest.head.sha).toLowerCase(),
     risk: state.riskProfile,
+    // Canonical release evaluation, exposed for the operator summary. The summary re-checks that
+    // the gate candidate is still the PR head observed above before it reports completion.
+    releaseReady: releaseEvaluation?.readiness === true,
+    release: releaseEvaluation,
+    nextAction: controller.nextAction ?? null,
     workerRuns: workerRuns.map((run) => ({ id: run.id, conclusion: run.conclusion, url: run.html_url })),
     auditRuns: auditRuns.map((run) => ({ id: run.id, conclusion: run.conclusion, url: run.html_url })),
     metrics,
@@ -939,8 +947,11 @@ export async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((error) => {
+  main().catch(async (error) => {
     process.stderr.write(`${error.stack || error.message}\n`);
     process.exitCode = 1;
+    await recordControllerTechnicalError(error, { source: 'controller' }).catch((recordError) => {
+      process.stderr.write(`failed to record controller technical error: ${recordError.message}\n`);
+    });
   });
 }
