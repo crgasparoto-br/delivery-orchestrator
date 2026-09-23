@@ -183,6 +183,8 @@ const NEXT_ACTION_GUIDANCE = Object.freeze({
   'dispatch-ci-remediation': { kind: RESUME, detail: 'A CI falhou de forma remediavel; a remediacao precisa ser despachada.' },
   'dispatch-remediation': { kind: RESUME, detail: 'A remediacao precisa ser despachada.' },
   'observe-remediation': { kind: RESUME, detail: 'A remediacao em andamento precisa ser observada.' },
+  'dispatch-remediation-recovery': { kind: RESUME, detail: 'A recuperacao bounded de uma remediacao que falhou antes da publicacao precisa ser despachada.' },
+  'observe-remediation-recovery': { kind: RESUME, detail: 'A recuperacao bounded da remediacao esta em andamento e precisa ser observada.' },
   'run-audit': { kind: RESUME, detail: 'A auditoria independente do HEAD atual ainda precisa ser executada.' },
   'dispatch-audit': { kind: RESUME, detail: 'A auditoria independente do HEAD atual ainda precisa ser despachada.' },
   'observe-audit': { kind: RESUME, detail: 'A auditoria independente em andamento precisa ser observada.' },

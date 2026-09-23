@@ -60,6 +60,96 @@ function positiveInteger(value, label) {
   return result;
 }
 
+function normalizedRecoverySha(value) {
+  const sha = String(value ?? '').trim().toLowerCase();
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
+export function recoverPersistedRemediationContext({ state, controller } = {}) {
+  const persisted = controller?.remediationContext;
+
+  if (
+    persisted &&
+    typeof persisted === 'object' &&
+    !Array.isArray(persisted)
+  ) {
+    return persisted;
+  }
+
+  const findings = Array.isArray(state?.blockingFindings)
+    ? state.blockingFindings
+    : [];
+
+  if (
+    state?.auditEvidence?.decision === 'rejected' &&
+    findings.length > 0
+  ) {
+    return Object.freeze({
+      source: 'audit-findings',
+      findings: Object.freeze([...findings]),
+      newRiskSurfaces: Object.freeze([])
+    });
+  }
+
+  return null;
+}
+
+export function shouldRearmFailedRemediationWorker({
+  stateStatus,
+  runConclusion,
+  runHeadSha,
+  currentControllerSha,
+  previousRecoveryControllerSha,
+  materialHeadSha,
+  currentHeadSha,
+  previousPrTitle,
+  currentPrTitle
+} = {}) {
+  if (String(stateStatus ?? '') !== 'implementing') return false;
+  if (String(runConclusion ?? '').trim().toLowerCase() === 'success') {
+    return false;
+  }
+
+  const materialSha = normalizedRecoverySha(materialHeadSha);
+  const currentMaterialSha = normalizedRecoverySha(currentHeadSha);
+
+  // Recovery is only valid while the target material itself has not moved.
+  if (
+    !materialSha ||
+    !currentMaterialSha ||
+    materialSha !== currentMaterialSha
+  ) {
+    return false;
+  }
+
+  const previousControllerSha = normalizedRecoverySha(runHeadSha);
+  const controllerSha = normalizedRecoverySha(currentControllerSha);
+  const recoveredControllerSha = normalizedRecoverySha(
+    previousRecoveryControllerSha
+  );
+
+  // Infrastructure/control-plane recovery. One automatic recovery per
+  // controller SHA epoch, without consuming another remediation attempt.
+  const controlPlaneChanged =
+    previousControllerSha &&
+    controllerSha &&
+    previousControllerSha !== controllerSha &&
+    recoveredControllerSha !== controllerSha;
+
+  const beforeTitle = String(previousPrTitle ?? '');
+  const afterTitle = String(currentPrTitle ?? '');
+
+  // A Safe Outputs precondition may be fixed without changing material.
+  // The concrete case that exposed this bug was the managed PR prefix.
+  const metadataPreconditionFixed =
+    beforeTitle &&
+    beforeTitle !== afterTitle &&
+    !beforeTitle.startsWith('[delivery-v2] ') &&
+    afterTitle.startsWith('[delivery-v2] ');
+
+  return Boolean(controlPlaneChanged || metadataPreconditionFixed);
+}
+
 export function shouldRearmFailedTechnicalHygiene({
   nextAction,
   runConclusion,
@@ -184,13 +274,24 @@ const TECHNICAL_HYGIENE_RESUME_ACTIONS = new Set([
   'technical-hygiene-worker-failed'
 ]);
 
+const REMEDIATION_RESUME_ACTIONS = new Set([
+  'dispatch-remediation',
+  'observe-remediation',
+  'remediation-worker-failed',
+  'dispatch-remediation-recovery',
+  'observe-remediation-recovery'
+]);
+
 export function resumeEntryNextAction({
   stateStatus,
   controllerNextAction
 } = {}) {
   const persistedAction = String(controllerNextAction ?? '').trim();
 
-  if (TECHNICAL_HYGIENE_RESUME_ACTIONS.has(persistedAction)) {
+  if (
+    TECHNICAL_HYGIENE_RESUME_ACTIONS.has(persistedAction) ||
+    REMEDIATION_RESUME_ACTIONS.has(persistedAction)
+  ) {
     return persistedAction;
   }
 
@@ -1110,10 +1211,117 @@ export async function main() {
         await persist({ nextAction: 'observe-remediation', workerRunId, workerDispatchNonce: controller.workerDispatchNonce });
       }
       if (!Number.isInteger(workerRunId) || workerRunId < 1) throw new Error('cannot safely resume an in-flight implementation without persisted worker identity');
-      const run = await waitWorkflowRun(orchestratorRepository, workerRunId, actionsToken);
+      let run = await waitWorkflowRun(
+        orchestratorRepository,
+        workerRunId,
+        actionsToken
+      );
       await recordWorkerUsage(run);
+
       if (run.conclusion !== 'success') {
-        await persist({ nextAction: 'remediation-worker-failed', workerRunId: run.id });
+        const currentControllerSha =
+          resolveCheckedOutControlPlaneHeadSha();
+
+        const remediationContext =
+          recoverPersistedRemediationContext({
+            state,
+            controller
+          });
+
+        const canRearm =
+          remediationContext != null &&
+          shouldRearmFailedRemediationWorker({
+            stateStatus: state.status,
+            runConclusion: run.conclusion,
+            runHeadSha: run.head_sha,
+            currentControllerSha,
+            previousRecoveryControllerSha:
+              controller.remediationRecovery?.currentControllerSha,
+            materialHeadSha,
+            currentHeadSha: pullRequest.head.sha,
+            previousPrTitle:
+              controller.remediationFailure?.prTitle,
+            currentPrTitle: pullRequest.title
+          });
+
+        if (canRearm) {
+          const failedRun = run;
+          const workerDispatchNonce = createDispatchNonce();
+
+          const remediationRecovery = {
+            schemaVersion: 1,
+            reason:
+              controller.remediationFailure?.prTitle &&
+              controller.remediationFailure.prTitle !== pullRequest.title
+                ? 'remediation-safe-output-precondition-fixed'
+                : 'control-plane-changed-after-remediation-worker-failure',
+            previousRunId: failedRun.id,
+            previousControllerSha:
+              normalizedRecoverySha(failedRun.head_sha),
+            currentControllerSha,
+            materialHeadSha,
+            previousPrTitle:
+              controller.remediationFailure?.prTitle ?? null,
+            currentPrTitle: pullRequest.title
+          };
+
+          await persist({
+            nextAction: 'dispatch-remediation-recovery',
+            workerRunId: null,
+            workerDispatchNonce,
+            remediationContext,
+            remediationRecovery
+          });
+
+          run = await dispatchWorker({
+            orchestratorRepository,
+            orchestratorRef,
+            plan,
+            controllerRunId,
+            targetRepository,
+            issueNumber,
+            baseBranch,
+            targetRef: materialHeadSha,
+            targetPr: resumePr,
+            remediationContext: JSON.stringify(
+              remediationContext
+            ),
+            token: actionsToken,
+            dispatchNonce: workerDispatchNonce
+          });
+
+          await persist({
+            nextAction: 'observe-remediation-recovery',
+            workerRunId: run.id,
+            workerDispatchNonce,
+            remediationContext,
+            remediationRecovery
+          });
+
+          run = await waitWorkflowRun(
+            orchestratorRepository,
+            run.id,
+            actionsToken
+          );
+          await recordWorkerUsage(run);
+        }
+      }
+
+      if (run.conclusion !== 'success') {
+        await persist({
+          nextAction: 'remediation-worker-failed',
+          workerRunId: run.id,
+          remediationFailure: {
+            schemaVersion: 1,
+            workerRunId: run.id,
+            conclusion: run.conclusion,
+            workerControllerSha:
+              normalizedRecoverySha(run.head_sha),
+            materialHeadSha,
+            prTitle: pullRequest.title
+          }
+        });
+
         await publishReleaseStatus({
           repository: targetRepository,
           sha: materialHeadSha,
@@ -1123,8 +1331,12 @@ export async function main() {
           token: targetWriteToken,
           targetUrl: run.html_url
         });
-        throw new Error(`persisted remediation worker failed: ${run.html_url}`);
+
+        throw new Error(
+          `persisted remediation worker failed: ${run.html_url}`
+        );
       }
+
       const beforeSha = materialHeadSha;
       pullRequest = await waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken);
       materialHeadSha = String(pullRequest.head.sha).toLowerCase();
@@ -1225,7 +1437,12 @@ export async function main() {
         break;
       }
       const workerDispatchNonce = createDispatchNonce();
-      await persist({ nextAction: 'dispatch-remediation', workerRunId: null, workerDispatchNonce });
+      await persist({
+        nextAction: 'dispatch-remediation',
+        workerRunId: null,
+        workerDispatchNonce,
+        remediationContext: remediation
+      });
       let worker = await dispatchWorker({
         orchestratorRepository,
         orchestratorRef,
@@ -1240,14 +1457,33 @@ export async function main() {
         token: actionsToken,
         dispatchNonce: workerDispatchNonce
       });
-      await persist({ nextAction: 'observe-remediation', workerRunId: worker.id, workerDispatchNonce });
-      worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
+      await persist({
+        nextAction: 'observe-remediation',
+        workerRunId: worker.id,
+        workerDispatchNonce,
+        remediationContext: remediation
+      });
+      worker = await waitWorkflowRun(
+        orchestratorRepository,
+        worker.id,
+        actionsToken
+      );
       await recordWorkerUsage(worker);
       if (worker.conclusion !== 'success') {
         await persist({
           nextAction: 'remediation-worker-failed',
           workerRunId: worker.id,
-          workerDispatchNonce
+          workerDispatchNonce,
+          remediationContext: remediation,
+          remediationFailure: {
+            schemaVersion: 1,
+            workerRunId: worker.id,
+            conclusion: worker.conclusion,
+            workerControllerSha:
+              normalizedRecoverySha(worker.head_sha),
+            materialHeadSha,
+            prTitle: pullRequest.title
+          }
         });
         await publishReleaseStatus({
           repository: targetRepository,
