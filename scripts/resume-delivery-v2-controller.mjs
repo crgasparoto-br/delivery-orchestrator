@@ -544,13 +544,46 @@ async function listWorkflowRuns(repository, workflow, token) {
 
 async function dispatchWorkflowAndResolveRun({ repository, workflow, ref, inputs, token, kind, dispatchNonce = createDispatchNonce() }) {
   await postJson(`https://api.github.com/repos/${repository}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, token, { ref, inputs: { ...inputs, dispatch_nonce: dispatchNonce } });
-  const deadline = Date.now() + 2 * 60 * 1000;
+
+  const startedAt = Date.now();
+  const deadline = startedAt + 2 * 60 * 1000;
+  let lastHeartbeatAt = 0;
+
   while (Date.now() < deadline) {
-    const correlated = selectCorrelatedWorkflowRun(await listWorkflowRuns(repository, workflow, token), { kind, nonce: dispatchNonce, ref });
-    if (correlated) return correlated;
+    const correlated = selectCorrelatedWorkflowRun(
+      await listWorkflowRuns(repository, workflow, token),
+      { kind, nonce: dispatchNonce, ref }
+    );
+
+    if (correlated) {
+      process.stdout.write(
+        `[delivery-v2] correlated workflow dispatch ` +
+        `repository=${repository} workflow="${workflow}" ` +
+        `run=${correlated.id} status=${correlated.status ?? '-'} ` +
+        `elapsed=${Math.floor((Date.now() - startedAt) / 1000)}s\n`
+      );
+      return correlated;
+    }
+
+    const now = Date.now();
+
+    if (now - lastHeartbeatAt >= 60_000) {
+      process.stdout.write(
+        `[delivery-v2] waiting workflow dispatch correlation ` +
+        `repository=${repository} workflow="${workflow}" ` +
+        `kind=${kind} ref=${ref} ` +
+        `elapsed=${Math.floor((now - startedAt) / 1000)}s\n`
+      );
+      lastHeartbeatAt = now;
+    }
+
     await sleep(Math.min(POLL_MS, 5000));
   }
-  throw new Error(`timed out resolving correlated workflow dispatch: ${workflow}`);
+
+  throw new Error(
+    `timed out resolving correlated workflow dispatch: ${workflow} after ` +
+    `${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 async function waitWorkflowRun(repository, runId, token) {
@@ -591,13 +624,43 @@ async function waitWorkflowRun(repository, runId, token) {
 }
 
 async function waitHeadChange(repository, prNumber, previousSha, token) {
-  const deadline = Date.now() + 15 * 60 * 1000;
+  const startedAt = Date.now();
+  const deadline = startedAt + 15 * 60 * 1000;
+  let lastHeartbeatAt = 0;
+
   while (Date.now() < deadline) {
     const pr = await fetchPullRequest(repository, prNumber, token);
-    if (String(pr.head.sha).toLowerCase() !== previousSha.toLowerCase()) return pr;
+    const currentSha = String(pr.head.sha).toLowerCase();
+
+    if (currentSha !== previousSha.toLowerCase()) {
+      process.stdout.write(
+        `[delivery-v2] material head changed ` +
+        `repository=${repository} pr=${prNumber} ` +
+        `previous=${previousSha} current=${currentSha} ` +
+        `elapsed=${Math.floor((Date.now() - startedAt) / 1000)}s\n`
+      );
+      return pr;
+    }
+
+    const now = Date.now();
+
+    if (now - lastHeartbeatAt >= 60_000) {
+      process.stdout.write(
+        `[delivery-v2] waiting material head change ` +
+        `repository=${repository} pr=${prNumber} ` +
+        `previous=${previousSha} ` +
+        `elapsed=${Math.floor((now - startedAt) / 1000)}s\n`
+      );
+      lastHeartbeatAt = now;
+    }
+
     await sleep(POLL_MS);
   }
-  throw new Error('in-flight remediation completed without publishing a new material head');
+
+  throw new Error(
+    'in-flight remediation completed without publishing a new material head after ' +
+    `${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch, targetRef, targetPr, remediationContext, token, dispatchNonce = createDispatchNonce() }) {

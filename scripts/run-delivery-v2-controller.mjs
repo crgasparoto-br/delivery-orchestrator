@@ -137,13 +137,46 @@ async function listWorkflowRuns(repository, workflow, token) {
 
 async function dispatchWorkflowAndResolveRun({ repository, workflow, ref, inputs, token, kind, dispatchNonce = createDispatchNonce() }) {
   await postJson(`https://api.github.com/repos/${repository}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, token, { ref, inputs: { ...inputs, dispatch_nonce: dispatchNonce } });
-  const deadline = Date.now() + 2 * 60 * 1000;
+
+  const startedAt = Date.now();
+  const deadline = startedAt + 2 * 60 * 1000;
+  let lastHeartbeatAt = 0;
+
   while (Date.now() < deadline) {
-    const correlated = selectCorrelatedWorkflowRun(await listWorkflowRuns(repository, workflow, token), { kind, nonce: dispatchNonce, ref });
-    if (correlated) return correlated;
+    const correlated = selectCorrelatedWorkflowRun(
+      await listWorkflowRuns(repository, workflow, token),
+      { kind, nonce: dispatchNonce, ref }
+    );
+
+    if (correlated) {
+      process.stdout.write(
+        `[delivery-v2] correlated workflow dispatch ` +
+        `repository=${repository} workflow="${workflow}" ` +
+        `run=${correlated.id} status=${correlated.status ?? '-'} ` +
+        `elapsed=${Math.floor((Date.now() - startedAt) / 1000)}s\n`
+      );
+      return correlated;
+    }
+
+    const now = Date.now();
+
+    if (now - lastHeartbeatAt >= 60_000) {
+      process.stdout.write(
+        `[delivery-v2] waiting workflow dispatch correlation ` +
+        `repository=${repository} workflow="${workflow}" ` +
+        `kind=${kind} ref=${ref} ` +
+        `elapsed=${Math.floor((now - startedAt) / 1000)}s\n`
+      );
+      lastHeartbeatAt = now;
+    }
+
     await sleep(Math.min(POLL_MS, 5000));
   }
-  throw new Error(`timed out resolving correlated workflow dispatch: ${workflow}`);
+
+  throw new Error(
+    `timed out resolving correlated workflow dispatch: ${workflow} after ` +
+    `${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 async function waitWorkflowRun(repository, runId, token) {
@@ -184,20 +217,53 @@ async function waitWorkflowRun(repository, runId, token) {
 }
 
 async function findManagedPullRequest({ repository, issueNumber, baseBranch, since, token }) {
-  const deadline = Date.now() + 12 * 60 * 1000;
+  const startedAt = Date.now();
+  const deadline = startedAt + 12 * 60 * 1000;
+  let lastHeartbeatAt = 0;
   const closing = new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
+
   while (Date.now() < deadline) {
     const pulls = await withTransientFetchRetry(
       () => api(`https://api.github.com/repos/${repository}/pulls?state=open&base=${encodeURIComponent(baseBranch)}&per_page=100`, token),
       { label: `findManagedPullRequest(${repository}#${issueNumber})` }
     );
+
     const trustedLogin = trustedCommentAuthorForRepository(repository);
     const candidates = pulls.filter((pr) => Date.parse(pr.created_at) >= since - 5000 && String(pr.title ?? '').startsWith('[delivery-v2] ') && closing.test(String(pr.body ?? '')) && String(pr.user?.login ?? '').toLowerCase() === trustedLogin && String(pr.head?.repo?.full_name ?? repository) === repository);
-    if (candidates.length === 1) return candidates[0];
-    if (candidates.length > 1) throw new Error(`multiple Delivery V2 PRs found for issue #${issueNumber}`);
+
+    if (candidates.length === 1) {
+      process.stdout.write(
+        `[delivery-v2] managed pull request found ` +
+        `repository=${repository} issue=${issueNumber} ` +
+        `pr=${candidates[0].number} ` +
+        `elapsed=${Math.floor((Date.now() - startedAt) / 1000)}s\n`
+      );
+      return candidates[0];
+    }
+
+    if (candidates.length > 1) {
+      throw new Error(`multiple Delivery V2 PRs found for issue #${issueNumber}`);
+    }
+
+    const now = Date.now();
+
+    if (now - lastHeartbeatAt >= 60_000) {
+      process.stdout.write(
+        `[delivery-v2] waiting managed pull request ` +
+        `repository=${repository} issue=${issueNumber} ` +
+        `base=${baseBranch} ` +
+        `elapsed=${Math.floor((now - startedAt) / 1000)}s\n`
+      );
+      lastHeartbeatAt = now;
+    }
+
     await sleep(POLL_MS);
   }
-  throw new Error(`worker completed but no managed PR was found for issue #${issueNumber}`);
+
+  throw new Error(
+    `worker completed but no managed PR was found for issue #${issueNumber} after ` +
+    `${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 async function fetchPullRequest(repository, prNumber, token) {
@@ -430,13 +496,43 @@ function checkEvidence(check, sourceRun, sha) {
 }
 
 async function waitHeadChange(repository, prNumber, previousSha, token) {
-  const deadline = Date.now() + 15 * 60 * 1000;
+  const startedAt = Date.now();
+  const deadline = startedAt + 15 * 60 * 1000;
+  let lastHeartbeatAt = 0;
+
   while (Date.now() < deadline) {
     const pr = await fetchPullRequest(repository, prNumber, token);
-    if (String(pr.head.sha).toLowerCase() !== previousSha.toLowerCase()) return pr;
+    const currentSha = String(pr.head.sha).toLowerCase();
+
+    if (currentSha !== previousSha.toLowerCase()) {
+      process.stdout.write(
+        `[delivery-v2] material head changed ` +
+        `repository=${repository} pr=${prNumber} ` +
+        `previous=${previousSha} current=${currentSha} ` +
+        `elapsed=${Math.floor((Date.now() - startedAt) / 1000)}s\n`
+      );
+      return pr;
+    }
+
+    const now = Date.now();
+
+    if (now - lastHeartbeatAt >= 60_000) {
+      process.stdout.write(
+        `[delivery-v2] waiting material head change ` +
+        `repository=${repository} pr=${prNumber} ` +
+        `previous=${previousSha} ` +
+        `elapsed=${Math.floor((now - startedAt) / 1000)}s\n`
+      );
+      lastHeartbeatAt = now;
+    }
+
     await sleep(POLL_MS);
   }
-  throw new Error('remediation worker completed without publishing a new material head');
+
+  throw new Error(
+    'remediation worker completed without publishing a new material head after ' +
+    `${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 function higherRisk(next, current) {
