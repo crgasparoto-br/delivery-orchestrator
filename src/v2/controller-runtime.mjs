@@ -37,15 +37,82 @@ async function fetchJson(url, token) {
   return response.json();
 }
 
-const EXTERNAL_CI_FAILURE_RE = /(runner.{0,40}(?:lost|offline|unavailable|disconnect)|no (?:hosted )?runner|timed out waiting for (?:a )?runner|startup_failure|service unavailable|bad gateway|gateway timeout|rate limit|artifact storage quota|billing|econnreset|etimedout|enetunreach|connection (?:reset|refused)|network.{0,40}(?:unreachable|timeout|reset)|temporary failure|secret.{0,40}(?:missing|not found))/i;
+const EXTERNAL_CI_FAILURE_RE = /(runner.{0,40}(?:lost|offline|unavailable|disconnect)|no (?:hosted )?runner|timed out waiting for (?:a )?runner|startup_failure|service unavailable|bad gateway|gateway timeout|rate limit|artifact storage quota|billing.{0,80}(?:quota|limit|disabled|suspended|payment|spending|exceeded|unavailable)|(?:quota|limit|disabled|suspended|payment|spending|exceeded|unavailable).{0,80}billing|econnreset|etimedout|enetunreach|connection (?:reset|refused)|network.{0,40}(?:unreachable|timeout|reset)|temporary failure|secret.{0,40}(?:missing|not found))/i;
 const REPOSITORY_CI_FAILURE_RE = /(assertionerror|testinglibraryelementerror|tests? (?:failed|failing)|\bfail(?:ed|ure)?\b.{0,80}(?:test|spec|assert)|error TS\d{4}|eslint|lint(?:ing)? (?:error|failed)|type(?:check| error)|build failed|compilation failed|compile error|migration.{0,40}failed|schema.{0,40}failed|could not find (?:chrome|chromium)|browser executable.{0,40}(?:missing|not found)|puppeteer.{0,80}(?:cache|browser).{0,40}(?:missing|not found))/i;
+
+function ciFailureEvidenceLines(failedJobs = []) {
+  return failedJobs.flatMap((job) => [
+    job?.name,
+    ...(job?.failedStepNames ?? []),
+    ...String(job?.log ?? '').split(/\r?\n/)
+  ]).filter(Boolean);
+}
+
+function isIncidentalCiMetadataLine(line) {
+  const value = String(line ?? '').trim();
+
+  // Git can prefix transport metadata with `remote:`. Strip that prefix
+  // only while deciding whether the line is Git metadata. Real failures
+  // such as `remote: network timeout` must remain causal CI evidence.
+  const metadataValue = value.replace(/^remote:\s*/i, '');
+
+  return (
+    /^\*?\s*\[(?:new|deleted) (?:branch|tag)\]/i.test(metadataValue)
+    || /^(?:HEAD|(?:refs\/)?(?:heads|remotes|tags)\/[^\s]+|[a-z0-9._/-]+)\s*(?:->|=>)\s*(?:origin\/)?[a-z0-9._/-]+$/i.test(metadataValue)
+    || /^from https?:\/\/github\.com\//i.test(metadataValue)
+    || /^switched to (?:a )?(?:new )?branch\b/i.test(metadataValue)
+    || /^already on ['"].+['"]\.?$/i.test(metadataValue)
+    || /^your branch is (?:up to date with|ahead of|behind) ['"].+['"]/i.test(metadataValue)
+    || /^branch ['"].+['"] set up to track\b/i.test(metadataValue)
+    || /^head is now at [0-9a-f]{7,40}\b/i.test(metadataValue)
+    || /^head detached (?:at|from)\b/i.test(metadataValue)
+    || /^refs\/(?:heads|remotes|tags)\/[^\s]+$/i.test(metadataValue)
+    // Git commands and wrappers sometimes print only the checked-out ref.
+    // A standalone ref-like token is metadata, not causal CI evidence.
+    || /^(?:[a-z0-9._-]+\/)+[a-z0-9._/-]+$/i.test(metadataValue)
+  );
+}
+
+function ciFailureExternalEvidenceLine(line) {
+  const value = String(line ?? '');
+  const repositoryFailure = REPOSITORY_CI_FAILURE_RE.exec(value);
+
+  if (!repositoryFailure || repositoryFailure.index <= 0) return value;
+
+  const prefix = value.slice(0, repositoryFailure.index);
+
+  const isSourceLocationPrefix = (
+    /\.(?:[cm]?[jt]sx?)\(\d+,\d+\):\s*$/i.test(prefix)
+    || /\.(?:[cm]?[jt]sx?):\d+(?::\d+)?:\s*$/i.test(prefix)
+  );
+
+  return isSourceLocationPrefix
+    ? value.slice(repositoryFailure.index)
+    : value;
+}
 
 export function ciFailureClassForEvidence({ conclusion, failedJobs = [] } = {}) {
   if (String(conclusion ?? '').toLowerCase() !== 'failure') return 'external';
   if (!Array.isArray(failedJobs) || failedJobs.length === 0) return 'external';
-  const corpus = failedJobs.map((job) => [job?.name, ...(job?.failedStepNames ?? []), job?.log].filter(Boolean).join('\n')).join('\n');
-  if (!corpus.trim() || EXTERNAL_CI_FAILURE_RE.test(corpus)) return 'external';
-  return REPOSITORY_CI_FAILURE_RE.test(corpus) ? 'actionable' : 'external';
+
+  const lines = ciFailureEvidenceLines(failedJobs);
+  if (lines.length === 0) return 'external';
+
+  const corpus = lines.join('\n');
+  const failureCorpus = lines
+    .filter((line) => !isIncidentalCiMetadataLine(line))
+    .map(ciFailureExternalEvidenceLine)
+    .join('\n');
+
+  const hasRepositoryFailure = REPOSITORY_CI_FAILURE_RE.test(corpus);
+  const hasExternalFailure = EXTERNAL_CI_FAILURE_RE.test(failureCorpus);
+
+  // Mixed evidence remains fail-closed when a real infrastructure failure
+  // is present. Incidental metadata such as branch/ref names is excluded
+  // from infrastructure classification, so it cannot mask a strong
+  // repository failure.
+  if (hasExternalFailure) return 'external';
+  return hasRepositoryFailure ? 'actionable' : 'external';
 }
 
 export async function collectCiFailureEvidence({ repository, check, token } = {}) {
