@@ -461,3 +461,46 @@ test('CI remediation still ignores remote-prefixed Git metadata with infrastruct
     );
   }
 });
+
+test('CI remediation does not discard real external failures merely because the line ends with an arrow token', () => {
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: [
+          "server/service.ts(1,1): error TS2304: Cannot find name 'missingSymbol'.",
+          'Network timeout contacting cache -> upstream',
+          'Process completed with exit code 2.'
+        ].join('\n')
+      }]
+    }),
+    'external'
+  );
+});
+
+test('CI remediation still ignores genuine ref arrow metadata with infrastructure-like names', () => {
+  for (const metadataLine of [
+    'fix/billing-quota-active -> origin/fix/billing-quota-active',
+    'HEAD -> origin/billing-quota-active',
+    'refs/heads/fix/billing-quota-active -> origin/fix/billing-quota-active'
+  ]) {
+    assert.equal(
+      ciFailureClassForEvidence({
+        conclusion: 'failure',
+        failedJobs: [{
+          name: 'Merge preview integration',
+          failedStepNames: ['TypeScript integration check'],
+          log: [
+            metadataLine,
+            "server/service.ts(1,1): error TS2304: Cannot find name 'missingSymbol'.",
+            'Process completed with exit code 2.'
+          ].join('\n')
+        }]
+      }),
+      'actionable',
+      metadataLine
+    );
+  }
+});

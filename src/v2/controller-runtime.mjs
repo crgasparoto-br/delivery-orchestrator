@@ -58,7 +58,7 @@ function isIncidentalCiMetadataLine(line) {
 
   return (
     /^\*?\s*\[(?:new|deleted) (?:branch|tag)\]/i.test(metadataValue)
-    || /(?:->|=>)\s*(?:origin\/)?[^\s]+$/i.test(metadataValue)
+    || /^(?:HEAD|(?:refs\/)?(?:heads|remotes|tags)\/[^\s]+|[a-z0-9._/-]+)\s*(?:->|=>)\s*(?:origin\/)?[a-z0-9._/-]+$/i.test(metadataValue)
     || /^from https?:\/\/github\.com\//i.test(metadataValue)
     || /^switched to (?:a )?(?:new )?branch\b/i.test(metadataValue)
     || /^already on ['"].+['"]\.?$/i.test(metadataValue)
