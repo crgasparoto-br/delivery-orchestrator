@@ -251,3 +251,52 @@ test('CI remediation ignores billing quota tokens in TypeScript source paths wit
   );
 });
 
+
+test('CI remediation ignores incidental Git branch status metadata with infrastructure-like branch names', () => {
+  for (const metadataLine of [
+    "Switched to a new branch 'fix/billing-quota-active'",
+    "branch 'fix/billing-quota-active' set up to track 'origin/fix/billing-quota-active'."
+  ]) {
+    assert.equal(
+      ciFailureClassForEvidence({
+        conclusion: 'failure',
+        failedJobs: [{
+          name: 'Merge preview integration',
+          failedStepNames: ['TypeScript integration check'],
+          log: [
+            metadataLine,
+            "server/service.ts(1,1): error TS2304: Cannot find name 'missingSymbol'.",
+            'Process completed with exit code 2.'
+          ].join('\n')
+        }]
+      }),
+      'actionable',
+      metadataLine
+    );
+  }
+});
+
+test('CI remediation remains fail-closed when Git branch metadata and a real external failure coexist', () => {
+  for (const metadataLine of [
+    "Switched to a new branch 'fix/billing-quota-active'",
+    "branch 'fix/billing-quota-active' set up to track 'origin/fix/billing-quota-active'."
+  ]) {
+    assert.equal(
+      ciFailureClassForEvidence({
+        conclusion: 'failure',
+        failedJobs: [{
+          name: 'Merge preview integration',
+          failedStepNames: ['TypeScript integration check'],
+          log: [
+            metadataLine,
+            "server/service.ts(1,1): error TS2304: Cannot find name 'missingSymbol'.",
+            'Network timeout: ETIMEDOUT while connecting to external service.',
+            'Process completed with exit code 2.'
+          ].join('\n')
+        }]
+      }),
+      'external',
+      metadataLine
+    );
+  }
+});
