@@ -3,7 +3,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { initializeResumeObservability } from '../scripts/resume-delivery-v2-controller.mjs';
-import { recordControllerProviderObservation } from '../src/v2/controller-observability.mjs';
+import {
+  createControllerObservability,
+  recordControllerProviderObservation
+} from '../src/v2/controller-observability.mjs';
 
 const initialController = await readFile(new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url), 'utf8');
 const resumeController = await readFile(new URL('../scripts/resume-delivery-v2-controller.mjs', import.meta.url), 'utf8');
@@ -194,4 +197,69 @@ test('both controllers persist failed audit telemetry before surfacing workflow 
 
     assert.match(failureWindow, /terminalReason/);
   }
+});
+
+test('resume marks a partial historical provider ledger as incomplete history while remaining usable', () => {
+  let observability = createControllerObservability({
+    startedAtMs: 1000
+  });
+
+  observability = recordControllerProviderObservation(
+    observability,
+    {
+      runId: 94001,
+      stage: 'implementation',
+      provider: 'codex',
+      usage: { turns: 1 }
+    }
+  );
+
+  observability = recordControllerProviderObservation(
+    observability,
+    {
+      runId: 94002,
+      stage: 'implementation',
+      provider: 'codex',
+      usage: { turns: 1 }
+    }
+  );
+
+  const persisted = JSON.parse(JSON.stringify(observability));
+
+  delete persisted.providerLedgerHistoryComplete;
+  persisted.providerRunLedger =
+    persisted.providerRunLedger.slice(1);
+
+  const resumed = initializeResumeObservability(
+    {
+      observability: persisted,
+      observabilityHistoryComplete: true
+    },
+    { startedAtMs: 2000 }
+  );
+
+  assert.equal(
+    resumed.observability.providerLedgerHistoryComplete,
+    false
+  );
+
+  assert.equal(resumed.historyComplete, false);
+});
+
+
+test('resume persists metrics when only provider ledger history is partial', () => {
+  assert.match(
+    resumeController,
+    /const metricsHistoryPublishable =[\s\S]*?observability\.providerAccountingComplete[\s\S]*?observability\.ciRunIds\.length > 0/
+  );
+
+  assert.match(
+    resumeController,
+    /providerLedgerHistoryComplete[\s\S]*?'partial-provider-ledger'/
+  );
+
+  assert.doesNotMatch(
+    resumeController,
+    /const metrics = observabilityHistoryComplete \? createControllerDeliveryMetrics/
+  );
 });

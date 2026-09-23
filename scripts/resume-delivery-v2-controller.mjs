@@ -653,6 +653,7 @@ export function initializeResumeObservability(controller = {}, { startedAtMs = D
       declaredHistoryComplete &&
       observability.ciTimingHistoryComplete &&
       observability.providerAccountingComplete &&
+      observability.providerLedgerHistoryComplete &&
       observability.auditTimingComplete
   });
 }
@@ -2064,7 +2065,17 @@ export async function main() {
   }
 
   pullRequest = await fetchPullRequest(targetRepository, resumePr, targetReadToken);
-  const metrics = observabilityHistoryComplete ? createControllerDeliveryMetrics({
+  // A legacy delivery may have complete provider-call/timing accounting but
+  // only partial run-granular ledger history. That is still safe to persist:
+  // the canonical metrics contract records providerRunAccounting=partial and
+  // keeps unknown historical run details unknown.
+  const metricsHistoryPublishable =
+    observability.ciTimingHistoryComplete &&
+    observability.providerAccountingComplete &&
+    observability.auditTimingComplete &&
+    observability.ciRunIds.length > 0;
+
+  const metrics = metricsHistoryPublishable ? createControllerDeliveryMetrics({
     observability,
     repository: targetRepository,
     issueNumber,
@@ -2119,7 +2130,11 @@ export async function main() {
     providerCalls: metrics?.providerCalls ?? null,
     observedProviderCalls: observability.providerCalls,
     observabilityHistoryComplete,
-    metricsStatus: metrics ? 'complete' : 'partial-legacy-observability',
+    metricsStatus: metrics
+      ? (observability.providerLedgerHistoryComplete
+          ? 'complete'
+          : 'partial-provider-ledger')
+      : 'partial-legacy-observability',
     metrics,
     partialMetrics,
     resumed: true,

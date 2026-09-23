@@ -76,7 +76,7 @@ test('initial and resumed controllers share persistent observability and the sam
     assert.match(body, /recordControllerProviderObservation/);
     assert.match(body, /observability/);
   }
-  assert.match(resume, /metricsStatus: metrics \? 'complete' : 'partial-legacy-observability'/);
+  assert.match(resume, /metricsStatus:[\s\S]*?metrics[\s\S]*?providerLedgerHistoryComplete[\s\S]*?'complete'[\s\S]*?'partial-provider-ledger'[\s\S]*?'partial-legacy-observability'/);
   assert.match(resume, /observedProviderCalls/);
   assert.match(resume, /partialMetrics/);
   assert.doesNotMatch(resume, /legacy-state-missing-observability/);
