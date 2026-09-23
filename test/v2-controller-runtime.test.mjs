@@ -349,3 +349,64 @@ test('CI remediation remains fail-closed with additional Git metadata plus real 
     );
   }
 });
+
+test('CI remediation ignores standalone Git refs containing infrastructure-like terms', () => {
+  for (const metadataLine of [
+    'fix/billing-quota-active',
+    'refs/heads/fix/billing-quota-active'
+  ]) {
+    assert.equal(
+      ciFailureClassForEvidence({
+        conclusion: 'failure',
+        failedJobs: [{
+          name: 'Merge preview integration',
+          failedStepNames: ['TypeScript integration check'],
+          log: [
+            metadataLine,
+            "server/service.ts(1,1): error TS2304: Cannot find name 'missingSymbol'.",
+            'Process completed with exit code 2.'
+          ].join('\n')
+        }]
+      }),
+      'actionable',
+      metadataLine
+    );
+  }
+});
+
+test('CI remediation ignores HEAD checkout metadata containing infrastructure-like terms', () => {
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: [
+          'HEAD is now at deadbee billing quota active fixture',
+          "server/service.ts(1,1): error TS2304: Cannot find name 'missingSymbol'.",
+          'Process completed with exit code 2.'
+        ].join('\n')
+      }]
+    }),
+    'actionable'
+  );
+});
+
+test('CI remediation keeps real external failure fail-closed after standalone ref metadata', () => {
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: [
+          'fix/billing-quota-active',
+          "server/service.ts(1,1): error TS2304: Cannot find name 'missingSymbol'.",
+          'Network timeout: ETIMEDOUT while connecting to external service.',
+          'Process completed with exit code 2.'
+        ].join('\n')
+      }]
+    }),
+    'external'
+  );
+});

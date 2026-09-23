@@ -60,6 +60,12 @@ function isIncidentalCiMetadataLine(line) {
     || /^already on ['"].+['"]\.?$/i.test(value)
     || /^your branch is (?:up to date with|ahead of|behind) ['"].+['"]/i.test(value)
     || /^branch ['"].+['"] set up to track\b/i.test(value)
+    || /^head is now at [0-9a-f]{7,40}\b/i.test(value)
+    || /^head detached (?:at|from)\b/i.test(value)
+    || /^refs\/(?:heads|remotes|tags)\/[^\s]+$/i.test(value)
+    // Git commands and wrappers sometimes print only the checked-out ref.
+    // A standalone ref-like token is metadata, not causal CI evidence.
+    || /^(?:[a-z0-9._-]+\/)+[a-z0-9._/-]+$/i.test(value)
   );
 }
 
