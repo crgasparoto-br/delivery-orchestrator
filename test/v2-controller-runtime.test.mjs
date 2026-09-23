@@ -66,6 +66,50 @@ test('CI remediation requires explicit repository-cause evidence and fails close
     }),
     'external'
   );
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: [
+          '* [new branch] fix/network-timeout-active-fixture -> origin/fix/network-timeout-active-fixture',
+          "server/service.ts(176,9): error TS2304: Cannot find name 'missingSymbol'.",
+          'Process completed with exit code 2.'
+        ].join('\n')
+      }]
+    }),
+    'actionable'
+  );
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: [
+          '* [new branch] fix/econnreset-active-fixture -> origin/fix/econnreset-active-fixture',
+          "server/service.ts(176,9): error TS2304: Cannot find name 'missingSymbol'.",
+          'Process completed with exit code 2.'
+        ].join('\n')
+      }]
+    }),
+    'actionable'
+  );
+  assert.equal(
+    ciFailureClassForEvidence({
+      conclusion: 'failure',
+      failedJobs: [{
+        name: 'Merge preview integration',
+        failedStepNames: ['TypeScript integration check'],
+        log: [
+          "server/service.ts(176,9): error TS2304: Cannot find name 'missingSymbol'.",
+          'Network timeout: ETIMEDOUT while connecting to external service.'
+        ].join('\n')
+      }]
+    }),
+    'external'
+  );
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'unknown', failedStepNames: [], log: 'Process completed with exit code 1' }] }), 'external');
   for (const conclusion of ['cancelled', 'timed_out', 'startup_failure', 'stale', 'neutral', 'skipped']) assert.equal(ciFailureClassForEvidence({ conclusion, failedJobs: [] }), 'external');
 });

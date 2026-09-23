@@ -40,12 +40,46 @@ async function fetchJson(url, token) {
 const EXTERNAL_CI_FAILURE_RE = /(runner.{0,40}(?:lost|offline|unavailable|disconnect)|no (?:hosted )?runner|timed out waiting for (?:a )?runner|startup_failure|service unavailable|bad gateway|gateway timeout|rate limit|artifact storage quota|billing.{0,80}(?:quota|limit|disabled|suspended|payment|spending|problem|issue|failure|failed|error|exceeded|unavailable)|(?:quota|limit|spending).{0,80}billing|econnreset|etimedout|enetunreach|connection (?:reset|refused)|network.{0,40}(?:unreachable|timeout|reset)|temporary failure|secret.{0,40}(?:missing|not found))/i;
 const REPOSITORY_CI_FAILURE_RE = /(assertionerror|testinglibraryelementerror|tests? (?:failed|failing)|\bfail(?:ed|ure)?\b.{0,80}(?:test|spec|assert)|error TS\d{4}|eslint|lint(?:ing)? (?:error|failed)|type(?:check| error)|build failed|compilation failed|compile error|migration.{0,40}failed|schema.{0,40}failed|could not find (?:chrome|chromium)|browser executable.{0,40}(?:missing|not found)|puppeteer.{0,80}(?:cache|browser).{0,40}(?:missing|not found))/i;
 
+function ciFailureEvidenceLines(failedJobs = []) {
+  return failedJobs.flatMap((job) => [
+    job?.name,
+    ...(job?.failedStepNames ?? []),
+    ...String(job?.log ?? '').split(/\r?\n/)
+  ]).filter(Boolean);
+}
+
+function isIncidentalCiMetadataLine(line) {
+  const value = String(line ?? '').trim();
+
+  return (
+    /^\*?\s*\[(?:new|deleted) (?:branch|tag)\]/i.test(value)
+    || /(?:->|=>)\s*(?:origin\/)?[^\s]+$/i.test(value)
+    || /^from https?:\/\/github\.com\//i.test(value)
+    || /^remote:/i.test(value)
+  );
+}
+
 export function ciFailureClassForEvidence({ conclusion, failedJobs = [] } = {}) {
   if (String(conclusion ?? '').toLowerCase() !== 'failure') return 'external';
   if (!Array.isArray(failedJobs) || failedJobs.length === 0) return 'external';
-  const corpus = failedJobs.map((job) => [job?.name, ...(job?.failedStepNames ?? []), job?.log].filter(Boolean).join('\n')).join('\n');
-  if (!corpus.trim() || EXTERNAL_CI_FAILURE_RE.test(corpus)) return 'external';
-  return REPOSITORY_CI_FAILURE_RE.test(corpus) ? 'actionable' : 'external';
+
+  const lines = ciFailureEvidenceLines(failedJobs);
+  if (lines.length === 0) return 'external';
+
+  const corpus = lines.join('\n');
+  const failureCorpus = lines
+    .filter((line) => !isIncidentalCiMetadataLine(line))
+    .join('\n');
+
+  const hasRepositoryFailure = REPOSITORY_CI_FAILURE_RE.test(corpus);
+  const hasExternalFailure = EXTERNAL_CI_FAILURE_RE.test(failureCorpus);
+
+  // Mixed evidence remains fail-closed when a real infrastructure failure
+  // is present. Incidental metadata such as branch/ref names is excluded
+  // from infrastructure classification, so it cannot mask a strong
+  // repository failure.
+  if (hasExternalFailure) return 'external';
+  return hasRepositoryFailure ? 'actionable' : 'external';
 }
 
 export async function collectCiFailureEvidence({ repository, check, token } = {}) {
