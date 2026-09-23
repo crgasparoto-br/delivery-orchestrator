@@ -81,6 +81,57 @@ test('remediation authorization binds exact PR head worker run and active action
   assert.throws(() => validateAuthorizationEnvelope({ ...authInput, envelope: remediationEnvelope({ controller: { nextAction: 'dispatch-remediation' } }) }), /not the active authorized action/);
 });
 
+test('remediation recovery authorization binds the exact recovered worker run', () => {
+  const envelope = remediationEnvelope({
+    controller: {
+      nextAction: 'observe-remediation-recovery',
+      workerRunId: 701,
+      workerDispatchNonce: 'nonce-1'
+    }
+  });
+
+  const result = validateAuthorizationEnvelope({
+    ...authInput,
+    envelope
+  });
+
+  assert.equal(result.mode, 'remediation');
+  assert.equal(result.workerRunId, 701);
+  assert.equal(result.pullRequestNumber, 88);
+
+  assert.throws(
+    () => validateAuthorizationEnvelope({
+      ...authInput,
+      currentRunId: 702,
+      envelope
+    }),
+    /remediation worker run mismatch/
+  );
+
+  assert.throws(
+    () => validateAuthorizationEnvelope({
+      ...authInput,
+      dispatchNonce: 'other',
+      envelope
+    }),
+    /remediation nonce mismatch/
+  );
+
+  assert.throws(
+    () => validateAuthorizationEnvelope({
+      ...authInput,
+      envelope: remediationEnvelope({
+        controller: {
+          nextAction: 'dispatch-remediation-recovery',
+          workerRunId: null,
+          workerDispatchNonce: 'nonce-1'
+        }
+      })
+    }),
+    /not the active authorized action/
+  );
+});
+
 test('technical hygiene authorization binds hygiene run nonce and active action', () => {
   const envelope = remediationEnvelope({
     controller: {

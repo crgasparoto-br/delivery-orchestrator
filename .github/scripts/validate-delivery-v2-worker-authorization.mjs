@@ -165,7 +165,10 @@ export function validateAuthorizationEnvelope({
   let authorizedRunId;
   let authorizedNonce;
 
-  if (nextAction === 'observe-remediation') {
+  if (
+    nextAction === 'observe-remediation' ||
+    nextAction === 'observe-remediation-recovery'
+  ) {
     mode = 'remediation';
     authorizedRunId = controller.workerRunId;
     authorizedNonce = controller.workerDispatchNonce;
