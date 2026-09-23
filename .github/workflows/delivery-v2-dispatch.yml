@@ -186,17 +186,6 @@ jobs:
           echo "Could not publish the operational metrics store after 3 attempts." >&2
           exit 1
 
-      # Functional delivery state for the operator. A green job is technical success only; the
-      # summary reports CONCLUIDA exclusively from the exact-head release gate in the controller
-      # result, and distinguishes functional blocks from technical failures of this job.
-      - name: Publish controller summary
-        if: always()
-        env:
-          DELIVERY_V2_JOB_STATUS: ${{ job.status }}
-          DELIVERY_V2_GUARD_OUTCOME: ${{ steps.reentry.outcome }}
-          DELIVERY_V2_CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
-        run: node scripts/publish-delivery-v2-controller-summary.mjs
-
       - name: Upload delivery evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -208,3 +197,16 @@ jobs:
             docs/delivery-v2/evidence/delivery-v2-metrics.json
           if-no-files-found: warn
           retention-days: 30
+
+      # This must remain the final operational step: job.status must already include failures from
+      # evidence publication and every other preceding step before we render the terminal summary.
+      # Functional delivery state for the operator. A green job is technical success only; the
+      # summary reports CONCLUIDA exclusively from the exact-head release gate in the controller
+      # result, and distinguishes functional blocks from technical failures of this job.
+      - name: Publish controller summary
+        if: always()
+        env:
+          DELIVERY_V2_JOB_STATUS: ${{ job.status }}
+          DELIVERY_V2_GUARD_OUTCOME: ${{ steps.reentry.outcome }}
+          DELIVERY_V2_CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
+        run: node scripts/publish-delivery-v2-controller-summary.mjs

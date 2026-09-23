@@ -321,9 +321,16 @@ test('dispatch workflow publishes the functional summary from Node on every outc
   assert.doesNotMatch(body, /GITHUB_STEP_SUMMARY/);
   assert.match(body, /- name: Run bounded Delivery V2 controller\n        id: controller\n/);
   assert.match(body, /CONTROLLER_ERROR_PATH: \/tmp\/delivery-v2-controller-errors-\$\{\{ github\.run_id \}\}\.jsonl/);
-  // The summary runs after every step that can still fail the job, except the evidence upload.
+  // The summary is the final operational step so job.status already includes failures from
+  // evidence publication and every other preceding step.
   assert.ok(body.indexOf('- name: Publish controller summary') > body.indexOf('- name: Publish operational Delivery V2 metrics store'));
-  assert.ok(body.indexOf('- name: Publish controller summary') < body.indexOf('- name: Upload delivery evidence'));
+  assert.ok(body.indexOf('- name: Publish controller summary') > body.indexOf('- name: Upload delivery evidence'));
+
+  const summaryPosition = body.indexOf('- name: Publish controller summary');
+  const remainderAfterSummary = body.slice(
+    summaryPosition + '- name: Publish controller summary'.length
+  );
+  assert.doesNotMatch(remainderAfterSummary, /\n      - name:/);
 });
 
 test('controller terminal payloads expose the canonical release evaluation and nextAction', async () => {
