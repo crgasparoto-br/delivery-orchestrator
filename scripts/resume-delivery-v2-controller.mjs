@@ -153,7 +153,8 @@ export function shouldRearmFailedRemediationWorker({
 export function shouldRearmFailedAuditWorkflow({
   runConclusion,
   runHeadSha,
-  currentControllerSha
+  currentControllerSha,
+  semanticResultConsumable = false
 } = {}) {
   const conclusion = String(
     runConclusion ?? ''
@@ -166,6 +167,14 @@ export function shouldRearmFailedAuditWorkflow({
   const currentSha = normalizedRecoverySha(
     currentControllerSha
   );
+
+  // A semantic result that was already produced and validated remains
+  // authoritative even if a later workflow step made the GitHub workflow
+  // conclude non-success. Never discard/replay that semantic decision only
+  // because the control plane moved.
+  if (semanticResultConsumable) {
+    return false;
+  }
 
   // Successful audits remain authoritative and must never be replayed
   // merely because the control plane moved.
@@ -715,8 +724,30 @@ async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, c
   });
 }
 
-async function auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber, candidateSha, auditRun, sourceWorkflowRunId, token }) {
-  return loadAuthoritativeAuditResult({ orchestratorRepository, trustedRef: orchestratorRef, targetRepository, issueNumber, pullRequestNumber: prNumber, candidateSha, auditRun, sourceWorkflowRunId, token });
+async function auditResultFromArtifact({
+  orchestratorRepository,
+  orchestratorRef,
+  targetRepository,
+  issueNumber,
+  prNumber,
+  candidateSha,
+  auditRun,
+  sourceWorkflowRunId,
+  token,
+  acceptTerminalFailure = false
+}) {
+  return loadAuthoritativeAuditResult({
+    orchestratorRepository,
+    trustedRef: orchestratorRef,
+    targetRepository,
+    issueNumber,
+    pullRequestNumber: prNumber,
+    candidateSha,
+    auditRun,
+    sourceWorkflowRunId,
+    token,
+    acceptTerminalFailure
+  });
 }
 
 function higherRisk(next, current) { return RISK_RANK[next] > RISK_RANK[current]; }
@@ -1734,6 +1765,7 @@ export async function main() {
 
     if (state.status === 'audit-pending') {
       let auditRun;
+      let preloadedAuditResult = null;
 
       const dispatchCurrentAudit = async (dispatchNonce) => {
         const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({
@@ -1785,11 +1817,58 @@ export async function main() {
         const currentControllerSha =
           resolveCheckedOutControlPlaneHeadSha();
 
+        // A non-success workflow is not automatically equivalent to an
+        // operational audit failure. First inspect whether it already produced
+        // one authoritative semantic result for this exact candidate.
+        //
+        // Only the proven absence of the expected artifact permits the
+        // control-plane recovery path. Invalid, duplicated, stale or mismatched
+        // artifacts remain fail-closed and propagate their validation error.
+        if (auditRun.conclusion !== 'success') {
+          const sourceRunForRecovery =
+            latestSourceRun ?? await sourceWorkflowRunForHead({
+              repository: targetRepository,
+              sha: materialHeadSha,
+              workflowName: targetPolicy.ciWorkflowName,
+              token: targetReadToken
+            });
+
+          if (!sourceRunForRecovery) {
+            throw new Error(
+              'audit recovery requires authoritative exact-head source CI'
+            );
+          }
+
+          try {
+            preloadedAuditResult = await auditResultFromArtifact({
+              orchestratorRepository,
+              orchestratorRef,
+              targetRepository,
+              issueNumber,
+              prNumber: resumePr,
+              candidateSha: materialHeadSha,
+              auditRun,
+              sourceWorkflowRunId: sourceRunForRecovery.id,
+              token: actionsToken,
+              acceptTerminalFailure: true
+            });
+          } catch (error) {
+            const message = String(error?.message ?? error ?? '');
+
+            if (!message.startsWith('authoritative audit artifact absent ')) {
+              throw error;
+            }
+
+            preloadedAuditResult = null;
+          }
+        }
+
         if (
           shouldRearmFailedAuditWorkflow({
             runConclusion: auditRun.conclusion,
             runHeadSha: auditRun.head_sha,
-            currentControllerSha
+            currentControllerSha,
+            semanticResultConsumable: Boolean(preloadedAuditResult)
           })
         ) {
           const previousAuditRunId = auditRun.id;
@@ -1964,7 +2043,10 @@ export async function main() {
           })
         });
       }
-      if (auditRun.conclusion !== 'success') {
+      if (
+        auditRun.conclusion !== 'success' &&
+        !preloadedAuditResult
+      ) {
         const terminalReason =
           `independent-audit-workflow-${auditRun.conclusion ?? 'failed'}`;
 
@@ -2023,7 +2105,19 @@ export async function main() {
         );
       }
       const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
-      const result = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: sourceRun.id, token: actionsToken });
+      const result =
+        preloadedAuditResult ??
+        await auditResultFromArtifact({
+          orchestratorRepository,
+          orchestratorRef,
+          targetRepository,
+          issueNumber,
+          prNumber: resumePr,
+          candidateSha: materialHeadSha,
+          auditRun,
+          sourceWorkflowRunId: sourceRun.id,
+          token: actionsToken
+        });
       observability = recordControllerProviderObservation(observability, {
         runId: auditRun.id,
         stage: 'audit',

@@ -45,6 +45,41 @@ test('failed audit from an older control-plane epoch may be rearmed', () => {
   );
 });
 
+test('failed audit with consumable semantic result is never rearmed', () => {
+  assert.equal(
+    shouldRearmFailedAuditWorkflow({
+      runConclusion: 'failure',
+      runHeadSha: CONTROL_PLANE_A,
+      currentControllerSha: CONTROL_PLANE_B,
+      semanticResultConsumable: true
+    }),
+    false,
+    'a validated semantic result must remain authoritative even when the workflow concluded failure'
+  );
+});
+
+test('failed audit without semantic result may be rearmed only after control-plane drift', () => {
+  assert.equal(
+    shouldRearmFailedAuditWorkflow({
+      runConclusion: 'failure',
+      runHeadSha: CONTROL_PLANE_A,
+      currentControllerSha: CONTROL_PLANE_B,
+      semanticResultConsumable: false
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldRearmFailedAuditWorkflow({
+      runConclusion: 'failure',
+      runHeadSha: CONTROL_PLANE_A,
+      currentControllerSha: CONTROL_PLANE_A,
+      semanticResultConsumable: false
+    }),
+    false
+  );
+});
+
 test('failed audit on the current control plane remains fail-closed', () => {
   assert.equal(
     shouldRearmFailedAuditWorkflow({
