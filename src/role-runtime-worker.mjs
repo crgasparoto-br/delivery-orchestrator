@@ -149,34 +149,160 @@ async function runCodex(payload) {
   return { contextId: thread.id, result: parsed, usage: result.usage ?? null, provider: 'codex', model: payload.model };
 }
 
-async function runAnthropic(payload) {
-  if (!payload.anthropicApiKey) throw new Error('ANTHROPIC_API_KEY is required for Claude audit execution');
-  const prompt = await materializeAuditPrompt(payload);
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': payload.anthropicApiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: payload.model,
-      max_tokens: 16000,
-      messages: [{ role: 'user', content: prompt }]
-    })
-  });
-  const body = await response.text();
-  if (!response.ok) throw new Error(`Anthropic audit invocation failed (${response.status}): ${body}`);
-  const message = JSON.parse(body);
-  const text = (message.content || []).filter(block => block?.type === 'text').map(block => block.text).join('\n').trim();
-  const parsed = parseModelJson(text, payload.role);
+const ANTHROPIC_MAX_ATTEMPTS = 2;
+const ANTHROPIC_RETRYABLE_STATUS = new Set([
+  408,
+  409,
+  429,
+  500,
+  502,
+  503,
+  504
+]);
+
+function aggregateAnthropicUsage(total, usage) {
+  if (!usage || typeof usage !== 'object') return total;
+
   return {
-    contextId: message.id || null,
-    result: parsed,
-    usage: message.usage ? { inputTokens: message.usage.input_tokens ?? null, outputTokens: message.usage.output_tokens ?? null } : null,
-    provider: 'claude',
-    model: payload.model
+    inputTokens:
+      (total?.inputTokens ?? 0) +
+      (Number.isFinite(usage.input_tokens) ? usage.input_tokens : 0),
+    outputTokens:
+      (total?.outputTokens ?? 0) +
+      (Number.isFinite(usage.output_tokens) ? usage.output_tokens : 0)
   };
+}
+
+async function waitForAnthropicRetry(delayMs) {
+  if (!Number.isFinite(delayMs) || delayMs <= 0) return;
+  await new Promise(resolve => setTimeout(resolve, delayMs));
+}
+
+export async function runAnthropic(
+  payload,
+  {
+    fetchFn = fetch,
+    retryDelayMs = 250
+  } = {}
+) {
+  if (!payload.anthropicApiKey) {
+    throw new Error(
+      'ANTHROPIC_API_KEY is required for Claude audit execution'
+    );
+  }
+
+  const prompt = await materializeAuditPrompt(payload);
+
+  let providerCalls = 0;
+  let aggregateUsage = null;
+
+  for (
+    let attempt = 1;
+    attempt <= ANTHROPIC_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    providerCalls += 1;
+
+    const response = await fetchFn(
+      'https://api.anthropic.com/v1/messages',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': payload.anthropicApiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: payload.model,
+          max_tokens: 16000,
+          messages: [
+            {
+              role: 'user',
+              content: prompt
+            }
+          ]
+        })
+      }
+    );
+
+    const body = await response.text();
+
+    if (!response.ok) {
+      const retryable =
+        ANTHROPIC_RETRYABLE_STATUS.has(response.status);
+
+      if (
+        retryable &&
+        attempt < ANTHROPIC_MAX_ATTEMPTS
+      ) {
+        await waitForAnthropicRetry(retryDelayMs);
+        continue;
+      }
+
+      throw new Error(
+        `Anthropic audit invocation failed ` +
+        `(${response.status}) after ${providerCalls} call(s): ${body}`
+      );
+    }
+
+    let message;
+
+    try {
+      message = JSON.parse(body);
+    } catch (error) {
+      throw new Error(
+        `Anthropic audit invocation returned invalid response JSON: ${body}`,
+        { cause: error }
+      );
+    }
+
+    if (message.usage) {
+      aggregateUsage = aggregateAnthropicUsage(
+        aggregateUsage,
+        message.usage
+      );
+    }
+
+    const finalText = (message.content || [])
+      .filter(block => block?.type === 'text')
+      .map(block => block.text)
+      .join('\n')
+      .trim();
+
+    if (!finalText) {
+      if (attempt < ANTHROPIC_MAX_ATTEMPTS) {
+        await waitForAnthropicRetry(retryDelayMs);
+        continue;
+      }
+
+      const stopReason =
+        String(message.stop_reason ?? 'unknown');
+
+      throw new Error(
+        `${payload.role} returned an empty final response ` +
+        `after ${providerCalls} attempts ` +
+        `(stop_reason=${stopReason})`
+      );
+    }
+
+    const parsed = parseModelJson(
+      finalText,
+      payload.role
+    );
+
+    return {
+      contextId: message.id || null,
+      result: parsed,
+      usage: aggregateUsage,
+      providerCalls,
+      provider: 'claude',
+      model: payload.model
+    };
+  }
+
+  throw new Error(
+    `${payload.role} exhausted Anthropic audit attempts`
+  );
 }
 
 async function runCopilot(payload) {

@@ -328,7 +328,10 @@ export async function main() {
       networkAccessEnabled: false
     });
     const finalized = finalizeGithubNativeAuditResult({ request, modelResult: response.result, reviewerRunId });
-    const enrichedResult = { ...finalized.result, modelUsage: response.usage ?? null, providerCalls: 1 };
+    const providerCalls = Number.isInteger(response.providerCalls) && response.providerCalls > 0
+      ? response.providerCalls
+      : 1;
+    const enrichedResult = { ...finalized.result, modelUsage: response.usage ?? null, providerCalls };
     const payload = {
       schemaVersion: 1,
       repository,
@@ -340,12 +343,12 @@ export async function main() {
       result: enrichedResult,
       outcome: finalized.outcome,
       modelUsage: response.usage ?? null,
-      providerCalls: 1,
+      providerCalls,
       reviewerContextId: response.contextId,
       ...contextPayload
     };
     await writeAuditResult(resultPath, payload);
-    process.stdout.write(`${JSON.stringify({ ok: true, pullRequestNumber, candidateSha: request.candidate.materialHeadSha, decision: finalized.result.decision, providerCalls: 1, resultPath })}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, pullRequestNumber, candidateSha: request.candidate.materialHeadSha, decision: finalized.result.decision, providerCalls, resultPath })}\n`);
   } finally {
     if (bundle) await rm(bundle, { recursive: true, force: true });
   }

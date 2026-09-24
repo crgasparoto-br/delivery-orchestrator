@@ -1,0 +1,323 @@
+import assert from 'node:assert/strict';
+import {
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile
+} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import {
+  runAnthropic
+} from '../src/role-runtime-worker.mjs';
+
+const AUDIT_BUNDLE_FILES = [
+  'AUDIT_REQUEST.json',
+  'DELIVERY_CONTRACT.md',
+  'ISSUE.json',
+  'PULL_REQUEST.json',
+  'CANDIDATE.diff',
+  'DIFF_MANIFEST.json',
+  'MATERIAL_CONTEXT.json'
+];
+
+async function createBundle() {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), 'anthropic-audit-retry-')
+  );
+
+  for (const name of AUDIT_BUNDLE_FILES) {
+    await writeFile(
+      path.join(root, name),
+      name.endsWith('.json') ? '{}' : 'fixture'
+    );
+  }
+
+  return root;
+}
+
+function anthropicResponse(
+  status,
+  payload
+) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() {
+      return typeof payload === 'string'
+        ? payload
+        : JSON.stringify(payload);
+    }
+  };
+}
+
+function auditPayload(workingDirectory) {
+  return {
+    anthropicApiKey: 'test-key',
+    model: 'claude-opus-test',
+    workingDirectory,
+    prompt: 'Audit the candidate.',
+    outputSchema: {
+      type: 'object'
+    },
+    role: 'auditor'
+  };
+}
+
+test(
+  'Claude audit retries one empty response and aggregates usage',
+  async () => {
+    const workingDirectory = await createBundle();
+    let calls = 0;
+
+    try {
+      const result = await runAnthropic(
+        auditPayload(workingDirectory),
+        {
+          retryDelayMs: 0,
+          fetchFn: async () => {
+            calls += 1;
+
+            if (calls === 1) {
+              return anthropicResponse(200, {
+                id: 'msg-empty',
+                stop_reason: 'end_turn',
+                content: [],
+                usage: {
+                  input_tokens: 10,
+                  output_tokens: 0
+                }
+              });
+            }
+
+            return anthropicResponse(200, {
+              id: 'msg-success',
+              stop_reason: 'end_turn',
+              content: [
+                {
+                  type: 'text',
+                  text: '{"decision":"approved"}'
+                }
+              ],
+              usage: {
+                input_tokens: 11,
+                output_tokens: 3
+              }
+            });
+          }
+        }
+      );
+
+      assert.equal(calls, 2);
+      assert.equal(result.providerCalls, 2);
+      assert.deepEqual(
+        result.usage,
+        {
+          inputTokens: 21,
+          outputTokens: 3
+        }
+      );
+      assert.deepEqual(
+        result.result,
+        {
+          decision: 'approved'
+        }
+      );
+    } finally {
+      await rm(
+        workingDirectory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
+  }
+);
+
+test(
+  'Claude audit retries one transient HTTP failure',
+  async () => {
+    const workingDirectory = await createBundle();
+    let calls = 0;
+
+    try {
+      const result = await runAnthropic(
+        auditPayload(workingDirectory),
+        {
+          retryDelayMs: 0,
+          fetchFn: async () => {
+            calls += 1;
+
+            if (calls === 1) {
+              return anthropicResponse(
+                503,
+                {
+                  error: {
+                    type: 'overloaded_error'
+                  }
+                }
+              );
+            }
+
+            return anthropicResponse(200, {
+              id: 'msg-success',
+              stop_reason: 'end_turn',
+              content: [
+                {
+                  type: 'text',
+                  text: '{"decision":"approved"}'
+                }
+              ],
+              usage: {
+                input_tokens: 7,
+                output_tokens: 2
+              }
+            });
+          }
+        }
+      );
+
+      assert.equal(calls, 2);
+      assert.equal(result.providerCalls, 2);
+      assert.deepEqual(
+        result.usage,
+        {
+          inputTokens: 7,
+          outputTokens: 2
+        }
+      );
+    } finally {
+      await rm(
+        workingDirectory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
+  }
+);
+
+test(
+  'Claude audit fails closed after two empty responses',
+  async () => {
+    const workingDirectory = await createBundle();
+    let calls = 0;
+
+    try {
+      await assert.rejects(
+        () =>
+          runAnthropic(
+            auditPayload(workingDirectory),
+            {
+              retryDelayMs: 0,
+              fetchFn: async () => {
+                calls += 1;
+
+                return anthropicResponse(200, {
+                  id: `msg-${calls}`,
+                  stop_reason: 'end_turn',
+                  content: [],
+                  usage: {
+                    input_tokens: 5,
+                    output_tokens: 0
+                  }
+                });
+              }
+            }
+          ),
+        /empty final response after 2 attempts/
+      );
+
+      assert.equal(calls, 2);
+    } finally {
+      await rm(
+        workingDirectory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
+  }
+);
+
+test(
+  'Claude audit does not retry invalid model JSON',
+  async () => {
+    const workingDirectory = await createBundle();
+    let calls = 0;
+
+    try {
+      await assert.rejects(
+        () =>
+          runAnthropic(
+            auditPayload(workingDirectory),
+            {
+              retryDelayMs: 0,
+              fetchFn: async () => {
+                calls += 1;
+
+                return anthropicResponse(200, {
+                  id: 'msg-invalid',
+                  stop_reason: 'end_turn',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'not-json'
+                    }
+                  ],
+                  usage: {
+                    input_tokens: 5,
+                    output_tokens: 1
+                  }
+                });
+              }
+            }
+          ),
+        /returned invalid JSON/
+      );
+
+      assert.equal(calls, 1);
+    } finally {
+      await rm(
+        workingDirectory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
+  }
+);
+
+test(
+  'GitHub-native audit persists dynamic providerCalls',
+  async () => {
+    const runner = await readFile(
+      new URL(
+        '../scripts/run-delivery-v2-github-audit.mjs',
+        import.meta.url
+      ),
+      'utf8'
+    );
+
+    assert.match(
+      runner,
+      /Number\.isInteger\(response\.providerCalls\)/
+    );
+
+    assert.match(
+      runner,
+      /providerCalls,\s*reviewerContextId/
+    );
+
+    assert.match(
+      runner,
+      /decision: finalized\.result\.decision,\s*providerCalls,/
+    );
+  }
+);
