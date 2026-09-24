@@ -297,10 +297,19 @@ export async function runAnthropic(
       throw error;
     }
 
-    const parsed = parseModelJson(
-      finalText,
-      payload.role
-    );
+    let parsed;
+
+    try {
+      parsed = parseModelJson(
+        finalText,
+        payload.role
+      );
+    } catch (error) {
+      error.providerCalls = providerCalls;
+      error.modelUsage = aggregateUsage;
+      error.auditProviderFailure = true;
+      throw error;
+    }
 
     return {
       contextId: message.id || null,

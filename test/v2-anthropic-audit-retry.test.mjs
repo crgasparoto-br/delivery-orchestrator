@@ -427,3 +427,76 @@ test(
     }
   }
 );
+
+test(
+  'Claude audit preserves provider telemetry for invalid model JSON without retry',
+  async () => {
+    const workingDirectory = await createBundle();
+    let calls = 0;
+
+    try {
+      let failure;
+
+      try {
+        await runAnthropic(
+          auditPayload(workingDirectory),
+          {
+            retryDelayMs: 0,
+            fetchFn: async () => {
+              calls += 1;
+
+              return anthropicResponse(200, {
+                id: 'msg-invalid-telemetry',
+                stop_reason: 'end_turn',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'not-json'
+                  }
+                ],
+                usage: {
+                  input_tokens: 5,
+                  output_tokens: 1
+                }
+              });
+            }
+          }
+        );
+      } catch (error) {
+        failure = error;
+      }
+
+      assert.match(
+        failure?.message ?? '',
+        /returned invalid JSON/
+      );
+      assert.equal(
+        failure?.auditProviderFailure,
+        true
+      );
+      assert.equal(
+        failure?.providerCalls,
+        1
+      );
+      assert.deepEqual(
+        failure?.modelUsage,
+        {
+          inputTokens: 5,
+          outputTokens: 1
+        }
+      );
+      assert.equal(
+        calls,
+        1
+      );
+    } finally {
+      await rm(
+        workingDirectory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
+  }
+);
