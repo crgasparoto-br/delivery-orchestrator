@@ -208,30 +208,45 @@ test(
     let calls = 0;
 
     try {
-      await assert.rejects(
-        () =>
-          runAnthropic(
-            auditPayload(workingDirectory),
-            {
-              retryDelayMs: 0,
-              fetchFn: async () => {
-                calls += 1;
+      let failure;
 
-                return anthropicResponse(200, {
-                  id: `msg-${calls}`,
-                  stop_reason: 'end_turn',
-                  content: [],
-                  usage: {
-                    input_tokens: 5,
-                    output_tokens: 0
-                  }
-                });
-              }
+      try {
+        await runAnthropic(
+          auditPayload(workingDirectory),
+          {
+            retryDelayMs: 0,
+            fetchFn: async () => {
+              calls += 1;
+
+              return anthropicResponse(200, {
+                id: `msg-${calls}`,
+                stop_reason: 'end_turn',
+                content: [],
+                usage: {
+                  input_tokens: 5,
+                  output_tokens: 0
+                }
+              });
             }
-          ),
+          }
+        );
+      } catch (error) {
+        failure = error;
+      }
+
+      assert.match(
+        failure?.message ?? '',
         /empty final response after 2 attempts/
       );
-
+      assert.equal(failure?.auditProviderFailure, true);
+      assert.equal(failure?.providerCalls, 2);
+      assert.deepEqual(
+        failure?.modelUsage,
+        {
+          inputTokens: 10,
+          outputTokens: 0
+        }
+      );
       assert.equal(calls, 2);
     } finally {
       await rm(
@@ -318,6 +333,33 @@ test(
     assert.match(
       runner,
       /decision: finalized\.result\.decision,\s*providerCalls,/
+    );
+  }
+);
+
+
+test(
+  'GitHub-native runner preserves provider failure telemetry before fail-closed',
+  async () => {
+    const runner = await readFile(
+      new URL(
+        '../scripts/run-delivery-v2-github-audit.mjs',
+        import.meta.url
+      ),
+      'utf8'
+    );
+
+    assert.match(
+      runner,
+      /status:\s*'audit-provider-failed'/
+    );
+    assert.match(
+      runner,
+      /providerCalls,\s*reviewerContextId:\s*null/
+    );
+    assert.match(
+      runner,
+      /modelUsage:\s*error\.modelUsage\s*\?\?\s*null/
     );
   }
 );

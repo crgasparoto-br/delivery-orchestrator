@@ -317,16 +317,52 @@ export async function main() {
     bundle = await prepareBundle({ files, issue: budget.issue, pullRequest: budget.pullRequest });
     const codexHome = process.env.CODEX_AUDITOR_HOME || path.join(linuxHome(auditorUser), '.codex-delivery', 'auditor');
     const executor = new CodexExecutor({ apiKey: process.env.OPENAI_API_KEY, authMode, model, implementerUser, auditorUser });
-    const response = await executor.runFresh({
-      workingDirectory: bundle,
-      codexHome,
-      prompt: auditPrompt(request),
-      outputSchema: githubNativeAuditOutputSchema(),
-      role: 'auditor',
-      githubToken: '',
-      sandboxMode: 'read-only',
-      networkAccessEnabled: false
-    });
+    let response;
+
+    try {
+      response = await executor.runFresh({
+        workingDirectory: bundle,
+        codexHome,
+        prompt: auditPrompt(request),
+        outputSchema: githubNativeAuditOutputSchema(),
+        role: 'auditor',
+        githubToken: '',
+        sandboxMode: 'read-only',
+        networkAccessEnabled: false
+      });
+    } catch (error) {
+      if (error?.auditProviderFailure) {
+        const providerCalls =
+          Number.isInteger(error.providerCalls) &&
+          error.providerCalls > 0
+            ? error.providerCalls
+            : null;
+
+        const failurePayload = {
+          schemaVersion: 1,
+          repository,
+          issueNumber,
+          pullRequestNumber,
+          sourceWorkflowRunId,
+          auditWorkflowRunId: reviewerRunId,
+          request,
+          status: 'audit-provider-failed',
+          failure: {
+            type: 'audit-provider-failure',
+            message: error.message
+          },
+          modelUsage: error.modelUsage ?? null,
+          providerCalls,
+          reviewerContextId: null,
+          ...contextPayload
+        };
+
+        await writeAuditResult(resultPath, failurePayload);
+      }
+
+      throw error;
+    }
+
     const finalized = finalizeGithubNativeAuditResult({ request, modelResult: response.result, reviewerRunId });
     const providerCalls = Number.isInteger(response.providerCalls) && response.providerCalls > 0
       ? response.providerCalls

@@ -278,11 +278,17 @@ export async function runAnthropic(
       const stopReason =
         String(message.stop_reason ?? 'unknown');
 
-      throw new Error(
+      const error = new Error(
         `${payload.role} returned an empty final response ` +
         `after ${providerCalls} attempts ` +
         `(stop_reason=${stopReason})`
       );
+
+      error.providerCalls = providerCalls;
+      error.modelUsage = aggregateUsage;
+      error.auditProviderFailure = true;
+
+      throw error;
     }
 
     const parsed = parseModelJson(
@@ -365,6 +371,17 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(error => {
+    if (error?.auditProviderFailure) {
+      process.stdout.write(`${JSON.stringify({
+        ok: false,
+        auditProviderFailure: true,
+        error: error.message,
+        providerCalls: error.providerCalls ?? null,
+        modelUsage: error.modelUsage ?? null
+      })}\n`);
+      return;
+    }
+
     process.stderr.write(`${error.stack || error.message}\n`);
     process.exitCode = 1;
   });
