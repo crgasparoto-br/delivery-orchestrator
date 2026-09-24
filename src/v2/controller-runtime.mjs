@@ -371,6 +371,30 @@ export async function loadAuthoritativeAuditResult({
       run.conclusion !== 'success' &&
       payload?.status === 'audit-provider-failed'
     ) {
+      // A non-success workflow may still have produced an authoritative
+      // semantic result. Never discard or replay such a result merely because
+      // the operational provider-failure marker is also present.
+      //
+      // Presence of a result field is deliberately handled by the canonical
+      // semantic validator. A valid result remains authoritative; an invalid
+      // or ambiguous result fails closed.
+      if (
+        Object.prototype.hasOwnProperty.call(
+          payload,
+          'result'
+        )
+      ) {
+        return validateAuditArtifactPayload(payload, {
+          orchestratorRepository: repository,
+          targetRepository,
+          issueNumber,
+          pullRequestNumber,
+          candidateSha,
+          auditRunId: runId,
+          sourceWorkflowRunId
+        });
+      }
+
       validateTerminalAuditProviderFailurePayload(payload, {
         targetRepository,
         issueNumber,
@@ -381,7 +405,7 @@ export async function loadAuthoritativeAuditResult({
       });
 
       // The workflow produced a valid, exact-run operational failure
-      // artifact, but no semantic audit decision exists. Surface this
+      // artifact and no semantic audit decision exists. Surface this
       // through the same recovery contract used for a missing semantic
       // artifact so a newer control-plane epoch may safely rearm it.
       throw new Error(

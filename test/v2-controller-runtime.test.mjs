@@ -232,6 +232,98 @@ test('terminal audit provider failure artifact is exact-run exact-head bound', (
   );
 });
 
+
+test('terminal audit provider failure with semantic result is not equivalent to absent result', () => {
+  const fp = 'b'.repeat(64);
+
+  const payload = {
+    schemaVersion: 1,
+    repository: 'owner/target',
+    issueNumber: 63,
+    pullRequestNumber: 64,
+    sourceWorkflowRunId: 10,
+    auditWorkflowRunId: 20,
+    request: {
+      requestFingerprint: fp,
+      candidate: {
+        materialHeadSha: SHA
+      }
+    },
+    status: 'audit-provider-failed',
+    failure: {
+      type: 'audit-provider-failure',
+      message: 'provider failed after semantic result was produced'
+    },
+    result: {
+      candidateSha: SHA,
+      requestFingerprint: fp,
+      reviewer: {
+        runId: 20,
+        contextIsolation: 'candidate-contract-evidence-only',
+        workerIdentity: 'delivery-v2-github-native-auditor'
+      },
+      decision: 'approved',
+      findings: []
+    }
+  };
+
+  const result = validateAuditArtifactPayload(
+    payload,
+    {
+      orchestratorRepository: 'owner/orchestrator',
+      targetRepository: 'owner/target',
+      issueNumber: 63,
+      pullRequestNumber: 64,
+      candidateSha: SHA,
+      auditRunId: 20,
+      sourceWorkflowRunId: 10
+    }
+  );
+
+  assert.equal(result.decision, 'approved');
+});
+
+
+test('terminal audit provider failure with ambiguous semantic result fails closed', () => {
+  const payload = {
+    schemaVersion: 1,
+    repository: 'owner/target',
+    issueNumber: 63,
+    pullRequestNumber: 64,
+    sourceWorkflowRunId: 10,
+    auditWorkflowRunId: 20,
+    request: {
+      candidate: {
+        materialHeadSha: SHA
+      }
+    },
+    status: 'audit-provider-failed',
+    failure: {
+      type: 'audit-provider-failure',
+      message: 'provider failed'
+    },
+    result: null
+  };
+
+  assert.throws(
+    () =>
+      validateAuditArtifactPayload(
+        payload,
+        {
+          orchestratorRepository: 'owner/orchestrator',
+          targetRepository: 'owner/target',
+          issueNumber: 63,
+          pullRequestNumber: 64,
+          candidateSha: SHA,
+          auditRunId: 20,
+          sourceWorkflowRunId: 10
+        }
+      ),
+    /audit result candidate mismatch/
+  );
+});
+
+
 test('authoritative audit artifact is exact-run exact-head and fingerprint bound', () => {
   const fp = 'b'.repeat(64);
   const payload = {
