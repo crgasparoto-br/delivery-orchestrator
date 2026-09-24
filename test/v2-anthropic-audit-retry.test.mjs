@@ -217,6 +217,70 @@ test(
   }
 );
 
+
+test(
+  'Claude audit retries one transient fetch failure',
+  async () => {
+    const workingDirectory = await createBundle();
+    let calls = 0;
+
+    try {
+      const result = await runAnthropic(
+        auditPayload(workingDirectory),
+        {
+          retryDelayMs: 0,
+          fetchFn: async () => {
+            calls += 1;
+
+            if (calls === 1) {
+              throw new TypeError('fetch failed');
+            }
+
+            return anthropicResponse(200, {
+              id: 'msg-success-after-fetch-failure',
+              stop_reason: 'end_turn',
+              content: [
+                {
+                  type: 'text',
+                  text: '{"decision":"approved"}'
+                }
+              ],
+              usage: {
+                input_tokens: 9,
+                output_tokens: 2
+              }
+            });
+          }
+        }
+      );
+
+      assert.equal(calls, 2);
+      assert.equal(result.providerCalls, 2);
+      assert.deepEqual(
+        result.usage,
+        {
+          inputTokens: 9,
+          outputTokens: 2
+        }
+      );
+      assert.deepEqual(
+        result.result,
+        {
+          decision: 'approved'
+        }
+      );
+    } finally {
+      await rm(
+        workingDirectory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
+  }
+);
+
 test(
   'Claude audit retries one transient HTTP failure',
   async () => {
@@ -441,6 +505,64 @@ test(
       runner,
       /modelUsage:\s*error\.modelUsage\s*\?\?\s*null/
     );
+  }
+);
+
+
+test(
+  'Claude audit converts repeated fetch failures into provider failure telemetry',
+  async () => {
+    const workingDirectory = await createBundle();
+    let calls = 0;
+
+    try {
+      let failure;
+
+      try {
+        await runAnthropic(
+          auditPayload(workingDirectory),
+          {
+            retryDelayMs: 0,
+            fetchFn: async () => {
+              calls += 1;
+              throw new TypeError('fetch failed');
+            }
+          }
+        );
+      } catch (error) {
+        failure = error;
+      }
+
+      assert.equal(calls, 2);
+
+      assert.match(
+        failure?.message ?? '',
+        /Anthropic audit transport failed after 2 call\(s\): fetch failed/
+      );
+
+      assert.equal(
+        failure?.auditProviderFailure,
+        true
+      );
+
+      assert.equal(
+        failure?.providerCalls,
+        2
+      );
+
+      assert.equal(
+        failure?.modelUsage,
+        null
+      );
+    } finally {
+      await rm(
+        workingDirectory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
   }
 );
 
