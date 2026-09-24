@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ciFailureClassForEvidence, expectedDispatchTitle, mergePreviewEvidenceFromWorkflow, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForEvidence, expectedDispatchTitle, mergePreviewEvidenceFromWorkflow, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload, validateTerminalAuditProviderFailurePayload } from '../src/v2/controller-runtime.mjs';
 
 const SHA = 'a'.repeat(40);
 
@@ -112,6 +112,124 @@ test('CI remediation requires explicit repository-cause evidence and fails close
   );
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'unknown', failedStepNames: [], log: 'Process completed with exit code 1' }] }), 'external');
   for (const conclusion of ['cancelled', 'timed_out', 'startup_failure', 'stale', 'neutral', 'skipped']) assert.equal(ciFailureClassForEvidence({ conclusion, failedJobs: [] }), 'external');
+});
+
+
+test('terminal audit provider failure artifact is exact-run exact-head bound', () => {
+  const payload = {
+    schemaVersion: 1,
+    repository: 'owner/target',
+    issueNumber: 63,
+    pullRequestNumber: 64,
+    sourceWorkflowRunId: 10,
+    auditWorkflowRunId: 20,
+    request: {
+      candidate: {
+        materialHeadSha: SHA
+      }
+    },
+    status: 'audit-provider-failed',
+    failure: {
+      type: 'audit-provider-failure',
+      message: 'auditor returned an empty final response'
+    },
+    providerCalls: 2,
+    modelUsage: {
+      inputTokens: 100,
+      outputTokens: 16000
+    }
+  };
+
+  const result =
+    validateTerminalAuditProviderFailurePayload(
+      payload,
+      {
+        targetRepository: 'owner/target',
+        issueNumber: 63,
+        pullRequestNumber: 64,
+        candidateSha: SHA,
+        auditRunId: 20,
+        sourceWorkflowRunId: 10
+      }
+    );
+
+  assert.equal(
+    result.status,
+    'audit-provider-failed'
+  );
+
+  assert.equal(
+    result.candidateSha,
+    SHA
+  );
+
+  assert.equal(
+    result.auditRunId,
+    20
+  );
+
+  assert.throws(
+    () =>
+      validateTerminalAuditProviderFailurePayload(
+        {
+          ...payload,
+          request: {
+            candidate: {
+              materialHeadSha: 'c'.repeat(40)
+            }
+          }
+        },
+        {
+          targetRepository: 'owner/target',
+          issueNumber: 63,
+          pullRequestNumber: 64,
+          candidateSha: SHA,
+          auditRunId: 20,
+          sourceWorkflowRunId: 10
+        }
+      ),
+    /candidate mismatch/
+  );
+
+  assert.throws(
+    () =>
+      validateTerminalAuditProviderFailurePayload(
+        {
+          ...payload,
+          auditWorkflowRunId: 21
+        },
+        {
+          targetRepository: 'owner/target',
+          issueNumber: 63,
+          pullRequestNumber: 64,
+          candidateSha: SHA,
+          auditRunId: 20,
+          sourceWorkflowRunId: 10
+        }
+      ),
+    /run mismatch/
+  );
+
+  assert.throws(
+    () =>
+      validateTerminalAuditProviderFailurePayload(
+        {
+          ...payload,
+          failure: {
+            type: 'unexpected-failure'
+          }
+        },
+        {
+          targetRepository: 'owner/target',
+          issueNumber: 63,
+          pullRequestNumber: 64,
+          candidateSha: SHA,
+          auditRunId: 20,
+          sourceWorkflowRunId: 10
+        }
+      ),
+    /type mismatch/
+  );
 });
 
 test('authoritative audit artifact is exact-run exact-head and fingerprint bound', () => {

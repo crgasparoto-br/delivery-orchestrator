@@ -193,6 +193,114 @@ export function validateAuditArtifactPayload(payload, {
   return Object.freeze(payload.result);
 }
 
+
+export function validateTerminalAuditProviderFailurePayload(payload, {
+  targetRepository,
+  issueNumber,
+  pullRequestNumber,
+  candidateSha,
+  auditRunId,
+  sourceWorkflowRunId
+} = {}) {
+  if (
+    !payload ||
+    Array.isArray(payload) ||
+    typeof payload !== 'object'
+  ) {
+    throw new Error(
+      'audit provider failure artifact payload must be an object'
+    );
+  }
+
+  if (payload.status !== 'audit-provider-failed') {
+    throw new Error(
+      'audit provider failure artifact status mismatch'
+    );
+  }
+
+  if (
+    String(payload.failure?.type ?? '') !==
+    'audit-provider-failure'
+  ) {
+    throw new Error(
+      'audit provider failure artifact type mismatch'
+    );
+  }
+
+  const expectedCandidate =
+    requiredSha(candidateSha, 'candidateSha');
+
+  const expectedRun =
+    requiredPositiveInteger(auditRunId, 'auditRunId');
+
+  if (
+    String(payload.repository ?? '') !==
+    requiredString(targetRepository, 'targetRepository')
+  ) {
+    throw new Error(
+      'audit provider failure artifact repository mismatch'
+    );
+  }
+
+  if (
+    Number(payload.issueNumber) !==
+    requiredPositiveInteger(issueNumber, 'issueNumber')
+  ) {
+    throw new Error(
+      'audit provider failure artifact issue mismatch'
+    );
+  }
+
+  if (
+    Number(payload.pullRequestNumber) !==
+    requiredPositiveInteger(
+      pullRequestNumber,
+      'pullRequestNumber'
+    )
+  ) {
+    throw new Error(
+      'audit provider failure artifact PR mismatch'
+    );
+  }
+
+  if (
+    Number(payload.auditWorkflowRunId) !==
+    expectedRun
+  ) {
+    throw new Error(
+      'audit provider failure artifact run mismatch'
+    );
+  }
+
+  if (
+    Number(payload.sourceWorkflowRunId) !==
+    requiredPositiveInteger(
+      sourceWorkflowRunId,
+      'sourceWorkflowRunId'
+    )
+  ) {
+    throw new Error(
+      'audit provider failure artifact source run mismatch'
+    );
+  }
+
+  if (
+    String(
+      payload.request?.candidate?.materialHeadSha ?? ''
+    ).toLowerCase() !== expectedCandidate
+  ) {
+    throw new Error(
+      'audit provider failure artifact candidate mismatch'
+    );
+  }
+
+  return Object.freeze({
+    status: 'audit-provider-failed',
+    candidateSha: expectedCandidate,
+    auditRunId: expectedRun
+  });
+}
+
 export async function loadAuthoritativeAuditResult({
   orchestratorRepository,
   trustedRef,
@@ -257,6 +365,30 @@ export async function loadAuthoritativeAuditResult({
     }
     if (candidates.length !== 1) throw new Error('authoritative audit artifact must contain exactly one JSON result');
     const payload = JSON.parse(await readFile(candidates[0], 'utf8'));
+
+    if (
+      acceptTerminalFailure &&
+      run.conclusion !== 'success' &&
+      payload?.status === 'audit-provider-failed'
+    ) {
+      validateTerminalAuditProviderFailurePayload(payload, {
+        targetRepository,
+        issueNumber,
+        pullRequestNumber,
+        candidateSha,
+        auditRunId: runId,
+        sourceWorkflowRunId
+      });
+
+      // The workflow produced a valid, exact-run operational failure
+      // artifact, but no semantic audit decision exists. Surface this
+      // through the same recovery contract used for a missing semantic
+      // artifact so a newer control-plane epoch may safely rearm it.
+      throw new Error(
+        `authoritative audit artifact absent semantic result ${expectedName}`
+      );
+    }
+
     return validateAuditArtifactPayload(payload, {
       orchestratorRepository: repository,
       targetRepository,
