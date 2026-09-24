@@ -239,10 +239,16 @@ export async function runAnthropic(
         continue;
       }
 
-      throw new Error(
+      const error = new Error(
         `Anthropic audit invocation failed ` +
         `(${response.status}) after ${providerCalls} call(s): ${body}`
       );
+
+      error.providerCalls = providerCalls;
+      error.modelUsage = aggregateUsage;
+      error.auditProviderFailure = true;
+
+      throw error;
     }
 
     let message;

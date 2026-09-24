@@ -363,3 +363,67 @@ test(
     );
   }
 );
+
+test(
+  'Claude audit preserves provider telemetry after two transient HTTP failures',
+  async () => {
+    const workingDirectory = await createBundle();
+    let calls = 0;
+
+    try {
+      let failure;
+
+      try {
+        await runAnthropic(
+          auditPayload(workingDirectory),
+          {
+            retryDelayMs: 0,
+            fetchFn: async () => {
+              calls += 1;
+
+              return anthropicResponse(
+                503,
+                {
+                  error: {
+                    type: 'overloaded_error'
+                  }
+                }
+              );
+            }
+          }
+        );
+      } catch (error) {
+        failure = error;
+      }
+
+      assert.match(
+        failure?.message ?? '',
+        /Anthropic audit invocation failed \(503\) after 2 call\(s\)/
+      );
+      assert.equal(
+        failure?.auditProviderFailure,
+        true
+      );
+      assert.equal(
+        failure?.providerCalls,
+        2
+      );
+      assert.equal(
+        failure?.modelUsage,
+        null
+      );
+      assert.equal(
+        calls,
+        2
+      );
+    } finally {
+      await rm(
+        workingDirectory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
+  }
+);
