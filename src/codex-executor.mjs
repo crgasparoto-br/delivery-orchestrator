@@ -74,7 +74,7 @@ export class CodexExecutor {
       claude: 'run-anthropic',
       copilot: 'run-copilot'
     }[this.provider];
-    return this.runRoleTask(this.roleUsers[role], task, {
+    const result = await this.runRoleTask(this.roleUsers[role], task, {
       authMode: this.authMode,
       apiKey: this.apiKey,
       anthropicApiKey: this.anthropicApiKey,
@@ -90,5 +90,15 @@ export class CodexExecutor {
       networkAccessEnabled,
       env
     });
+
+    if (result?.auditProviderFailure) {
+      const error = new Error(result.error || 'audit provider failed');
+      error.auditProviderFailure = true;
+      error.providerCalls = result.providerCalls ?? null;
+      error.modelUsage = result.modelUsage ?? null;
+      throw error;
+    }
+
+    return result;
   }
 }
