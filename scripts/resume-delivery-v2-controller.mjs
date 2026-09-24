@@ -445,18 +445,96 @@ async function sourceWorkflowRunForHead({ repository, sha, workflowName, token }
 }
 
 async function waitRequiredCheck({ repository, prNumber, sha, requiredStatusName, workflowName, token }) {
-  const deadline = Date.now() + MAX_STAGE_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + MAX_STAGE_MS;
+  let lastHeartbeatAt = 0;
+  let lastObservedState = null;
+
   while (Date.now() < deadline) {
     const pr = await fetchPullRequest(repository, prNumber, token);
-    if (String(pr.head.sha).toLowerCase() !== sha.toLowerCase()) return { kind: 'head-drift', pullRequest: pr };
-    const sourceRun = await sourceWorkflowRunForHead({ repository, sha, workflowName, token });
-    if (!sourceRun) { await sleep(POLL_MS); continue; }
-    const check = selectCheckForWorkflowRun(await fetchCheckRuns(repository, sha, token), { requiredStatusName, workflowRunId: sourceRun.id });
-    if (sourceRun.status === 'completed' && check?.status === 'completed') return { kind: 'check', check, sourceRun, pullRequest: pr };
-    if (sourceRun.status === 'completed' && !check) throw new Error(`required check ${requiredStatusName} is missing for authoritative workflow run ${sourceRun.id}`);
+    const current = String(pr.head.sha).toLowerCase();
+
+    if (current !== sha.toLowerCase()) {
+      process.stdout.write(
+        `[delivery-v2] required-check wait detected head drift ` +
+        `pr=${prNumber} expected=${sha} current=${current}\n`
+      );
+      return { kind: 'head-drift', pullRequest: pr };
+    }
+
+    const sourceRun = await sourceWorkflowRunForHead({
+      repository,
+      sha,
+      workflowName,
+      token
+    });
+
+    let check = null;
+    if (sourceRun) {
+      check = selectCheckForWorkflowRun(
+        await fetchCheckRuns(repository, sha, token),
+        {
+          requiredStatusName,
+          workflowRunId: sourceRun.id
+        }
+      );
+    }
+
+    const now = Date.now();
+    const observedState = sourceRun
+      ? `${sourceRun.id}:${sourceRun.status}:${sourceRun.conclusion ?? '-'}:` +
+        `${check?.status ?? 'missing'}:${check?.conclusion ?? '-'}`
+      : 'source-run-missing';
+
+    if (
+      observedState !== lastObservedState ||
+      now - lastHeartbeatAt >= 60_000
+    ) {
+      const elapsedSeconds = Math.floor((now - startedAt) / 1000);
+
+      process.stdout.write(
+        `[delivery-v2] waiting required check ` +
+        `repository=${repository} pr=${prNumber} ` +
+        `sha=${sha} workflow="${workflowName}" ` +
+        `required="${requiredStatusName}" ` +
+        `sourceRun=${sourceRun?.id ?? '-'} ` +
+        `runStatus=${sourceRun?.status ?? 'not-found'} ` +
+        `runConclusion=${sourceRun?.conclusion ?? '-'} ` +
+        `checkStatus=${check?.status ?? 'not-found'} ` +
+        `checkConclusion=${check?.conclusion ?? '-'} ` +
+        `elapsed=${elapsedSeconds}s\n`
+      );
+
+      lastHeartbeatAt = now;
+      lastObservedState = observedState;
+    }
+
+    if (
+      sourceRun?.status === 'completed' &&
+      check?.status === 'completed'
+    ) {
+      return {
+        kind: 'check',
+        check,
+        sourceRun,
+        pullRequest: pr
+      };
+    }
+
+    if (sourceRun?.status === 'completed' && !check) {
+      throw new Error(
+        `required check ${requiredStatusName} is missing for ` +
+        `authoritative workflow run ${sourceRun.id}`
+      );
+    }
+
     await sleep(POLL_MS);
   }
-  throw new Error(`required check ${requiredStatusName} did not become terminal within bounded timeout`);
+
+  throw new Error(
+    `required check ${requiredStatusName} did not become terminal within ` +
+    `bounded timeout after ${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 async function listWorkflowRuns(repository, workflow, token) {
@@ -466,33 +544,123 @@ async function listWorkflowRuns(repository, workflow, token) {
 
 async function dispatchWorkflowAndResolveRun({ repository, workflow, ref, inputs, token, kind, dispatchNonce = createDispatchNonce() }) {
   await postJson(`https://api.github.com/repos/${repository}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, token, { ref, inputs: { ...inputs, dispatch_nonce: dispatchNonce } });
-  const deadline = Date.now() + 2 * 60 * 1000;
+
+  const startedAt = Date.now();
+  const deadline = startedAt + 2 * 60 * 1000;
+  let lastHeartbeatAt = 0;
+
   while (Date.now() < deadline) {
-    const correlated = selectCorrelatedWorkflowRun(await listWorkflowRuns(repository, workflow, token), { kind, nonce: dispatchNonce, ref });
-    if (correlated) return correlated;
+    const correlated = selectCorrelatedWorkflowRun(
+      await listWorkflowRuns(repository, workflow, token),
+      { kind, nonce: dispatchNonce, ref }
+    );
+
+    if (correlated) {
+      process.stdout.write(
+        `[delivery-v2] correlated workflow dispatch ` +
+        `repository=${repository} workflow="${workflow}" ` +
+        `run=${correlated.id} status=${correlated.status ?? '-'} ` +
+        `elapsed=${Math.floor((Date.now() - startedAt) / 1000)}s\n`
+      );
+      return correlated;
+    }
+
+    const now = Date.now();
+
+    if (now - lastHeartbeatAt >= 60_000) {
+      process.stdout.write(
+        `[delivery-v2] waiting workflow dispatch correlation ` +
+        `repository=${repository} workflow="${workflow}" ` +
+        `kind=${kind} ref=${ref} ` +
+        `elapsed=${Math.floor((now - startedAt) / 1000)}s\n`
+      );
+      lastHeartbeatAt = now;
+    }
+
     await sleep(Math.min(POLL_MS, 5000));
   }
-  throw new Error(`timed out resolving correlated workflow dispatch: ${workflow}`);
+
+  throw new Error(
+    `timed out resolving correlated workflow dispatch: ${workflow} after ` +
+    `${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 async function waitWorkflowRun(repository, runId, token) {
-  const deadline = Date.now() + MAX_STAGE_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + MAX_STAGE_MS;
+  let lastHeartbeatAt = 0;
+  let lastStatus = null;
+
   while (Date.now() < deadline) {
-    const run = await api(`https://api.github.com/repos/${repository}/actions/runs/${runId}`, token);
+    const run = await api(
+      `https://api.github.com/repos/${repository}/actions/runs/${runId}`,
+      token
+    );
+
+    const now = Date.now();
+    const statusChanged = run.status !== lastStatus;
+    const heartbeatDue = now - lastHeartbeatAt >= 60_000;
+
+    if (statusChanged || heartbeatDue) {
+      const elapsedSeconds = Math.floor((now - startedAt) / 1000);
+      process.stdout.write(
+        `[delivery-v2] waiting workflow run=${runId} ` +
+        `repository=${repository} status=${run.status} ` +
+        `conclusion=${run.conclusion ?? '-'} elapsed=${elapsedSeconds}s\n`
+      );
+      lastHeartbeatAt = now;
+      lastStatus = run.status;
+    }
+
     if (run.status === 'completed') return run;
     await sleep(POLL_MS);
   }
-  throw new Error(`workflow run ${runId} exceeded bounded stage timeout`);
+
+  throw new Error(
+    `workflow run ${runId} exceeded bounded stage timeout after ` +
+    `${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 async function waitHeadChange(repository, prNumber, previousSha, token) {
-  const deadline = Date.now() + 15 * 60 * 1000;
+  const startedAt = Date.now();
+  const deadline = startedAt + 15 * 60 * 1000;
+  let lastHeartbeatAt = 0;
+
   while (Date.now() < deadline) {
     const pr = await fetchPullRequest(repository, prNumber, token);
-    if (String(pr.head.sha).toLowerCase() !== previousSha.toLowerCase()) return pr;
+    const currentSha = String(pr.head.sha).toLowerCase();
+
+    if (currentSha !== previousSha.toLowerCase()) {
+      process.stdout.write(
+        `[delivery-v2] material head changed ` +
+        `repository=${repository} pr=${prNumber} ` +
+        `previous=${previousSha} current=${currentSha} ` +
+        `elapsed=${Math.floor((Date.now() - startedAt) / 1000)}s\n`
+      );
+      return pr;
+    }
+
+    const now = Date.now();
+
+    if (now - lastHeartbeatAt >= 60_000) {
+      process.stdout.write(
+        `[delivery-v2] waiting material head change ` +
+        `repository=${repository} pr=${prNumber} ` +
+        `previous=${previousSha} ` +
+        `elapsed=${Math.floor((now - startedAt) / 1000)}s\n`
+      );
+      lastHeartbeatAt = now;
+    }
+
     await sleep(POLL_MS);
   }
-  throw new Error('in-flight remediation completed without publishing a new material head');
+
+  throw new Error(
+    'in-flight remediation completed without publishing a new material head after ' +
+    `${Math.floor((Date.now() - startedAt) / 1000)}s`
+  );
 }
 
 async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch, targetRef, targetPr, remediationContext, token, dispatchNonce = createDispatchNonce() }) {
