@@ -314,3 +314,54 @@ for (const risk of ['fast', 'standard', 'critical']) {
     assert.match(lock, /RUNNER_TOOL_CACHE/);
   });
 }
+
+test('critical Codex worker bounds working-set rebuild factor below gh-aw circuit breaker', async () => {
+  const workerSource = await readFile(
+    '.github/workflows/delivery-v2-worker-codex-critical.md',
+    'utf8'
+  );
+
+  assert.match(
+    workerSource,
+    /max-turns:\s*\$\{\{.*DELIVERY_CRITICAL_MAX_AI_TURNS.*> 0.*< 25.*\|\| 24.*\}\}/
+  );
+
+  const rebuildFactor = (inputTokens) => {
+    const cumulative = inputTokens.reduce((sum, value) => sum + value, 0);
+    const peak = Math.max(...inputTokens);
+
+    return {
+      cumulative,
+      peak,
+      factor: cumulative / peak
+    };
+  };
+
+  const failingTrajectory = rebuildFactor(
+    Array.from({ length: 26 }, () => 75166)
+  );
+
+  assert.equal(failingTrajectory.cumulative, 1954316);
+  assert.equal(failingTrajectory.factor, 26);
+  assert.ok(failingTrajectory.cumulative >= 1000000);
+  assert.ok(failingTrajectory.factor > 25);
+
+  const boundedTrajectory = rebuildFactor(
+    Array.from({ length: 24 }, () => 75166)
+  );
+
+  assert.ok(boundedTrajectory.cumulative >= 1000000);
+  assert.equal(boundedTrajectory.factor, 24);
+  assert.ok(boundedTrajectory.factor < 25);
+
+  const unevenTrajectory = rebuildFactor([
+    18000, 24000, 31000, 27000, 42000, 19000,
+    48000, 26000, 33000, 39000, 21000, 47000,
+    28000, 36000, 45000, 23000, 41000, 32000,
+    29000, 44000, 25000, 38000, 34000, 46000
+  ]);
+
+  assert.ok(unevenTrajectory.factor <= 24);
+  assert.ok(unevenTrajectory.factor < 25);
+});
+
