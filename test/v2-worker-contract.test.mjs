@@ -31,13 +31,20 @@ for (const provider of ['copilot', 'codex', 'claude']) {
 
       const prefix = risk.toUpperCase();
 
-      const turnsFallback = provider === 'claude' ? String(policy[risk].turns) : `'${policy[risk].turns}'`;
-      assert.match(
-        body,
-        new RegExp(
-          `max-turns:\\s*\\$\\{\\{\\s*vars\\.DELIVERY_${prefix}_MAX_AI_TURNS\\s*\\|\\|\\s*${turnsFallback}\\s*\\}\\}`
-        )
-      );
+      if (provider === 'codex' && risk === 'critical') {
+        assert.match(
+          body,
+          /max-turns:\\s*\\$\\{\\{.*vars\\.DELIVERY_CRITICAL_MAX_AI_TURNS.*> 0.*< 25.*\\|\\| 24.*\\}\\}/
+        );
+      } else {
+        const turnsFallback = provider === 'claude' ? String(policy[risk].turns) : `'${policy[risk].turns}'`;
+        assert.match(
+          body,
+          new RegExp(
+            `max-turns:\\s*\\$\\{\\{\\s*vars\\.DELIVERY_${prefix}_MAX_AI_TURNS\\s*\\|\\|\\s*${turnsFallback}\\s*\\}\\}`
+          )
+        );
+      }
 
       assert.match(
         body,
