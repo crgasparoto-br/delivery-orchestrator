@@ -11,6 +11,7 @@ import {
   terminalBootstrapLease
 } from '../scripts/guard-delivery-v2-reentry.mjs';
 import {
+  shouldRearmFailedAuditWorkflow,
   shouldRearmFailedTechnicalHygiene
 } from '../scripts/resume-delivery-v2-controller.mjs';
 import {
@@ -23,6 +24,98 @@ const EVENT_REF_B = 'b'.repeat(40);
 const CONTROL_PLANE_B = 'c'.repeat(40);
 const CONTROL_PLANE_C = 'd'.repeat(40);
 
+
+test('failed audit from an older control-plane epoch may be rearmed', () => {
+  assert.equal(
+    shouldRearmFailedAuditWorkflow({
+      runConclusion: 'failure',
+      runHeadSha: CONTROL_PLANE_A,
+      currentControllerSha: CONTROL_PLANE_B
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldRearmFailedAuditWorkflow({
+      runConclusion: 'cancelled',
+      runHeadSha: CONTROL_PLANE_A,
+      currentControllerSha: CONTROL_PLANE_B
+    }),
+    true
+  );
+});
+
+test('failed audit on the current control plane remains fail-closed', () => {
+  assert.equal(
+    shouldRearmFailedAuditWorkflow({
+      runConclusion: 'failure',
+      runHeadSha: CONTROL_PLANE_A,
+      currentControllerSha: CONTROL_PLANE_A
+    }),
+    false
+  );
+});
+
+test('successful existing audit is never rearmed after control-plane drift', () => {
+  assert.equal(
+    shouldRearmFailedAuditWorkflow({
+      runConclusion: 'success',
+      runHeadSha: CONTROL_PLANE_A,
+      currentControllerSha: CONTROL_PLANE_B
+    }),
+    false
+  );
+});
+
+test('audit recovery requires valid exact control-plane SHAs', () => {
+  assert.equal(
+    shouldRearmFailedAuditWorkflow({
+      runConclusion: 'failure',
+      runHeadSha: 'main',
+      currentControllerSha: CONTROL_PLANE_B
+    }),
+    false
+  );
+
+  assert.equal(
+    shouldRearmFailedAuditWorkflow({
+      runConclusion: 'failure',
+      runHeadSha: CONTROL_PLANE_A,
+      currentControllerSha: 'main'
+    }),
+    false
+  );
+});
+
+test('resume audit recovery records the unchanged material head', () => {
+  const source = readFileSync(
+    new URL(
+      '../scripts/resume-delivery-v2-controller.mjs',
+      import.meta.url
+    ),
+    'utf8'
+  );
+
+  assert.match(
+    source,
+    /failed-audit-from-older-control-plane/
+  );
+
+  assert.match(
+    source,
+    /previousAuditRunId/
+  );
+
+  assert.match(
+    source,
+    /replacementAuditRunId/
+  );
+
+  assert.match(
+    source,
+    /materialHeadSha/
+  );
+});
 
 test('technical hygiene recovery uses checked-out control-plane HEAD instead of workflow event SHA', () => {
   const failedWorkerControllerSha = CONTROL_PLANE_A;

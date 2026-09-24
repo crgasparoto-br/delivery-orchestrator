@@ -150,6 +150,38 @@ export function shouldRearmFailedRemediationWorker({
   return Boolean(controlPlaneChanged || metadataPreconditionFixed);
 }
 
+export function shouldRearmFailedAuditWorkflow({
+  runConclusion,
+  runHeadSha,
+  currentControllerSha
+} = {}) {
+  const conclusion = String(
+    runConclusion ?? ''
+  ).trim().toLowerCase();
+
+  const previousSha = normalizedRecoverySha(
+    runHeadSha
+  );
+
+  const currentSha = normalizedRecoverySha(
+    currentControllerSha
+  );
+
+  // Successful audits remain authoritative and must never be replayed
+  // merely because the control plane moved.
+  if (!conclusion || conclusion === 'success') {
+    return false;
+  }
+
+  // Only a proven control-plane epoch change may rearm a terminal failed
+  // audit. This prevents blind retry loops on the same controller build.
+  return Boolean(
+    previousSha &&
+    currentSha &&
+    previousSha !== currentSha
+  );
+}
+
 export function shouldRearmFailedTechnicalHygiene({
   nextAction,
   runConclusion,
@@ -1749,6 +1781,70 @@ export async function main() {
           Number(controller.auditRunId),
           actionsToken
         );
+
+        const currentControllerSha =
+          resolveCheckedOutControlPlaneHeadSha();
+
+        if (
+          shouldRearmFailedAuditWorkflow({
+            runConclusion: auditRun.conclusion,
+            runHeadSha: auditRun.head_sha,
+            currentControllerSha
+          })
+        ) {
+          const previousAuditRunId = auditRun.id;
+          const previousControllerSha = String(
+            auditRun.head_sha ?? ''
+          ).trim().toLowerCase();
+
+          const auditDispatchNonce =
+            createDispatchNonce();
+
+          await persist({
+            nextAction: 'dispatch-audit',
+            auditRunId: null,
+            auditDispatchNonce,
+            auditWorkflowRecovery: {
+              schemaVersion: 1,
+              reason:
+                'failed-audit-from-older-control-plane',
+              previousAuditRunId,
+              previousControllerSha,
+              currentControllerSha,
+              materialHeadSha
+            }
+          });
+
+          // This is an infrastructure/control-plane recovery, not a new
+          // semantic audit attempt and not a product remediation.
+          auditRun =
+            await dispatchCurrentAudit(
+              auditDispatchNonce
+            );
+
+          await persist({
+            nextAction: 'observe-audit',
+            auditRunId: auditRun.id,
+            auditDispatchNonce,
+            auditWorkflowRecovery: {
+              schemaVersion: 1,
+              reason:
+                'failed-audit-from-older-control-plane',
+              previousAuditRunId,
+              previousControllerSha,
+              currentControllerSha,
+              materialHeadSha,
+              replacementAuditRunId:
+                auditRun.id
+            }
+          });
+
+          auditRun = await waitWorkflowRun(
+            orchestratorRepository,
+            auditRun.id,
+            actionsToken
+          );
+        }
       } else if (state.auditAttempts > 0 && controller.auditDispatchNonce) {
         state = markExistingAuditInFlight(state);
 
