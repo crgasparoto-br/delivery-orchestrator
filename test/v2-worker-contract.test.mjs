@@ -32,10 +32,16 @@ for (const provider of ['copilot', 'codex', 'claude']) {
       const prefix = risk.toUpperCase();
 
       if (provider === 'codex' && risk === 'critical') {
-        assert.match(
-          body,
-          /max-turns:\\s*\\$\\{\\{.*vars\\.DELIVERY_CRITICAL_MAX_AI_TURNS.*> 0.*< 25.*\\|\\| 24.*\\}\\}/
-        );
+        const maxTurnsLine = body
+          .split('\n')
+          .find((line) => line.startsWith('max-turns: '));
+
+        assert.ok(maxTurnsLine, 'critical Codex worker must declare max-turns');
+        assert.match(maxTurnsLine, /DELIVERY_CRITICAL_MAX_AI_TURNS/);
+        assert.match(maxTurnsLine, /> 0/);
+        assert.match(maxTurnsLine, /< 25/);
+        assert.match(maxTurnsLine, /\|\| 24/);
+        assert.doesNotMatch(maxTurnsLine, /\|\| '80'/);
       } else {
         const turnsFallback = provider === 'claude' ? String(policy[risk].turns) : `'${policy[risk].turns}'`;
         assert.match(
