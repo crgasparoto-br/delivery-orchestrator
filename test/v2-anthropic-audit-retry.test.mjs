@@ -137,6 +137,86 @@ test(
   }
 );
 
+
+test(
+  'Claude audit expands output budget when max_tokens exhausts the first attempt',
+  async () => {
+    const workingDirectory = await createBundle();
+    const observedMaxTokens = [];
+    let calls = 0;
+
+    try {
+      const result = await runAnthropic(
+        auditPayload(workingDirectory),
+        {
+          retryDelayMs: 0,
+          fetchFn: async (_url, options) => {
+            calls += 1;
+
+            const request = JSON.parse(options.body);
+            observedMaxTokens.push(request.max_tokens);
+
+            if (calls === 1) {
+              return anthropicResponse(200, {
+                id: 'msg-max-tokens',
+                stop_reason: 'max_tokens',
+                content: [],
+                usage: {
+                  input_tokens: 10,
+                  output_tokens: 16000
+                }
+              });
+            }
+
+            return anthropicResponse(200, {
+              id: 'msg-success-after-budget-growth',
+              stop_reason: 'end_turn',
+              content: [
+                {
+                  type: 'text',
+                  text: '{"decision":"approved"}'
+                }
+              ],
+              usage: {
+                input_tokens: 11,
+                output_tokens: 3
+              }
+            });
+          }
+        }
+      );
+
+      assert.equal(calls, 2);
+      assert.deepEqual(
+        observedMaxTokens,
+        [16000, 64000]
+      );
+      assert.equal(result.providerCalls, 2);
+      assert.deepEqual(
+        result.usage,
+        {
+          inputTokens: 21,
+          outputTokens: 16003
+        }
+      );
+      assert.deepEqual(
+        result.result,
+        {
+          decision: 'approved'
+        }
+      );
+    } finally {
+      await rm(
+        workingDirectory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
+  }
+);
+
 test(
   'Claude audit retries one transient HTTP failure',
   async () => {

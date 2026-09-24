@@ -150,6 +150,8 @@ async function runCodex(payload) {
 }
 
 const ANTHROPIC_MAX_ATTEMPTS = 2;
+const ANTHROPIC_INITIAL_MAX_TOKENS = 16000;
+const ANTHROPIC_MAX_TOKENS_RETRY = 64000;
 const ANTHROPIC_RETRYABLE_STATUS = new Set([
   408,
   409,
@@ -195,6 +197,7 @@ export async function runAnthropic(
 
   let providerCalls = 0;
   let aggregateUsage = null;
+  let maxTokens = ANTHROPIC_INITIAL_MAX_TOKENS;
 
   for (
     let attempt = 1;
@@ -214,7 +217,7 @@ export async function runAnthropic(
         },
         body: JSON.stringify({
           model: payload.model,
-          max_tokens: 16000,
+          max_tokens: maxTokens,
           messages: [
             {
               role: 'user',
@@ -276,13 +279,17 @@ export async function runAnthropic(
       .trim();
 
     if (!finalText) {
+      const stopReason =
+        String(message.stop_reason ?? 'unknown');
+
       if (attempt < ANTHROPIC_MAX_ATTEMPTS) {
+        if (stopReason === 'max_tokens') {
+          maxTokens = ANTHROPIC_MAX_TOKENS_RETRY;
+        }
+
         await waitForAnthropicRetry(retryDelayMs);
         continue;
       }
-
-      const stopReason =
-        String(message.stop_reason ?? 'unknown');
 
       const error = new Error(
         `${payload.role} returned an empty final response ` +
