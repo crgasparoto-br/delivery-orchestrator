@@ -112,6 +112,8 @@ set -euo pipefail
 allow_non_login=false
 policy_path=""
 policy_bash_env=""
+tool_output_token_limit=""
+auto_compact_token_limit=""
 previous=""
 
 for arg in "$@"; do
@@ -126,6 +128,12 @@ for arg in "$@"; do
       shell_environment_policy.set.BASH_ENV=*)
         policy_bash_env=\${arg#shell_environment_policy.set.BASH_ENV=}
         ;;
+      tool_output_token_limit=*)
+        tool_output_token_limit=\${arg#tool_output_token_limit=}
+        ;;
+      model_auto_compact_token_limit=*)
+        auto_compact_token_limit=\${arg#model_auto_compact_token_limit=}
+        ;;
     esac
   fi
   previous="$arg"
@@ -134,6 +142,9 @@ done
 test "$allow_non_login" = "true"
 test -n "$policy_path"
 test -n "$policy_bash_env"
+
+test "$tool_output_token_limit" = "2048"
+test "$auto_compact_token_limit" = "48000"
 
 # Os valores de shell_environment_policy chegam delimitados por aspas.
 policy_path=\${policy_path#\\\"}

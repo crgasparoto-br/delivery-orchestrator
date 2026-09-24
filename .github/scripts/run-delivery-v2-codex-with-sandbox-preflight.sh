@@ -156,8 +156,36 @@ echo "codex_command_path=$CODEX_COMMAND_PATH"
 CODEX_SHELL_PATH="$PATH"
 CODEX_BASH_ENV="$BASH_ENV"
 
+# Bound the Codex conversation before gh-aw's context-rebuild circuit breaker
+# is reached. Issue #250 observed almost 2M cumulative input tokens and a
+# rebuild factor above the runtime threshold while the worker was still
+# progressing.
+CODEX_TOOL_OUTPUT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-2048}"
+CODEX_AUTO_COMPACT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-48000}"
+
+require_positive_integer() {
+  local name="$1"
+  local value="$2"
+
+  case "$value" in
+    ''|*[!0-9]*|0)
+      fail "$name must be a positive integer, got: $value"
+      ;;
+  esac
+}
+
+require_positive_integer   DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT   "$CODEX_TOOL_OUTPUT_TOKEN_LIMIT"
+
+require_positive_integer   DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT   "$CODEX_AUTO_COMPACT_TOKEN_LIMIT"
+
+echo "Delivery V2 Codex context budget:"
+echo "tool_output_token_limit=$CODEX_TOOL_OUTPUT_TOKEN_LIMIT"
+echo "model_auto_compact_token_limit=$CODEX_AUTO_COMPACT_TOKEN_LIMIT"
+
 exec codex \
   -c allow_login_shell=false \
+  -c "tool_output_token_limit=${CODEX_TOOL_OUTPUT_TOKEN_LIMIT}" \
+  -c "model_auto_compact_token_limit=${CODEX_AUTO_COMPACT_TOKEN_LIMIT}" \
   -c "shell_environment_policy.set.PATH=\"${CODEX_SHELL_PATH}\"" \
   -c "shell_environment_policy.set.BASH_ENV=\"${CODEX_BASH_ENV}\"" \
   "$@"
