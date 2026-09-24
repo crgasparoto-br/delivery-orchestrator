@@ -206,27 +206,50 @@ export async function runAnthropic(
   ) {
     providerCalls += 1;
 
-    const response = await fetchFn(
-      'https://api.anthropic.com/v1/messages',
-      {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': payload.anthropicApiKey,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: payload.model,
-          max_tokens: maxTokens,
-          messages: [
-            {
-              role: 'user',
-              content: prompt
-            }
-          ]
-        })
+    let response;
+
+    try {
+      response = await fetchFn(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': payload.anthropicApiKey,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: payload.model,
+            max_tokens: maxTokens,
+            messages: [
+              {
+                role: 'user',
+                content: prompt
+              }
+            ]
+          })
+        }
+      );
+    } catch (cause) {
+      if (attempt < ANTHROPIC_MAX_ATTEMPTS) {
+        await waitForAnthropicRetry(retryDelayMs);
+        continue;
       }
-    );
+
+      const causeMessage =
+        String(cause?.message ?? cause ?? 'unknown network error');
+
+      const error = new Error(
+        `Anthropic audit transport failed after ${providerCalls} call(s): ${causeMessage}`,
+        { cause }
+      );
+
+      error.providerCalls = providerCalls;
+      error.modelUsage = aggregateUsage;
+      error.auditProviderFailure = true;
+
+      throw error;
+    }
 
     const body = await response.text();
 
