@@ -202,7 +202,8 @@ export async function loadAuthoritativeAuditResult({
   candidateSha,
   auditRun,
   sourceWorkflowRunId,
-  token
+  token,
+  acceptTerminalFailure = false
 } = {}) {
   const repository = requiredString(orchestratorRepository, 'orchestratorRepository');
   const run = auditRun;
@@ -211,12 +212,29 @@ export async function loadAuthoritativeAuditResult({
   if (String(run.event ?? '') !== 'workflow_dispatch') throw new Error('audit run event mismatch');
   if (String(run.path ?? '') !== '.github/workflows/delivery-v2-audit.yml') throw new Error('audit run workflow path mismatch');
   if (String(run.head_branch ?? '') !== requiredString(trustedRef, 'trustedRef')) throw new Error('audit run control-plane ref mismatch');
-  if (run.status !== 'completed' || run.conclusion !== 'success') throw new Error('audit run must be terminal green');
+  if (run.status !== 'completed') {
+    throw new Error('audit run must be terminal');
+  }
+
+  if (!acceptTerminalFailure && run.conclusion !== 'success') {
+    throw new Error('audit run must be terminal green');
+  }
+
+  if (acceptTerminalFailure && !String(run.conclusion ?? '').trim()) {
+    throw new Error('terminal audit run conclusion is required');
+  }
 
   const artifacts = await fetchJson(`https://api.github.com/repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`, token);
   const expectedName = `delivery-v2-audit-${requiredPositiveInteger(pullRequestNumber, 'pullRequestNumber')}-${runId}`;
   const matches = (artifacts.artifacts ?? []).filter((artifact) => artifact.name === expectedName && artifact.expired !== true);
-  if (matches.length !== 1) throw new Error(`expected exactly one authoritative audit artifact ${expectedName}`);
+
+  if (matches.length === 0) {
+    throw new Error(`authoritative audit artifact absent ${expectedName}`);
+  }
+
+  if (matches.length !== 1) {
+    throw new Error(`expected exactly one authoritative audit artifact ${expectedName}`);
+  }
   const artifact = matches[0];
   if (artifact.workflow_run?.id != null && Number(artifact.workflow_run.id) !== runId) throw new Error('audit artifact provenance run mismatch');
 

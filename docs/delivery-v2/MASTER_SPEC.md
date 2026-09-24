@@ -520,6 +520,46 @@ Audit findings must be machine-usable and include:
 
 An audit is not allowed to reuse approval from another material SHA. Audit evidence must persist the reviewer provider/model actually invoked for that candidate.
 
+### Terminal audit recovery across control-plane epochs
+
+A persisted audit workflow that has already reached a terminal state must be
+classified before the controller decides whether to reuse or rearm it.
+
+A non-success GitHub workflow conclusion does not, by itself, prove that the
+semantic audit result is absent. The controller first attempts to resolve and
+validate the authoritative audit artifact for the exact repository, issue, PR,
+material SHA, source CI run and audit workflow run.
+
+If a valid semantic result is present, that result remains authoritative for
+the same material candidate and follows the normal audit-result flow. A
+control-plane SHA change alone must not invalidate or replay it.
+
+Automatic rearm is permitted only when all of the following are proven:
+
+- the persisted audit run is terminal;
+- no authoritative semantic audit result exists for that run;
+- the run exposes a valid exact control-plane `head_sha`;
+- the currently checked-out controller exposes a valid exact SHA;
+- those two control-plane SHAs are different;
+- the material candidate and authoritative exact-head CI identity remain
+  unchanged.
+
+When eligible, recovery replaces only the operational audit dispatch identity:
+it creates a new dispatch nonce, clears/replaces the stale run correlation and
+records the previous run, previous controller SHA, current controller SHA and
+unchanged material head.
+
+The recovery must not create a product finding, synthesize an approval or
+rejection, reset product state, clear prior semantic findings, decrement
+counters or mutate the material candidate.
+
+The controller remains fail-closed when the control-plane SHA is unchanged,
+either SHA is unavailable/invalid, the semantic-result state is ambiguous, or
+an audit artifact exists but fails authoritative validation.
+
+After a replacement nonce/run has been persisted, subsequent re-entry must
+correlate that persisted dispatch instead of creating another audit run.
+
 ### Audit context budget
 
 The audit bundle is bounded before the model is invoked. The budget includes the sanitized issue/PR projections in addition to bounded diff, manifests, contract, structural-hygiene evidence and material context. Raw GitHub PR/base/head API objects are not model context.

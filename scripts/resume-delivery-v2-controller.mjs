@@ -150,6 +150,47 @@ export function shouldRearmFailedRemediationWorker({
   return Boolean(controlPlaneChanged || metadataPreconditionFixed);
 }
 
+export function shouldRearmFailedAuditWorkflow({
+  runConclusion,
+  runHeadSha,
+  currentControllerSha,
+  semanticResultConsumable = false
+} = {}) {
+  const conclusion = String(
+    runConclusion ?? ''
+  ).trim().toLowerCase();
+
+  const previousSha = normalizedRecoverySha(
+    runHeadSha
+  );
+
+  const currentSha = normalizedRecoverySha(
+    currentControllerSha
+  );
+
+  // A semantic result that was already produced and validated remains
+  // authoritative even if a later workflow step made the GitHub workflow
+  // conclude non-success. Never discard/replay that semantic decision only
+  // because the control plane moved.
+  if (semanticResultConsumable) {
+    return false;
+  }
+
+  // Successful audits remain authoritative and must never be replayed
+  // merely because the control plane moved.
+  if (!conclusion || conclusion === 'success') {
+    return false;
+  }
+
+  // Only a proven control-plane epoch change may rearm a terminal failed
+  // audit. This prevents blind retry loops on the same controller build.
+  return Boolean(
+    previousSha &&
+    currentSha &&
+    previousSha !== currentSha
+  );
+}
+
 export function shouldRearmFailedTechnicalHygiene({
   nextAction,
   runConclusion,
@@ -683,8 +724,30 @@ async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, c
   });
 }
 
-async function auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber, candidateSha, auditRun, sourceWorkflowRunId, token }) {
-  return loadAuthoritativeAuditResult({ orchestratorRepository, trustedRef: orchestratorRef, targetRepository, issueNumber, pullRequestNumber: prNumber, candidateSha, auditRun, sourceWorkflowRunId, token });
+async function auditResultFromArtifact({
+  orchestratorRepository,
+  orchestratorRef,
+  targetRepository,
+  issueNumber,
+  prNumber,
+  candidateSha,
+  auditRun,
+  sourceWorkflowRunId,
+  token,
+  acceptTerminalFailure = false
+}) {
+  return loadAuthoritativeAuditResult({
+    orchestratorRepository,
+    trustedRef: orchestratorRef,
+    targetRepository,
+    issueNumber,
+    pullRequestNumber: prNumber,
+    candidateSha,
+    auditRun,
+    sourceWorkflowRunId,
+    token,
+    acceptTerminalFailure
+  });
 }
 
 function higherRisk(next, current) { return RISK_RANK[next] > RISK_RANK[current]; }
@@ -1702,6 +1765,7 @@ export async function main() {
 
     if (state.status === 'audit-pending') {
       let auditRun;
+      let preloadedAuditResult = null;
 
       const dispatchCurrentAudit = async (dispatchNonce) => {
         const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({
@@ -1749,6 +1813,117 @@ export async function main() {
           Number(controller.auditRunId),
           actionsToken
         );
+
+        const currentControllerSha =
+          resolveCheckedOutControlPlaneHeadSha();
+
+        // A non-success workflow is not automatically equivalent to an
+        // operational audit failure. First inspect whether it already produced
+        // one authoritative semantic result for this exact candidate.
+        //
+        // Only the proven absence of the expected artifact permits the
+        // control-plane recovery path. Invalid, duplicated, stale or mismatched
+        // artifacts remain fail-closed and propagate their validation error.
+        if (auditRun.conclusion !== 'success') {
+          const sourceRunForRecovery =
+            latestSourceRun ?? await sourceWorkflowRunForHead({
+              repository: targetRepository,
+              sha: materialHeadSha,
+              workflowName: targetPolicy.ciWorkflowName,
+              token: targetReadToken
+            });
+
+          if (!sourceRunForRecovery) {
+            throw new Error(
+              'audit recovery requires authoritative exact-head source CI'
+            );
+          }
+
+          try {
+            preloadedAuditResult = await auditResultFromArtifact({
+              orchestratorRepository,
+              orchestratorRef,
+              targetRepository,
+              issueNumber,
+              prNumber: resumePr,
+              candidateSha: materialHeadSha,
+              auditRun,
+              sourceWorkflowRunId: sourceRunForRecovery.id,
+              token: actionsToken,
+              acceptTerminalFailure: true
+            });
+          } catch (error) {
+            const message = String(error?.message ?? error ?? '');
+
+            if (!message.startsWith('authoritative audit artifact absent ')) {
+              throw error;
+            }
+
+            preloadedAuditResult = null;
+          }
+        }
+
+        if (
+          shouldRearmFailedAuditWorkflow({
+            runConclusion: auditRun.conclusion,
+            runHeadSha: auditRun.head_sha,
+            currentControllerSha,
+            semanticResultConsumable: Boolean(preloadedAuditResult)
+          })
+        ) {
+          const previousAuditRunId = auditRun.id;
+          const previousControllerSha = String(
+            auditRun.head_sha ?? ''
+          ).trim().toLowerCase();
+
+          const auditDispatchNonce =
+            createDispatchNonce();
+
+          await persist({
+            nextAction: 'dispatch-audit',
+            auditRunId: null,
+            auditDispatchNonce,
+            auditWorkflowRecovery: {
+              schemaVersion: 1,
+              reason:
+                'failed-audit-from-older-control-plane',
+              previousAuditRunId,
+              previousControllerSha,
+              currentControllerSha,
+              materialHeadSha
+            }
+          });
+
+          // This is an infrastructure/control-plane recovery, not a new
+          // semantic audit attempt and not a product remediation.
+          auditRun =
+            await dispatchCurrentAudit(
+              auditDispatchNonce
+            );
+
+          await persist({
+            nextAction: 'observe-audit',
+            auditRunId: auditRun.id,
+            auditDispatchNonce,
+            auditWorkflowRecovery: {
+              schemaVersion: 1,
+              reason:
+                'failed-audit-from-older-control-plane',
+              previousAuditRunId,
+              previousControllerSha,
+              currentControllerSha,
+              materialHeadSha,
+              replacementAuditRunId:
+                auditRun.id
+            }
+          });
+
+          auditRun = await waitWorkflowRun(
+            orchestratorRepository,
+            auditRun.id,
+            actionsToken
+          );
+        }
       } else if (state.auditAttempts > 0 && controller.auditDispatchNonce) {
         state = markExistingAuditInFlight(state);
 
@@ -1868,7 +2043,10 @@ export async function main() {
           })
         });
       }
-      if (auditRun.conclusion !== 'success') {
+      if (
+        auditRun.conclusion !== 'success' &&
+        !preloadedAuditResult
+      ) {
         const terminalReason =
           `independent-audit-workflow-${auditRun.conclusion ?? 'failed'}`;
 
@@ -1927,7 +2105,19 @@ export async function main() {
         );
       }
       const sourceRun = latestSourceRun ?? await sourceWorkflowRunForHead({ repository: targetRepository, sha: materialHeadSha, workflowName: targetPolicy.ciWorkflowName, token: targetReadToken });
-      const result = await auditResultFromArtifact({ orchestratorRepository, orchestratorRef, targetRepository, issueNumber, prNumber: resumePr, candidateSha: materialHeadSha, auditRun, sourceWorkflowRunId: sourceRun.id, token: actionsToken });
+      const result =
+        preloadedAuditResult ??
+        await auditResultFromArtifact({
+          orchestratorRepository,
+          orchestratorRef,
+          targetRepository,
+          issueNumber,
+          prNumber: resumePr,
+          candidateSha: materialHeadSha,
+          auditRun,
+          sourceWorkflowRunId: sourceRun.id,
+          token: actionsToken
+        });
       observability = recordControllerProviderObservation(observability, {
         runId: auditRun.id,
         stage: 'audit',
