@@ -322,14 +322,14 @@ test('critical Codex context guard preserves the canonical 80-turn budget', asyn
   );
   const wrapperSource = await readFile(wrapper, 'utf8');
 
-  assert.match(
-    workerSource,
-    /max-turns:\\s*\\$\\{\\{\\s*vars\\.DELIVERY_CRITICAL_MAX_AI_TURNS\\s*\\|\\|\\s*'80'\\s*\\}\\}/
+  assert.ok(
+    workerSource.includes("max-turns: ${{ vars.DELIVERY_CRITICAL_MAX_AI_TURNS || '80' }}")
   );
-  assert.doesNotMatch(workerSource, /< 25|\\|\\| 24/);
+  assert.equal(workerSource.includes('< 25'), false);
+  assert.equal(workerSource.includes('|| 24'), false);
 
-  assert.match(wrapperSource, /CODEX_TOOL_OUTPUT_TOKEN_LIMIT="\\$\\{DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-2048\\}"/);
-  assert.match(wrapperSource, /CODEX_AUTO_COMPACT_TOKEN_LIMIT="\\$\\{DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-48000\\}"/);
-  assert.match(wrapperSource, /tool_output_token_limit=\\$\\{CODEX_TOOL_OUTPUT_TOKEN_LIMIT\\}/);
-  assert.match(wrapperSource, /model_auto_compact_token_limit=\\$\\{CODEX_AUTO_COMPACT_TOKEN_LIMIT\\}/);
+  assert.ok(wrapperSource.includes('CODEX_TOOL_OUTPUT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-2048}"'));
+  assert.ok(wrapperSource.includes('CODEX_AUTO_COMPACT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-48000}"'));
+  assert.ok(wrapperSource.includes('tool_output_token_limit=${CODEX_TOOL_OUTPUT_TOKEN_LIMIT}'));
+  assert.ok(wrapperSource.includes('model_auto_compact_token_limit=${CODEX_AUTO_COMPACT_TOKEN_LIMIT}'));
 });
