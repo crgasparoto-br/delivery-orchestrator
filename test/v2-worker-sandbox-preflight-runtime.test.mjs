@@ -371,12 +371,12 @@ test('critical Codex context controls preserve 80 turns without treating compact
   );
   assert.match(
     workerSource,
-    /GH_AW_CODEX_CONTEXT_REBUILD_CIRCUIT_BREAKER:\\s*"true"/
+    /GH_AW_CODEX_CONTEXT_REBUILD_CIRCUIT_BREAKER:\s*"true"/
   );
-  assert.match(workerSource, /GH_AW_CODEX_MAX_REBUILD_FACTOR:\\s*"35"/);
+  assert.match(workerSource, /GH_AW_CODEX_MAX_REBUILD_FACTOR:\s*"35"/);
   assert.match(
     workerSource,
-    /GH_AW_CODEX_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS:\\s*"1000000"/
+    /GH_AW_CODEX_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS:\s*"1000000"/
   );
 
   assert.ok(wrapperSource.includes('CODEX_TOOL_OUTPUT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-2048}"'));
