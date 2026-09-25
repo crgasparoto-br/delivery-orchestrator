@@ -114,6 +114,7 @@ policy_path=""
 policy_bash_env=""
 tool_output_token_limit=""
 auto_compact_token_limit=""
+auto_compact_token_limit_scope=""
 previous=""
 
 for arg in "$@"; do
@@ -134,6 +135,9 @@ for arg in "$@"; do
       model_auto_compact_token_limit=*)
         auto_compact_token_limit=\${arg#model_auto_compact_token_limit=}
         ;;
+      model_auto_compact_token_limit_scope=*)
+        auto_compact_token_limit_scope=\${arg#model_auto_compact_token_limit_scope=}
+        ;;
     esac
   fi
   previous="$arg"
@@ -144,7 +148,8 @@ test -n "$policy_path"
 test -n "$policy_bash_env"
 
 test "$tool_output_token_limit" = "2048"
-test "$auto_compact_token_limit" = "48000"
+test "$auto_compact_token_limit" = "10000"
+test "$auto_compact_token_limit_scope" = "total"
 
 # Os valores de shell_environment_policy chegam delimitados por aspas.
 policy_path=\${policy_path#\\\"}
@@ -253,17 +258,42 @@ stderr:
 ${nonLoginShell.stderr}`
     );
 
+    const wrapperEnv = {
+      ...process.env,
+      RUNNER_TEMP: runTemp,
+      GH_AW_SAFE_OUTPUTS: manifest,
+      DELIVERY_V2_TEST_LOGIN_HOME: loginHome,
+      DELIVERY_V2_TEST_CODEX_COMMAND_PATH: codexCommandPath,
+      PATH: `${fakeBin}:${mcpBin}:/usr/local/bin:/usr/bin:/bin`
+    };
+
     const result = spawnSync(wrapper, [], {
       encoding: 'utf8',
+      env: wrapperEnv
+    });
+
+    const zeroLikeOverride = spawnSync(wrapper, [], {
+      encoding: 'utf8',
       env: {
-        ...process.env,
-        RUNNER_TEMP: runTemp,
-        GH_AW_SAFE_OUTPUTS: manifest,
-        DELIVERY_V2_TEST_LOGIN_HOME: loginHome,
-        DELIVERY_V2_TEST_CODEX_COMMAND_PATH: codexCommandPath,
-        PATH: `${fakeBin}:/usr/local/bin:/usr/bin:/bin`
+        ...wrapperEnv,
+        DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT: '00'
       }
     });
+    assert.equal(zeroLikeOverride.status, 127);
+    assert.match(
+      zeroLikeOverride.stderr,
+      /must be a canonical positive integer, got: 00/
+    );
+
+    const oversizedOverride = spawnSync(wrapper, [], {
+      encoding: 'utf8',
+      env: {
+        ...wrapperEnv,
+        DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT: '10001'
+      }
+    });
+    assert.equal(oversizedOverride.status, 127);
+    assert.match(oversizedOverride.stderr, /must be <= 10000, got: 10001/);
 
     // A execucao acima aconteceu com codex-path 0555. Restaurar somente
     // para permitir a limpeza do diretorio temporario pelo harness.
@@ -329,7 +359,55 @@ test('critical Codex context guard preserves the canonical 80-turn budget', asyn
   assert.equal(workerSource.includes('|| 24'), false);
 
   assert.ok(wrapperSource.includes('CODEX_TOOL_OUTPUT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-2048}"'));
-  assert.ok(wrapperSource.includes('CODEX_AUTO_COMPACT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-48000}"'));
+  assert.ok(wrapperSource.includes('CODEX_AUTO_COMPACT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-10000}"'));
+  assert.ok(wrapperSource.includes('CODEX_AUTO_COMPACT_TOKEN_LIMIT_MAX=10000'));
+  assert.ok(wrapperSource.includes('GH_AW_CONTEXT_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS=1000000'));
+  assert.ok(wrapperSource.includes('DELIVERY_V2_CRITICAL_MAX_AI_TURNS=80'));
   assert.ok(wrapperSource.includes('tool_output_token_limit=${CODEX_TOOL_OUTPUT_TOKEN_LIMIT}'));
   assert.ok(wrapperSource.includes('model_auto_compact_token_limit=${CODEX_AUTO_COMPACT_TOKEN_LIMIT}'));
+  assert.ok(wrapperSource.includes('model_auto_compact_token_limit_scope=total'));
+});
+
+function evaluateContextRebuildCircuitBreaker(
+  inputTokens,
+  {
+    maxRebuildFactor = 25,
+    minCumulativeInputTokens = 1_000_000
+  } = {}
+) {
+  const cumulativeInputTokens = inputTokens.reduce(
+    (total, value) => total + value,
+    0
+  );
+  const peakInputTokens = Math.max(...inputTokens);
+  const rebuildFactor = cumulativeInputTokens / peakInputTokens;
+
+  return {
+    cumulativeInputTokens,
+    peakInputTokens,
+    rebuildFactor,
+    terminate:
+      rebuildFactor >= maxRebuildFactor &&
+      cumulativeInputTokens >= minCumulativeInputTokens
+  };
+}
+
+test('critical Codex context guard keeps the 80-turn flat-context trajectory below the gh-aw breaker activation floor', () => {
+  const bounded = evaluateContextRebuildCircuitBreaker(
+    Array.from({ length: 80 }, () => 10_000)
+  );
+
+  assert.equal(bounded.cumulativeInputTokens, 800_000);
+  assert.equal(bounded.peakInputTokens, 10_000);
+  assert.equal(bounded.rebuildFactor, 80);
+  assert.equal(bounded.terminate, false);
+
+  const unsafe = evaluateContextRebuildCircuitBreaker(
+    Array.from({ length: 80 }, () => 12_500)
+  );
+
+  assert.equal(unsafe.cumulativeInputTokens, 1_000_000);
+  assert.equal(unsafe.peakInputTokens, 12_500);
+  assert.equal(unsafe.rebuildFactor, 80);
+  assert.equal(unsafe.terminate, true);
 });
