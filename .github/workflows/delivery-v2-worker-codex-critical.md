@@ -19,6 +19,9 @@ permissions:
   issues: read
 env:
   GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "${{ github.event.inputs.target_pr == '' && 'true' || 'false' }}"
+  GH_AW_CODEX_CONTEXT_REBUILD_CIRCUIT_BREAKER: "true"
+  GH_AW_CODEX_MAX_REBUILD_FACTOR: "35"
+  GH_AW_CODEX_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS: "1000000"
 runtimes:
   node:
     version: "22"

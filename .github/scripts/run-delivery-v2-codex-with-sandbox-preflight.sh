@@ -156,24 +156,17 @@ echo "codex_command_path=$CODEX_COMMAND_PATH"
 CODEX_SHELL_PATH="$PATH"
 CODEX_BASH_ENV="$BASH_ENV"
 
-# Bound the Codex conversation before gh-aw's context-rebuild circuit breaker
-# is reached. Issue #250 observed almost 2M cumulative input tokens and a
-# rebuild factor above the runtime threshold while the worker was still
-# progressing.
+# Keep Codex context churn bounded as an efficiency control. The gh-aw
+# context-rebuild circuit breaker is the authoritative safety boundary and is
+# configured by the worker on the actual WSRF metrics it evaluates.
 #
-# gh-aw trips only after both rebuild_factor >= 25 and cumulative input tokens
-# >= 1,000,000. GH_AW_MAX_TURNS is compiled by gh-aw from the effective
-# workflow max-turns value, including GitHub Variable overrides. Bind the
-# context envelope to that real turn budget instead of assuming the default.
-# At the canonical CRITICAL default (80 turns), a 10k full-context threshold
-# yields an 800k conservative envelope, leaving 20% headroom below activation.
+# model_auto_compact_token_limit is a compaction trigger, not a hard
+# per-invocation input-token ceiling. Do not derive cumulative-input safety
+# from this value or from GH_AW_MAX_TURNS.
 CODEX_TOOL_OUTPUT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-2048}"
 CODEX_AUTO_COMPACT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-10000}"
 CODEX_TOOL_OUTPUT_TOKEN_LIMIT_MAX=2048
 CODEX_AUTO_COMPACT_TOKEN_LIMIT_MAX=10000
-GH_AW_CONTEXT_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS=1000000
-CODEX_MAX_AI_TURNS="${GH_AW_MAX_TURNS:-80}"
-CODEX_MAX_AI_TURNS_MAX=999999
 
 require_canonical_positive_integer() {
   local name="$1"
@@ -200,11 +193,6 @@ require_bounded_positive_integer() {
 }
 
 require_bounded_positive_integer \
-  GH_AW_MAX_TURNS \
-  "$CODEX_MAX_AI_TURNS" \
-  "$CODEX_MAX_AI_TURNS_MAX"
-
-require_bounded_positive_integer \
   DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT \
   "$CODEX_TOOL_OUTPUT_TOKEN_LIMIT" \
   "$CODEX_TOOL_OUTPUT_TOKEN_LIMIT_MAX"
@@ -214,18 +202,10 @@ require_bounded_positive_integer \
   "$CODEX_AUTO_COMPACT_TOKEN_LIMIT" \
   "$CODEX_AUTO_COMPACT_TOKEN_LIMIT_MAX"
 
-CONSERVATIVE_CUMULATIVE_CONTEXT_TOKENS=$(( CODEX_MAX_AI_TURNS * CODEX_AUTO_COMPACT_TOKEN_LIMIT ))
-
-if [ "$CONSERVATIVE_CUMULATIVE_CONTEXT_TOKENS" -ge "$GH_AW_CONTEXT_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS" ]; then
-  fail "Codex context budget can reach the gh-aw cumulative rebuild threshold"
-fi
-
-echo "Delivery V2 Codex context budget:"
+echo "Delivery V2 Codex context controls:"
 echo "tool_output_token_limit=$CODEX_TOOL_OUTPUT_TOKEN_LIMIT"
 echo "model_auto_compact_token_limit=$CODEX_AUTO_COMPACT_TOKEN_LIMIT"
 echo "model_auto_compact_token_limit_scope=total"
-echo "max_ai_turns=$CODEX_MAX_AI_TURNS"
-echo "conservative_cumulative_context_tokens=$CONSERVATIVE_CUMULATIVE_CONTEXT_TOKENS"
 
 exec codex \
   -c allow_login_shell=false \

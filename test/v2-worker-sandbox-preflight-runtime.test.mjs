@@ -309,19 +309,6 @@ ${nonLoginShell.stderr}`
     assert.equal(oversizedOverride.status, 127);
     assert.match(oversizedOverride.stderr, /must be <= 10000, got: 10001/);
 
-    const unsafeTurnBudget = spawnSync(wrapper, [], {
-      encoding: 'utf8',
-      env: {
-        ...wrapperEnv,
-        GH_AW_MAX_TURNS: '100'
-      }
-    });
-    assert.equal(unsafeTurnBudget.status, 127);
-    assert.match(
-      unsafeTurnBudget.stderr,
-      /context budget can reach the gh-aw cumulative rebuild threshold/
-    );
-
     // A execucao acima aconteceu com codex-path 0555. Restaurar somente
     // para permitir a limpeza do diretorio temporario pelo harness.
     await chmod(codexCommandPath, 0o755);
@@ -372,7 +359,7 @@ for (const risk of ['fast', 'standard', 'critical']) {
   });
 }
 
-test('critical Codex context guard preserves the canonical 80-turn budget', async () => {
+test('critical Codex context controls preserve 80 turns without treating compaction threshold as breaker proof', async () => {
   const workerSource = await readFile(
     '.github/workflows/delivery-v2-worker-codex-critical.md',
     'utf8'
@@ -382,18 +369,31 @@ test('critical Codex context guard preserves the canonical 80-turn budget', asyn
   assert.ok(
     workerSource.includes("max-turns: ${{ vars.DELIVERY_CRITICAL_MAX_AI_TURNS || '80' }}")
   );
-  assert.equal(workerSource.includes('< 25'), false);
-  assert.equal(workerSource.includes('|| 24'), false);
+  assert.match(
+    workerSource,
+    /GH_AW_CODEX_CONTEXT_REBUILD_CIRCUIT_BREAKER:\\s*"true"/
+  );
+  assert.match(workerSource, /GH_AW_CODEX_MAX_REBUILD_FACTOR:\\s*"35"/);
+  assert.match(
+    workerSource,
+    /GH_AW_CODEX_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS:\\s*"1000000"/
+  );
 
   assert.ok(wrapperSource.includes('CODEX_TOOL_OUTPUT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-2048}"'));
   assert.ok(wrapperSource.includes('CODEX_AUTO_COMPACT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-10000}"'));
   assert.ok(wrapperSource.includes('CODEX_AUTO_COMPACT_TOKEN_LIMIT_MAX=10000'));
-  assert.ok(wrapperSource.includes('GH_AW_CONTEXT_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS=1000000'));
-  assert.ok(wrapperSource.includes('CODEX_MAX_AI_TURNS="${GH_AW_MAX_TURNS:-80}"'));
-  assert.ok(wrapperSource.includes('CODEX_MAX_AI_TURNS_MAX=999999'));
   assert.ok(wrapperSource.includes('tool_output_token_limit=${CODEX_TOOL_OUTPUT_TOKEN_LIMIT}'));
   assert.ok(wrapperSource.includes('model_auto_compact_token_limit=${CODEX_AUTO_COMPACT_TOKEN_LIMIT}'));
   assert.ok(wrapperSource.includes('model_auto_compact_token_limit_scope=total'));
+
+  // Regression for A-001: no safety claim may multiply a compaction trigger
+  // by a turn budget and call that cumulative input-token evidence.
+  assert.equal(wrapperSource.includes('CONSERVATIVE_CUMULATIVE_CONTEXT_TOKENS'), false);
+  assert.equal(wrapperSource.includes('CODEX_MAX_AI_TURNS'), false);
+  assert.equal(
+    wrapperSource.includes('CODEX_MAX_AI_TURNS * CODEX_AUTO_COMPACT_TOKEN_LIMIT'),
+    false
+  );
 });
 
 function evaluateContextRebuildCircuitBreaker(
@@ -420,31 +420,33 @@ function evaluateContextRebuildCircuitBreaker(
   };
 }
 
-test('critical Codex context guard keeps the 80-turn flat-context trajectory below the gh-aw breaker activation floor', () => {
-  const bounded = evaluateContextRebuildCircuitBreaker(
-    Array.from({ length: 80 }, () => 10_000)
+test('critical Codex breaker headroom accepts the observed 26x trajectory and still terminates at 35x', () => {
+  const issueLike = evaluateContextRebuildCircuitBreaker(
+    Array.from({ length: 26 }, () => 48_000),
+    { maxRebuildFactor: 35 }
   );
 
-  assert.equal(bounded.cumulativeInputTokens, 800_000);
-  assert.equal(bounded.peakInputTokens, 10_000);
-  assert.equal(bounded.rebuildFactor, 80);
-  assert.equal(bounded.terminate, false);
+  assert.equal(issueLike.cumulativeInputTokens, 1_248_000);
+  assert.equal(issueLike.peakInputTokens, 48_000);
+  assert.equal(issueLike.rebuildFactor, 26);
+  assert.equal(issueLike.terminate, false);
 
-  const issue250Like = evaluateContextRebuildCircuitBreaker(
-    Array.from({ length: 26 }, () => 48_000)
+  const thresholdReached = evaluateContextRebuildCircuitBreaker(
+    Array.from({ length: 35 }, () => 48_000),
+    { maxRebuildFactor: 35 }
   );
 
-  assert.equal(issue250Like.cumulativeInputTokens, 1_248_000);
-  assert.equal(issue250Like.peakInputTokens, 48_000);
-  assert.equal(issue250Like.rebuildFactor, 26);
-  assert.equal(issue250Like.terminate, true);
+  assert.equal(thresholdReached.cumulativeInputTokens, 1_680_000);
+  assert.equal(thresholdReached.peakInputTokens, 48_000);
+  assert.equal(thresholdReached.rebuildFactor, 35);
+  assert.equal(thresholdReached.terminate, true);
 
-  const unsafe = evaluateContextRebuildCircuitBreaker(
-    Array.from({ length: 80 }, () => 12_500)
+  const cumulativeFloorNotReached = evaluateContextRebuildCircuitBreaker(
+    Array.from({ length: 80 }, () => 10_000),
+    { maxRebuildFactor: 35 }
   );
 
-  assert.equal(unsafe.cumulativeInputTokens, 1_000_000);
-  assert.equal(unsafe.peakInputTokens, 12_500);
-  assert.equal(unsafe.rebuildFactor, 80);
-  assert.equal(unsafe.terminate, true);
+  assert.equal(cumulativeFloorNotReached.cumulativeInputTokens, 800_000);
+  assert.equal(cumulativeFloorNotReached.rebuildFactor, 80);
+  assert.equal(cumulativeFloorNotReached.terminate, false);
 });
