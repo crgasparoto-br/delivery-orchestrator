@@ -112,6 +112,9 @@ set -euo pipefail
 allow_non_login=false
 policy_path=""
 policy_bash_env=""
+tool_output_token_limit=""
+auto_compact_token_limit=""
+auto_compact_token_limit_scope=""
 previous=""
 
 for arg in "$@"; do
@@ -126,6 +129,15 @@ for arg in "$@"; do
       shell_environment_policy.set.BASH_ENV=*)
         policy_bash_env=\${arg#shell_environment_policy.set.BASH_ENV=}
         ;;
+      tool_output_token_limit=*)
+        tool_output_token_limit=\${arg#tool_output_token_limit=}
+        ;;
+      model_auto_compact_token_limit=*)
+        auto_compact_token_limit=\${arg#model_auto_compact_token_limit=}
+        ;;
+      model_auto_compact_token_limit_scope=*)
+        auto_compact_token_limit_scope=\${arg#model_auto_compact_token_limit_scope=}
+        ;;
     esac
   fi
   previous="$arg"
@@ -134,6 +146,10 @@ done
 test "$allow_non_login" = "true"
 test -n "$policy_path"
 test -n "$policy_bash_env"
+
+test "$tool_output_token_limit" = "2048"
+test "$auto_compact_token_limit" = "10000"
+test "$auto_compact_token_limit_scope" = "total"
 
 # Os valores de shell_environment_policy chegam delimitados por aspas.
 policy_path=\${policy_path#\\\"}
@@ -205,7 +221,8 @@ echo "9.0.0"
       HOME: loginHome,
       RUNNER_TEMP: runTemp,
       GH_AW_SAFE_OUTPUTS: manifest,
-      PATH: `${fakeBin}:${mcpBin}:/usr/local/bin:/usr/bin:/bin`
+      PATH: `${fakeBin}:${mcpBin}:/usr/local/bin:/usr/bin:/bin`,
+      GH_AW_MAX_TURNS: '80'
     };
 
     // Controle negativo discriminante: o login shell carrega
@@ -242,17 +259,55 @@ stderr:
 ${nonLoginShell.stderr}`
     );
 
+    const wrapperEnv = {
+      ...process.env,
+      RUNNER_TEMP: runTemp,
+      GH_AW_SAFE_OUTPUTS: manifest,
+      DELIVERY_V2_TEST_LOGIN_HOME: loginHome,
+      DELIVERY_V2_TEST_CODEX_COMMAND_PATH: codexCommandPath,
+      PATH: `${fakeBin}:${mcpBin}:/usr/local/bin:/usr/bin:/bin`
+    };
+
     const result = spawnSync(wrapper, [], {
       encoding: 'utf8',
+      env: wrapperEnv
+    });
+
+    const zeroLikeOverride = spawnSync(wrapper, [], {
+      encoding: 'utf8',
       env: {
-        ...process.env,
-        RUNNER_TEMP: runTemp,
-        GH_AW_SAFE_OUTPUTS: manifest,
-        DELIVERY_V2_TEST_LOGIN_HOME: loginHome,
-        DELIVERY_V2_TEST_CODEX_COMMAND_PATH: codexCommandPath,
-        PATH: `${fakeBin}:/usr/local/bin:/usr/bin:/bin`
+        ...wrapperEnv,
+        DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT: '00'
       }
     });
+    assert.equal(zeroLikeOverride.status, 127);
+    assert.match(
+      zeroLikeOverride.stderr,
+      /must be a canonical positive integer, got: 00/
+    );
+
+    const zeroLikeToolOutputOverride = spawnSync(wrapper, [], {
+      encoding: 'utf8',
+      env: {
+        ...wrapperEnv,
+        DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT: '00'
+      }
+    });
+    assert.equal(zeroLikeToolOutputOverride.status, 127);
+    assert.match(
+      zeroLikeToolOutputOverride.stderr,
+      /must be a canonical positive integer, got: 00/
+    );
+
+    const oversizedOverride = spawnSync(wrapper, [], {
+      encoding: 'utf8',
+      env: {
+        ...wrapperEnv,
+        DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT: '10001'
+      }
+    });
+    assert.equal(oversizedOverride.status, 127);
+    assert.match(oversizedOverride.stderr, /must be <= 10000, got: 10001/);
 
     // A execucao acima aconteceu com codex-path 0555. Restaurar somente
     // para permitir a limpeza do diretorio temporario pelo harness.
@@ -303,3 +358,95 @@ for (const risk of ['fast', 'standard', 'critical']) {
     assert.match(lock, /RUNNER_TOOL_CACHE/);
   });
 }
+
+test('critical Codex context controls preserve 80 turns without treating compaction threshold as breaker proof', async () => {
+  const workerSource = await readFile(
+    '.github/workflows/delivery-v2-worker-codex-critical.md',
+    'utf8'
+  );
+  const wrapperSource = await readFile(wrapper, 'utf8');
+
+  assert.ok(
+    workerSource.includes("max-turns: ${{ vars.DELIVERY_CRITICAL_MAX_AI_TURNS || '80' }}")
+  );
+  assert.match(
+    workerSource,
+    /GH_AW_CODEX_CONTEXT_REBUILD_CIRCUIT_BREAKER:\s*"true"/
+  );
+  assert.match(workerSource, /GH_AW_CODEX_MAX_REBUILD_FACTOR:\s*"35"/);
+  assert.match(
+    workerSource,
+    /GH_AW_CODEX_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS:\s*"1000000"/
+  );
+
+  assert.ok(wrapperSource.includes('CODEX_TOOL_OUTPUT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-2048}"'));
+  assert.ok(wrapperSource.includes('CODEX_AUTO_COMPACT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-10000}"'));
+  assert.ok(wrapperSource.includes('CODEX_AUTO_COMPACT_TOKEN_LIMIT_MAX=10000'));
+  assert.ok(wrapperSource.includes('tool_output_token_limit=${CODEX_TOOL_OUTPUT_TOKEN_LIMIT}'));
+  assert.ok(wrapperSource.includes('model_auto_compact_token_limit=${CODEX_AUTO_COMPACT_TOKEN_LIMIT}'));
+  assert.ok(wrapperSource.includes('model_auto_compact_token_limit_scope=total'));
+
+  // Regression for A-001: no safety claim may multiply a compaction trigger
+  // by a turn budget and call that cumulative input-token evidence.
+  assert.equal(wrapperSource.includes('CONSERVATIVE_CUMULATIVE_CONTEXT_TOKENS'), false);
+  assert.equal(wrapperSource.includes('CODEX_MAX_AI_TURNS'), false);
+  assert.equal(
+    wrapperSource.includes('CODEX_MAX_AI_TURNS * CODEX_AUTO_COMPACT_TOKEN_LIMIT'),
+    false
+  );
+});
+
+function evaluateContextRebuildCircuitBreaker(
+  inputTokens,
+  {
+    maxRebuildFactor = 25,
+    minCumulativeInputTokens = 1_000_000
+  } = {}
+) {
+  const cumulativeInputTokens = inputTokens.reduce(
+    (total, value) => total + value,
+    0
+  );
+  const peakInputTokens = Math.max(...inputTokens);
+  const rebuildFactor = cumulativeInputTokens / peakInputTokens;
+
+  return {
+    cumulativeInputTokens,
+    peakInputTokens,
+    rebuildFactor,
+    terminate:
+      rebuildFactor >= maxRebuildFactor &&
+      cumulativeInputTokens >= minCumulativeInputTokens
+  };
+}
+
+test('critical Codex breaker headroom accepts the observed 26x trajectory and still terminates at 35x', () => {
+  const issueLike = evaluateContextRebuildCircuitBreaker(
+    Array.from({ length: 26 }, () => 48_000),
+    { maxRebuildFactor: 35 }
+  );
+
+  assert.equal(issueLike.cumulativeInputTokens, 1_248_000);
+  assert.equal(issueLike.peakInputTokens, 48_000);
+  assert.equal(issueLike.rebuildFactor, 26);
+  assert.equal(issueLike.terminate, false);
+
+  const thresholdReached = evaluateContextRebuildCircuitBreaker(
+    Array.from({ length: 35 }, () => 48_000),
+    { maxRebuildFactor: 35 }
+  );
+
+  assert.equal(thresholdReached.cumulativeInputTokens, 1_680_000);
+  assert.equal(thresholdReached.peakInputTokens, 48_000);
+  assert.equal(thresholdReached.rebuildFactor, 35);
+  assert.equal(thresholdReached.terminate, true);
+
+  const cumulativeFloorNotReached = evaluateContextRebuildCircuitBreaker(
+    Array.from({ length: 80 }, () => 10_000),
+    { maxRebuildFactor: 35 }
+  );
+
+  assert.equal(cumulativeFloorNotReached.cumulativeInputTokens, 800_000);
+  assert.equal(cumulativeFloorNotReached.rebuildFactor, 80);
+  assert.equal(cumulativeFloorNotReached.terminate, false);
+});

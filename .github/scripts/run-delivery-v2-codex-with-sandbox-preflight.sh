@@ -156,8 +156,62 @@ echo "codex_command_path=$CODEX_COMMAND_PATH"
 CODEX_SHELL_PATH="$PATH"
 CODEX_BASH_ENV="$BASH_ENV"
 
+# Keep Codex context churn bounded as an efficiency control. The gh-aw
+# context-rebuild circuit breaker is the authoritative safety boundary and is
+# configured by the worker on the actual WSRF metrics it evaluates.
+#
+# model_auto_compact_token_limit is a compaction trigger, not a hard
+# per-invocation input-token ceiling. Do not derive cumulative-input safety
+# from this value or from GH_AW_MAX_TURNS.
+CODEX_TOOL_OUTPUT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-2048}"
+CODEX_AUTO_COMPACT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-10000}"
+CODEX_TOOL_OUTPUT_TOKEN_LIMIT_MAX=2048
+CODEX_AUTO_COMPACT_TOKEN_LIMIT_MAX=10000
+
+require_canonical_positive_integer() {
+  local name="$1"
+  local value="$2"
+
+  case "$value" in
+    ''|*[!0-9]*|0|0[0-9]*)
+      fail "$name must be a canonical positive integer, got: $value"
+      ;;
+  esac
+}
+
+require_bounded_positive_integer() {
+  local name="$1"
+  local value="$2"
+  local max="$3"
+
+  require_canonical_positive_integer "$name" "$value"
+
+  if [ "${#value}" -gt "${#max}" ] ||
+     { [ "${#value}" -eq "${#max}" ] && [[ "$value" > "$max" ]]; }; then
+    fail "$name must be <= $max, got: $value"
+  fi
+}
+
+require_bounded_positive_integer \
+  DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT \
+  "$CODEX_TOOL_OUTPUT_TOKEN_LIMIT" \
+  "$CODEX_TOOL_OUTPUT_TOKEN_LIMIT_MAX"
+
+require_bounded_positive_integer \
+  DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT \
+  "$CODEX_AUTO_COMPACT_TOKEN_LIMIT" \
+  "$CODEX_AUTO_COMPACT_TOKEN_LIMIT_MAX"
+
+echo "Delivery V2 Codex context controls:"
+echo "tool_output_token_limit=$CODEX_TOOL_OUTPUT_TOKEN_LIMIT"
+echo "model_auto_compact_token_limit=$CODEX_AUTO_COMPACT_TOKEN_LIMIT"
+echo "model_auto_compact_token_limit_scope=total"
+
 exec codex \
   -c allow_login_shell=false \
+  -c "tool_output_token_limit=${CODEX_TOOL_OUTPUT_TOKEN_LIMIT}" \
+  -c "model_auto_compact_token_limit=${CODEX_AUTO_COMPACT_TOKEN_LIMIT}" \
+  -c model_auto_compact_token_limit_scope=total \
   -c "shell_environment_policy.set.PATH=\"${CODEX_SHELL_PATH}\"" \
   -c "shell_environment_policy.set.BASH_ENV=\"${CODEX_BASH_ENV}\"" \
   "$@"
