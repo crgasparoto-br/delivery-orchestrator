@@ -55,20 +55,9 @@ test('CRITICAL Codex worker keeps bounded context rebuild protection with explic
     /GH_AW_CODEX_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS:\s*"1000000"/
   );
 
-  const lock = await readFile(
-    '.github/workflows/delivery-v2-worker-codex-critical.lock.yml',
-    'utf8'
-  );
-
-  assert.match(
-    lock,
-    /GH_AW_CODEX_CONTEXT_REBUILD_CIRCUIT_BREAKER:/
-  );
-  assert.match(lock, /GH_AW_CODEX_MAX_REBUILD_FACTOR:/);
-  assert.match(
-    lock,
-    /GH_AW_CODEX_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS:/
-  );
+  // The generated critical lock is verified later in Delivery V2 CI by
+  // gh aw compile --strict followed by git diff --exit-code. Keeping this
+  // test source-only lets that canonical generator run when frontmatter changes.
 });
 
 test('compiled STANDARD Codex worker provisions AWF for threat detection', async () => {
