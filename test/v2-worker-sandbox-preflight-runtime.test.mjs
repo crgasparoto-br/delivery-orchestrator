@@ -315,53 +315,21 @@ for (const risk of ['fast', 'standard', 'critical']) {
   });
 }
 
-test('critical Codex worker bounds working-set rebuild factor below gh-aw circuit breaker', async () => {
+test('critical Codex context guard preserves the canonical 80-turn budget', async () => {
   const workerSource = await readFile(
     '.github/workflows/delivery-v2-worker-codex-critical.md',
     'utf8'
   );
+  const wrapperSource = await readFile(wrapper, 'utf8');
 
   assert.match(
     workerSource,
-    /max-turns:\s*\$\{\{.*DELIVERY_CRITICAL_MAX_AI_TURNS.*> 0.*< 25.*\|\| 24.*\}\}/
+    /max-turns:\\s*\\$\\{\\{\\s*vars\\.DELIVERY_CRITICAL_MAX_AI_TURNS\\s*\\|\\|\\s*'80'\\s*\\}\\}/
   );
+  assert.doesNotMatch(workerSource, /< 25|\\|\\| 24/);
 
-  const rebuildFactor = (inputTokens) => {
-    const cumulative = inputTokens.reduce((sum, value) => sum + value, 0);
-    const peak = Math.max(...inputTokens);
-
-    return {
-      cumulative,
-      peak,
-      factor: cumulative / peak
-    };
-  };
-
-  const failingTrajectory = rebuildFactor(
-    Array.from({ length: 26 }, () => 75166)
-  );
-
-  assert.equal(failingTrajectory.cumulative, 1954316);
-  assert.equal(failingTrajectory.factor, 26);
-  assert.ok(failingTrajectory.cumulative >= 1000000);
-  assert.ok(failingTrajectory.factor > 25);
-
-  const boundedTrajectory = rebuildFactor(
-    Array.from({ length: 24 }, () => 75166)
-  );
-
-  assert.ok(boundedTrajectory.cumulative >= 1000000);
-  assert.equal(boundedTrajectory.factor, 24);
-  assert.ok(boundedTrajectory.factor < 25);
-
-  const unevenTrajectory = rebuildFactor([
-    18000, 24000, 31000, 27000, 42000, 19000,
-    48000, 26000, 33000, 39000, 21000, 47000,
-    28000, 36000, 45000, 23000, 41000, 32000,
-    29000, 44000, 25000, 38000, 34000, 46000
-  ]);
-
-  assert.ok(unevenTrajectory.factor <= 24);
-  assert.ok(unevenTrajectory.factor < 25);
+  assert.match(wrapperSource, /CODEX_TOOL_OUTPUT_TOKEN_LIMIT="\\$\\{DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-2048\\}"/);
+  assert.match(wrapperSource, /CODEX_AUTO_COMPACT_TOKEN_LIMIT="\\$\\{DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-48000\\}"/);
+  assert.match(wrapperSource, /tool_output_token_limit=\\$\\{CODEX_TOOL_OUTPUT_TOKEN_LIMIT\\}/);
+  assert.match(wrapperSource, /model_auto_compact_token_limit=\\$\\{CODEX_AUTO_COMPACT_TOKEN_LIMIT\\}/);
 });
-
