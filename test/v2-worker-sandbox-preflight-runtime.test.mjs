@@ -221,7 +221,8 @@ echo "9.0.0"
       HOME: loginHome,
       RUNNER_TEMP: runTemp,
       GH_AW_SAFE_OUTPUTS: manifest,
-      PATH: `${fakeBin}:${mcpBin}:/usr/local/bin:/usr/bin:/bin`
+      PATH: `${fakeBin}:${mcpBin}:/usr/local/bin:/usr/bin:/bin`,
+      GH_AW_MAX_TURNS: '80'
     };
 
     // Controle negativo discriminante: o login shell carrega
@@ -285,6 +286,19 @@ ${nonLoginShell.stderr}`
       /must be a canonical positive integer, got: 00/
     );
 
+    const zeroLikeToolOutputOverride = spawnSync(wrapper, [], {
+      encoding: 'utf8',
+      env: {
+        ...wrapperEnv,
+        DELIVERY_V2_CODEX_TOOL_OUTPUT_TOKEN_LIMIT: '00'
+      }
+    });
+    assert.equal(zeroLikeToolOutputOverride.status, 127);
+    assert.match(
+      zeroLikeToolOutputOverride.stderr,
+      /must be a canonical positive integer, got: 00/
+    );
+
     const oversizedOverride = spawnSync(wrapper, [], {
       encoding: 'utf8',
       env: {
@@ -294,6 +308,19 @@ ${nonLoginShell.stderr}`
     });
     assert.equal(oversizedOverride.status, 127);
     assert.match(oversizedOverride.stderr, /must be <= 10000, got: 10001/);
+
+    const unsafeTurnBudget = spawnSync(wrapper, [], {
+      encoding: 'utf8',
+      env: {
+        ...wrapperEnv,
+        GH_AW_MAX_TURNS: '100'
+      }
+    });
+    assert.equal(unsafeTurnBudget.status, 127);
+    assert.match(
+      unsafeTurnBudget.stderr,
+      /context budget can reach the gh-aw cumulative rebuild threshold/
+    );
 
     // A execucao acima aconteceu com codex-path 0555. Restaurar somente
     // para permitir a limpeza do diretorio temporario pelo harness.
@@ -362,7 +389,8 @@ test('critical Codex context guard preserves the canonical 80-turn budget', asyn
   assert.ok(wrapperSource.includes('CODEX_AUTO_COMPACT_TOKEN_LIMIT="${DELIVERY_V2_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-10000}"'));
   assert.ok(wrapperSource.includes('CODEX_AUTO_COMPACT_TOKEN_LIMIT_MAX=10000'));
   assert.ok(wrapperSource.includes('GH_AW_CONTEXT_REBUILD_MIN_CUMULATIVE_INPUT_TOKENS=1000000'));
-  assert.ok(wrapperSource.includes('DELIVERY_V2_CRITICAL_MAX_AI_TURNS=80'));
+  assert.ok(wrapperSource.includes('CODEX_MAX_AI_TURNS="${GH_AW_MAX_TURNS:-80}"'));
+  assert.ok(wrapperSource.includes('CODEX_MAX_AI_TURNS_MAX=999999'));
   assert.ok(wrapperSource.includes('tool_output_token_limit=${CODEX_TOOL_OUTPUT_TOKEN_LIMIT}'));
   assert.ok(wrapperSource.includes('model_auto_compact_token_limit=${CODEX_AUTO_COMPACT_TOKEN_LIMIT}'));
   assert.ok(wrapperSource.includes('model_auto_compact_token_limit_scope=total'));
@@ -401,6 +429,15 @@ test('critical Codex context guard keeps the 80-turn flat-context trajectory bel
   assert.equal(bounded.peakInputTokens, 10_000);
   assert.equal(bounded.rebuildFactor, 80);
   assert.equal(bounded.terminate, false);
+
+  const issue250Like = evaluateContextRebuildCircuitBreaker(
+    Array.from({ length: 26 }, () => 48_000)
+  );
+
+  assert.equal(issue250Like.cumulativeInputTokens, 1_248_000);
+  assert.equal(issue250Like.peakInputTokens, 48_000);
+  assert.equal(issue250Like.rebuildFactor, 26);
+  assert.equal(issue250Like.terminate, true);
 
   const unsafe = evaluateContextRebuildCircuitBreaker(
     Array.from({ length: 80 }, () => 12_500)
