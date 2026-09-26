@@ -405,42 +405,78 @@ test(
 );
 
 test(
-  'Claude audit does not retry invalid model JSON',
+  'Claude audit retries truncated JSON and expands the output budget',
   async () => {
     const workingDirectory = await createBundle();
+    const observedMaxTokens = [];
     let calls = 0;
 
     try {
-      await assert.rejects(
-        () =>
-          runAnthropic(
-            auditPayload(workingDirectory),
-            {
-              retryDelayMs: 0,
-              fetchFn: async () => {
-                calls += 1;
+      const result = await runAnthropic(
+        auditPayload(workingDirectory),
+        {
+          retryDelayMs: 0,
+          fetchFn: async (_url, options) => {
+            calls += 1;
+            observedMaxTokens.push(
+              JSON.parse(options.body).max_tokens
+            );
 
-                return anthropicResponse(200, {
-                  id: 'msg-invalid',
-                  stop_reason: 'end_turn',
-                  content: [
-                    {
-                      type: 'text',
-                      text: 'not-json'
-                    }
-                  ],
-                  usage: {
-                    input_tokens: 5,
-                    output_tokens: 1
+            if (calls === 1) {
+              return anthropicResponse(200, {
+                id: 'msg-truncated-json',
+                stop_reason: 'max_tokens',
+                content: [
+                  {
+                    type: 'text',
+                    text: '{"decision":"approved","findings":[{"id":"partial"'
                   }
-                });
-              }
+                ],
+                usage: {
+                  input_tokens: 5,
+                  output_tokens: 16000
+                }
+              });
             }
-          ),
-        /returned invalid JSON/
+
+            return anthropicResponse(200, {
+              id: 'msg-valid-after-truncation',
+              stop_reason: 'end_turn',
+              content: [
+                {
+                  type: 'text',
+                  text: '{"decision":"approved","findings":[]}'
+                }
+              ],
+              usage: {
+                input_tokens: 6,
+                output_tokens: 4
+              }
+            });
+          }
+        }
       );
 
-      assert.equal(calls, 1);
+      assert.equal(calls, 2);
+      assert.deepEqual(
+        observedMaxTokens,
+        [16000, 64000]
+      );
+      assert.equal(result.providerCalls, 2);
+      assert.deepEqual(
+        result.usage,
+        {
+          inputTokens: 11,
+          outputTokens: 16004
+        }
+      );
+      assert.deepEqual(
+        result.result,
+        {
+          decision: 'approved',
+          findings: []
+        }
+      );
     } finally {
       await rm(
         workingDirectory,
@@ -631,7 +667,7 @@ test(
 );
 
 test(
-  'Claude audit preserves provider telemetry for invalid model JSON without retry',
+  'Claude audit fails closed after two invalid JSON responses with telemetry',
   async () => {
     const workingDirectory = await createBundle();
     let calls = 0;
@@ -648,7 +684,7 @@ test(
               calls += 1;
 
               return anthropicResponse(200, {
-                id: 'msg-invalid-telemetry',
+                id: `msg-invalid-telemetry-${calls}`,
                 stop_reason: 'end_turn',
                 content: [
                   {
@@ -678,18 +714,18 @@ test(
       );
       assert.equal(
         failure?.providerCalls,
-        1
+        2
       );
       assert.deepEqual(
         failure?.modelUsage,
         {
-          inputTokens: 5,
-          outputTokens: 1
+          inputTokens: 10,
+          outputTokens: 2
         }
       );
       assert.equal(
         calls,
-        1
+        2
       );
     } finally {
       await rm(
