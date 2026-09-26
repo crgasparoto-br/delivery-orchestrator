@@ -150,6 +150,8 @@ async function runCodex(payload) {
 }
 
 const ANTHROPIC_MAX_ATTEMPTS = 2;
+const ANTHROPIC_TRANSPORT_MAX_ATTEMPTS = 3;
+const ANTHROPIC_TRANSPORT_MAX_RETRY_DELAY_MS = 4000;
 const ANTHROPIC_INITIAL_MAX_TOKENS = 16000;
 const ANTHROPIC_MAX_TOKENS_RETRY = 64000;
 const ANTHROPIC_RETRYABLE_STATUS = new Set([
@@ -180,6 +182,14 @@ async function waitForAnthropicRetry(delayMs) {
   await new Promise(resolve => setTimeout(resolve, delayMs));
 }
 
+function anthropicTransportRetryDelay(retryDelayMs, transportAttempt) {
+  if (!Number.isFinite(retryDelayMs) || retryDelayMs <= 0) return 0;
+  return Math.min(
+    retryDelayMs * (2 ** Math.max(0, transportAttempt - 1)),
+    ANTHROPIC_TRANSPORT_MAX_RETRY_DELAY_MS
+  );
+}
+
 export async function runAnthropic(
   payload,
   {
@@ -204,51 +214,63 @@ export async function runAnthropic(
     attempt <= ANTHROPIC_MAX_ATTEMPTS;
     attempt += 1
   ) {
-    providerCalls += 1;
-
     let response;
 
-    try {
-      response = await fetchFn(
-        'https://api.anthropic.com/v1/messages',
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': payload.anthropicApiKey,
-            'anthropic-version': '2023-06-01'
-          },
-          body: JSON.stringify({
-            model: payload.model,
-            max_tokens: maxTokens,
-            messages: [
-              {
-                role: 'user',
-                content: prompt
-              }
-            ]
-          })
+    for (
+      let transportAttempt = 1;
+      transportAttempt <= ANTHROPIC_TRANSPORT_MAX_ATTEMPTS;
+      transportAttempt += 1
+    ) {
+      providerCalls += 1;
+
+      try {
+        response = await fetchFn(
+          'https://api.anthropic.com/v1/messages',
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': payload.anthropicApiKey,
+              'anthropic-version': '2023-06-01'
+            },
+            body: JSON.stringify({
+              model: payload.model,
+              max_tokens: maxTokens,
+              messages: [
+                {
+                  role: 'user',
+                  content: prompt
+                }
+              ]
+            })
+          }
+        );
+        break;
+      } catch (cause) {
+        if (transportAttempt < ANTHROPIC_TRANSPORT_MAX_ATTEMPTS) {
+          await waitForAnthropicRetry(
+            anthropicTransportRetryDelay(
+              retryDelayMs,
+              transportAttempt
+            )
+          );
+          continue;
         }
-      );
-    } catch (cause) {
-      if (attempt < ANTHROPIC_MAX_ATTEMPTS) {
-        await waitForAnthropicRetry(retryDelayMs);
-        continue;
+
+        const causeMessage =
+          String(cause?.message ?? cause ?? 'unknown network error');
+
+        const error = new Error(
+          `Anthropic audit transport failed after ${providerCalls} call(s): ${causeMessage}`,
+          { cause }
+        );
+
+        error.providerCalls = providerCalls;
+        error.modelUsage = aggregateUsage;
+        error.auditProviderFailure = true;
+
+        throw error;
       }
-
-      const causeMessage =
-        String(cause?.message ?? cause ?? 'unknown network error');
-
-      const error = new Error(
-        `Anthropic audit transport failed after ${providerCalls} call(s): ${causeMessage}`,
-        { cause }
-      );
-
-      error.providerCalls = providerCalls;
-      error.modelUsage = aggregateUsage;
-      error.auditProviderFailure = true;
-
-      throw error;
     }
 
     const body = await response.text();
