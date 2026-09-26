@@ -66,7 +66,7 @@ Runtime limits for FAST, STANDARD and CRITICAL may be overridden through reposit
 
 Pre-material bootstrap recovery is narrow and owned by the deterministic controller, not by an AI worker. For eligible `pre-material` infrastructure/unknown failures, exactly one recovery dispatch may be granted after a verified change of the control-plane SHA. Separately, a `reserved-initial-attempt` whose correlated worker completed successfully but produced no managed PR may be re-armed after a verified control-plane SHA change; reservation restores the same implementation-attempt number instead of consuming another slot. Same-SHA re-entry remains fail-closed, recovery provenance is persisted, and the configured implementation ceiling is not increased.
 
-Requested risk can promote but never downgrade observed risk. Provider selection is explicit; provider failure never silently substitutes another provider.
+Requested risk can promote but never downgrade observed risk. Provider selection is explicit; provider failure never silently substitutes another provider. Anthropic audit transport exceptions use a bounded three-call exponential backoff inside each semantic attempt, while semantic response retries remain capped separately; exhausted transport still fails closed with provider-call telemetry.
 
 ## Bounded remediation
 
