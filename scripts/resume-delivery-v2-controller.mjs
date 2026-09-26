@@ -889,8 +889,8 @@ export function initializeResumeObservability(controller = {}, { startedAtMs = D
   });
 }
 
-export async function persistLegacyRefreeze({ envelope, pullRequest, comments, checkoutHeadSha, plan, classifier, runs, checks, targetPolicy, controller, observePullRequest, persist }) {
-  let adoption = refreezeLegacyAdoption({ record: envelope.adoption, pullRequest, comments, checkoutHeadSha, plan, classifier, runs, checks, targetPolicy });
+export async function persistLegacyRefreeze({ envelope, pullRequest, comments, checkoutHeadSha, plan, classifier, runs, checks, targetPolicy, controller, controllerContinuation = null, observePullRequest, persist }) {
+  let adoption = refreezeLegacyAdoption({ record: envelope.adoption, pullRequest, comments, checkoutHeadSha, plan, classifier, runs, checks, targetPolicy, controllerContinuation });
   // Observe again after evidence collection. No old green check survives a race.
   adoption = reconcileLegacyAdoption(adoption, await observePullRequest());
   await persist(legacyAdoptionComment(adoption, controller));
@@ -1124,6 +1124,21 @@ export async function main() {
       checks: checkRuns,
       targetPolicy,
       controller: adoptionController,
+      controllerContinuation: {
+        repository: targetRepository,
+        issueNumber,
+        pullRequestNumber: resumePr,
+        baseRef: pullRequest.base.ref,
+        baseSha: pullRequest.base.sha,
+        headRef: pullRequest.head.ref,
+        materialHeadSha,
+        reason: 'handoff-stale',
+        recovery_scope: 'post-write-refreeze',
+        requires_refreeze: true,
+        next_phase: 'finalize-after-ci',
+        reuseExactHeadCi: true,
+        evidenceRef: `https://github.com/${orchestratorRepository}/actions/runs/${controllerRunId}`
+      },
       observePullRequest: () => fetchPullRequest(
         targetRepository,
         resumePr,
