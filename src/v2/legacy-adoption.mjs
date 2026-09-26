@@ -182,13 +182,48 @@ export function reconcileLegacyAdoption(record, pullRequest) {
   };
 }
 
-export function refreezeLegacyAdoption({ record, pullRequest, comments, checkoutHeadSha, plan, classifier, runs, checks, targetPolicy }) {
+export function refreezeLegacyAdoption({ record, pullRequest, comments, checkoutHeadSha, plan, classifier, runs, checks, targetPolicy, controllerContinuation = null }) {
   let next = reconcileLegacyAdoption(record, pullRequest);
   if (checkoutHeadSha !== next.materialHeadSha) return { ...next, phase: 'blocked', workflowChecks: [], classifier: null, effectiveRisk: null, blockers: ['checkout-head-drift'], nextAction: 'checkout-current-pr' };
   let continuation;
   try { continuation = parseAuditContinuation(comments, next); }
   catch (error) {
     return { ...next, phase: 'blocked', workflowChecks: [], classifier: null, effectiveRisk: null, continuation: null, blockers: [error.message], nextAction: 'collect-adoption-evidence' };
+  }
+  if (!continuation && controllerContinuation !== null) {
+    try {
+      if (!controllerContinuation || Array.isArray(controllerContinuation) || typeof controllerContinuation !== 'object') {
+        throw new Error('controller continuation must be an object');
+      }
+      for (const key of IDENTITY_KEYS) {
+        if (controllerContinuation[key] !== next[key]) {
+          throw new Error(`controller continuation stale or mismatched ${key}`);
+        }
+      }
+      if (
+        controllerContinuation.reason !== 'handoff-stale' ||
+        controllerContinuation.recovery_scope !== 'post-write-refreeze' ||
+        controllerContinuation.requires_refreeze !== true ||
+        controllerContinuation.next_phase !== 'finalize-after-ci' ||
+        controllerContinuation.reuseExactHeadCi !== true
+      ) {
+        throw new Error('unsupported controller continuation');
+      }
+      if (!String(controllerContinuation.evidenceRef ?? '').trim()) {
+        throw new Error('controller continuation evidenceRef required');
+      }
+      continuation = {
+        ...Object.fromEntries(IDENTITY_KEYS.map((key) => [key, controllerContinuation[key]])),
+        reason: controllerContinuation.reason,
+        recovery_scope: controllerContinuation.recovery_scope,
+        requires_refreeze: true,
+        next_phase: controllerContinuation.next_phase,
+        reuseExactHeadCi: true,
+        evidenceRef: String(controllerContinuation.evidenceRef).trim()
+      };
+    } catch (error) {
+      return { ...next, phase: 'blocked', workflowChecks: [], classifier: null, effectiveRisk: null, continuation: null, blockers: [error.message], nextAction: 'collect-adoption-evidence' };
+    }
   }
   if (!continuation) return { ...next, phase: 'blocked', workflowChecks: [], blockers: ['audit-continuation-required'], nextAction: 'collect-adoption-evidence' };
   if (plan?.architecture !== 'github-native-v2' || plan.repository !== next.repository || plan.issueNumber !== next.issueNumber) throw new Error('canonical adoption plan identity mismatch');

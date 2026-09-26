@@ -192,6 +192,55 @@ test('H/I: CI reuse requires exact SHA, trusted run/check correlation, latest ru
   assert.throws(() => refreezeLegacyAdoption({ ...data, checks: [...data.checks, data.checks[0]] }), /ambiguous required check/);
 });
 
+test('issue 254: trusted controller dispatch can continue legacy adoption without a manual continuation comment', async () => {
+  const data = evidence();
+  data.comments = [];
+  const controllerContinuation = {
+    repository,
+    issueNumber: 613,
+    pullRequestNumber: 660,
+    baseRef: data.record.baseRef,
+    baseSha: data.record.baseSha,
+    headRef: data.record.headRef,
+    materialHeadSha: data.record.materialHeadSha,
+    reason: 'handoff-stale',
+    recovery_scope: 'post-write-refreeze',
+    requires_refreeze: true,
+    next_phase: 'finalize-after-ci',
+    reuseExactHeadCi: true,
+    evidenceRef: `https://github.com/${controller.controllerRepository}/actions/runs/${controller.controllerRunId}`
+  };
+
+  const result = await persistLegacyRefreeze({
+    ...data,
+    envelope: { adoption: data.record },
+    controller,
+    controllerContinuation,
+    observePullRequest: async () => pr,
+    persist: async () => {}
+  });
+
+  assert.equal(result.phase, 'post-write-refreeze');
+  assert.equal(result.adoption.continuation.evidenceRef, controllerContinuation.evidenceRef);
+  assert.equal(result.adoption.nextAction, 'dispatch-legacy-adoption-audit');
+
+  const blocked = refreezeLegacyAdoption({
+    ...data,
+    runs: [],
+    checks: [],
+    controllerContinuation
+  });
+  assert.equal(blocked.phase, 'blocked');
+  assert.equal(blocked.nextAction, 'observe-ci');
+
+  const stale = refreezeLegacyAdoption({
+    ...data,
+    controllerContinuation: { ...controllerContinuation, materialHeadSha: 'f'.repeat(40) }
+  });
+  assert.equal(stale.phase, 'blocked');
+  assert.match(stale.blockers[0], /controller continuation stale or mismatched materialHeadSha/);
+});
+
 test('continuation must be one explicitly trusted, exact-identity JSON record, never arbitrary audit prose or approval', () => {
   const data = evidence();
   assert.equal(parseAuditContinuation([], data.record), null);

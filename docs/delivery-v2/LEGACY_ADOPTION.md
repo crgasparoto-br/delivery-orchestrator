@@ -13,7 +13,15 @@ with a managed PR retains the existing bootstrap-recovery route.
 
 ## Trusted continuation input
 
-For `post-write-refreeze`, the authorized owner publishes exactly one PR comment
+An explicit Delivery V2 dispatch that adopts a trusted legacy PR may supply the
+continuation request directly from the trusted controller run. That request is
+bound to the live repository, issue, PR, base/head refs and SHAs and carries the
+controller-run URL as evidence. It authorizes only `post-write-refreeze` with
+exact-head CI reuse; it is not independent audit approval. Missing or non-green
+exact-head CI still blocks in `observe-ci`, and identity drift invalidates the
+request before downstream evidence is reused.
+
+For backwards compatibility, the authorized owner may still publish exactly one PR comment
 beginning with `<!-- delivery-v2-audit-continuation -->` followed by fenced JSON.
 The author login **and** GitHub association must satisfy the existing trust policy.
 All identity fields must match live GitHub facts. This structured request proves
