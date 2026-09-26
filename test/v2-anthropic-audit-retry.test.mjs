@@ -282,6 +282,77 @@ test(
 );
 
 test(
+  'Claude audit applies progressive capped backoff across transient fetch failures',
+  async () => {
+    const workingDirectory = await createBundle();
+    const observedRetryDelays = [];
+    let calls = 0;
+
+    try {
+      const result = await runAnthropic(
+        auditPayload(workingDirectory),
+        {
+          retryDelayMs: 3000,
+          waitFn: async delayMs => {
+            observedRetryDelays.push(delayMs);
+          },
+          fetchFn: async () => {
+            calls += 1;
+
+            if (calls <= 2) {
+              throw new TypeError('fetch failed');
+            }
+
+            return anthropicResponse(200, {
+              id: 'msg-success-after-two-fetch-failures',
+              stop_reason: 'end_turn',
+              content: [
+                {
+                  type: 'text',
+                  text: '{"decision":"approved"}'
+                }
+              ],
+              usage: {
+                input_tokens: 9,
+                output_tokens: 2
+              }
+            });
+          }
+        }
+      );
+
+      assert.equal(calls, 3);
+      assert.deepEqual(
+        observedRetryDelays,
+        [3000, 4000]
+      );
+      assert.equal(result.providerCalls, 3);
+      assert.deepEqual(
+        result.usage,
+        {
+          inputTokens: 9,
+          outputTokens: 2
+        }
+      );
+      assert.deepEqual(
+        result.result,
+        {
+          decision: 'approved'
+        }
+      );
+    } finally {
+      await rm(
+        workingDirectory,
+        {
+          recursive: true,
+          force: true
+        }
+      );
+    }
+  }
+);
+
+test(
   'Claude audit retries one transient HTTP failure',
   async () => {
     const workingDirectory = await createBundle();
@@ -569,11 +640,11 @@ test(
         failure = error;
       }
 
-      assert.equal(calls, 2);
+      assert.equal(calls, 3);
 
       assert.match(
         failure?.message ?? '',
-        /Anthropic audit transport failed after 2 call\(s\): fetch failed/
+        /Anthropic audit transport failed after 3 call\(s\): fetch failed/
       );
 
       assert.equal(
@@ -583,7 +654,7 @@ test(
 
       assert.equal(
         failure?.providerCalls,
-        2
+        3
       );
 
       assert.equal(
