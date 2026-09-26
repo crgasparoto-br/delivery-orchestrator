@@ -194,7 +194,8 @@ export async function runAnthropic(
   payload,
   {
     fetchFn = fetch,
-    retryDelayMs = 250
+    retryDelayMs = 250,
+    waitFn = waitForAnthropicRetry
   } = {}
 ) {
   if (!payload.anthropicApiKey) {
@@ -248,7 +249,7 @@ export async function runAnthropic(
         break;
       } catch (cause) {
         if (transportAttempt < ANTHROPIC_TRANSPORT_MAX_ATTEMPTS) {
-          await waitForAnthropicRetry(
+          await waitFn(
             anthropicTransportRetryDelay(
               retryDelayMs,
               transportAttempt
@@ -283,7 +284,7 @@ export async function runAnthropic(
         retryable &&
         attempt < ANTHROPIC_MAX_ATTEMPTS
       ) {
-        await waitForAnthropicRetry(retryDelayMs);
+        await waitFn(retryDelayMs);
         continue;
       }
 
@@ -332,7 +333,7 @@ export async function runAnthropic(
           maxTokens = ANTHROPIC_MAX_TOKENS_RETRY;
         }
 
-        await waitForAnthropicRetry(retryDelayMs);
+        await waitFn(retryDelayMs);
         continue;
       }
 
@@ -365,7 +366,7 @@ export async function runAnthropic(
           maxTokens = ANTHROPIC_MAX_TOKENS_RETRY;
         }
 
-        await waitForAnthropicRetry(retryDelayMs);
+        await waitFn(retryDelayMs);
         continue;
       }
 

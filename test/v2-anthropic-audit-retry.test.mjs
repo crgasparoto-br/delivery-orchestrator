@@ -70,13 +70,17 @@ test(
   'Claude audit retries one empty response and aggregates usage',
   async () => {
     const workingDirectory = await createBundle();
+    const observedRetryDelays = [];
     let calls = 0;
 
     try {
       const result = await runAnthropic(
         auditPayload(workingDirectory),
         {
-          retryDelayMs: 0,
+          retryDelayMs: 3000,
+          waitFn: async delayMs => {
+            observedRetryDelays.push(delayMs);
+          },
           fetchFn: async () => {
             calls += 1;
 
@@ -282,7 +286,7 @@ test(
 );
 
 test(
-  'Claude audit tolerates two transient fetch failures within one semantic attempt',
+  'Claude audit applies progressive capped backoff across transient fetch failures',
   async () => {
     const workingDirectory = await createBundle();
     let calls = 0;
@@ -318,6 +322,10 @@ test(
       );
 
       assert.equal(calls, 3);
+      assert.deepEqual(
+        observedRetryDelays,
+        [3000, 4000]
+      );
       assert.equal(result.providerCalls, 3);
       assert.deepEqual(
         result.usage,
