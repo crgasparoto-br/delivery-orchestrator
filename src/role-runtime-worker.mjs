@@ -335,6 +335,18 @@ export async function runAnthropic(
         payload.role
       );
     } catch (error) {
+      const stopReason =
+        String(message.stop_reason ?? 'unknown');
+
+      if (attempt < ANTHROPIC_MAX_ATTEMPTS) {
+        if (stopReason === 'max_tokens') {
+          maxTokens = ANTHROPIC_MAX_TOKENS_RETRY;
+        }
+
+        await waitForAnthropicRetry(retryDelayMs);
+        continue;
+      }
+
       error.providerCalls = providerCalls;
       error.modelUsage = aggregateUsage;
       error.auditProviderFailure = true;
