@@ -70,17 +70,13 @@ test(
   'Claude audit retries one empty response and aggregates usage',
   async () => {
     const workingDirectory = await createBundle();
-    const observedRetryDelays = [];
     let calls = 0;
 
     try {
       const result = await runAnthropic(
         auditPayload(workingDirectory),
         {
-          retryDelayMs: 3000,
-          waitFn: async delayMs => {
-            observedRetryDelays.push(delayMs);
-          },
+          retryDelayMs: 0,
           fetchFn: async () => {
             calls += 1;
 
@@ -289,13 +285,17 @@ test(
   'Claude audit applies progressive capped backoff across transient fetch failures',
   async () => {
     const workingDirectory = await createBundle();
+    const observedRetryDelays = [];
     let calls = 0;
 
     try {
       const result = await runAnthropic(
         auditPayload(workingDirectory),
         {
-          retryDelayMs: 0,
+          retryDelayMs: 3000,
+          waitFn: async delayMs => {
+            observedRetryDelays.push(delayMs);
+          },
           fetchFn: async () => {
             calls += 1;
 
