@@ -521,8 +521,14 @@ export async function publishReleaseStatus({ repository, sha, context, state, de
   return response.json();
 }
 
-export async function markPullRequestReadyForReview({ repository, pullRequest, token } = {}) {
-  requiredString(repository, 'repository');
+export async function markPullRequestReadyForReview({
+  repository,
+  pullRequest,
+  materialHeadSha,
+  baseSha,
+  token
+} = {}) {
+  const repo = requiredString(repository, 'repository');
   if (!pullRequest || Array.isArray(pullRequest) || typeof pullRequest !== 'object') {
     throw new Error('pullRequest is required');
   }
@@ -532,7 +538,32 @@ export async function markPullRequestReadyForReview({ repository, pullRequest, t
     return Object.freeze({ changed: false, pullRequestNumber, draft: false });
   }
 
-  const pullRequestId = requiredString(pullRequest.node_id, 'pullRequest.node_id');
+  const expectedHead = requiredSha(materialHeadSha, 'materialHeadSha');
+  const expectedBase = requiredSha(baseSha, 'baseSha');
+  const expectedPullRequestId = requiredString(pullRequest.node_id, 'pullRequest.node_id');
+  const currentPullRequest = await fetchJson(
+    `https://api.github.com/repos/${repo}/pulls/${pullRequestNumber}`,
+    token
+  );
+
+  releaseIdentityFromPullRequest(currentPullRequest, {
+    materialHeadSha: expectedHead,
+    baseSha: expectedBase
+  });
+
+  if (requiredPositiveInteger(currentPullRequest.number, 'current pullRequest.number') !== pullRequestNumber) {
+    throw new Error('ready-for-review pull request number drift detected');
+  }
+
+  const pullRequestId = requiredString(currentPullRequest.node_id, 'current pullRequest.node_id');
+  if (pullRequestId !== expectedPullRequestId) {
+    throw new Error('ready-for-review pull request identity drift detected');
+  }
+
+  if (currentPullRequest.draft !== true) {
+    return Object.freeze({ changed: false, pullRequestNumber, draft: false });
+  }
+
   const response = await fetch('https://api.github.com/graphql', {
     method: 'POST',
     headers: { ...githubHeaders(token), 'Content-Type': 'application/json' },

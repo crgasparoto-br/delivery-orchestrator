@@ -2448,7 +2448,7 @@ export async function main() {
     const release = evaluateOperationalRelease({ state, releaseInput });
     if (!release.readiness) throw new Error(`release gate did not become ready: ${release.reasons.join(', ')}`);
     await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'success', description: 'Delivery V2 exact-head release gate approved', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
-    await markPullRequestReadyForReview({ repository: targetRepository, pullRequest: finalPullRequest, token: targetWriteToken });
+    await markPullRequestReadyForReview({ repository: targetRepository, pullRequest: finalPullRequest, materialHeadSha, baseSha: expectedBaseSha, token: targetWriteToken });
     await persist({ nextAction: 'human-merge-policy', release });
     releaseEvaluation = release;
   }
