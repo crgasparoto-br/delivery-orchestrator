@@ -78,7 +78,13 @@ controller may reserve one explicitly separate post-adoption audit attempt throu
 `legacyAdoptionAuditAttempts` / `legacyAdoptionAuditMaxAttempts`. The reservation
 is candidate-SHA-bound and persists its dispatch nonce, workflow run ID, request
 fingerprint, result and evidence reference so interruption recovery reuses the
-same audit instead of spending another one.
+same audit instead of spending another one. If an unconsumed audit workflow is
+explicitly rearmed because a newer trusted control plane supersedes a failed run,
+the checkpoint may rotate to the replacement nonce only when its previously bound
+run is present in the controller's proven failed-audit recovery ledger. This
+infrastructure recovery preserves `legacyAdoptionAuditAttempts`; chained failed
+runs may be realigned the same way without creating a second semantic audit
+attempt. Unknown or already-consumed run identities continue to fail closed.
 
 The first post-adoption audit may declare the material producer as
 `legacy-unknown`; this is an explicit provenance state, not a fabricated provider,

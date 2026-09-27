@@ -294,6 +294,40 @@ export function reserveLegacyAdoptionAudit(record, { dispatchNonce } = {}) {
   });
 }
 
+export function rearmLegacyAdoptionAudit(record, { dispatchNonce, recoverableRunIds = [] } = {}) {
+  const previous = normalizeLegacyAdoption(record);
+  const nonce = String(dispatchNonce ?? '').trim();
+
+  if (!nonce) throw new Error('legacy audit recovery dispatch nonce required');
+  if (!previous.legacyAudit) throw new Error('legacy audit was not reserved');
+  if (previous.legacyAudit.dispatchNonce === nonce) return previous;
+  if (previous.legacyAudit.decision !== null) throw new Error('completed legacy audit cannot be rearmed');
+  if (previous.legacyAudit.runId === null) throw new Error('legacy audit recovery requires a bound failed run');
+  if (!Array.isArray(recoverableRunIds)) throw new Error('recoverable legacy audit run ids must be an array');
+
+  const recoverable = new Set(
+    recoverableRunIds.map((runId) => positive(Number(runId), 'recoverable legacy audit runId'))
+  );
+  if (!recoverable.has(previous.legacyAudit.runId)) {
+    throw new Error('legacy audit recovery run is not authorized');
+  }
+
+  return normalizeLegacyAdoption({
+    ...previous,
+    revision: previous.revision + 1,
+    legacyAudit: {
+      candidateSha: previous.materialHeadSha,
+      dispatchNonce: nonce,
+      runId: null,
+      requestFingerprint: null,
+      evidenceRef: null,
+      decision: null,
+      findings: []
+    },
+    nextAction: 'resolve-legacy-adoption-audit-run'
+  });
+}
+
 export function attachLegacyAdoptionAuditRun(record, { dispatchNonce, runId } = {}) {
   const previous = normalizeLegacyAdoption(record);
   const nonce = String(dispatchNonce ?? '').trim();
