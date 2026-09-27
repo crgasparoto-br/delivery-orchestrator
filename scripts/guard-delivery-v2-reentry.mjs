@@ -676,6 +676,24 @@ export async function persistReentryMutation({ decision, adoptionEnvelope, boots
   return true;
 }
 
+export async function ensureLegacyAdoptionPullRequestTitle({ decision, pullRequest, repository,
+  getWriteToken = () => requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'), mutate = api } = {}) {
+  if (!decision?.adoption) return false;
+  if (decision.adoption.repository !== repository) throw new Error('adoption title mutation repository mismatch');
+  if (!pullRequest || Number(pullRequest.number) !== Number(decision.pullRequestNumber)) throw new Error('adoption title mutation PR mismatch');
+  const remoteHeadSha = String(pullRequest?.head?.sha ?? '').trim().toLowerCase();
+  if (remoteHeadSha !== String(decision.adoption.materialHeadSha ?? '').trim().toLowerCase()) throw new Error('adoption title mutation head mismatch');
+  const currentTitle = String(pullRequest.title ?? '').trim();
+  if (!currentTitle) throw new Error('adoption title mutation requires current PR title');
+  if (currentTitle.startsWith('[delivery-v2] ')) return false;
+  const url = `https://api.github.com/repos/${repository}/pulls/${positiveInteger(decision.pullRequestNumber, 'decision.pullRequestNumber')}`;
+  await mutate(url, getWriteToken(), {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: `[delivery-v2] ${currentTitle}` })
+  });
+  return true;
+}
+
 async function main() {
   const targetRepository = requiredEnv('TARGET_REPOSITORY');
   const issueNumber = positiveInteger(requiredEnv('TARGET_ISSUE'), 'TARGET_ISSUE');
@@ -748,6 +766,7 @@ async function main() {
       controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml'
     } : null
   });
+  await ensureLegacyAdoptionPullRequestTitle({ decision, pullRequest, repository: targetRepository });
   await writeGithubOutput(decision);
 
   if (!decision.runController && resultPath) {

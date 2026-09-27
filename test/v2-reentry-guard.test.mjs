@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { createPersistentDeliveryState } from '../src/v2/persistent-state.mjs';
 import {
+  ensureLegacyAdoptionPullRequestTitle,
   evaluateReentry,
   parseBootstrapLease,
   parsePersistentStateEnvelope,
@@ -94,6 +95,50 @@ test('no managed PR and no prior bootstrap lease allows one initial controller p
   assert.equal(decision.resumePr, null);
   assert.equal(decision.nextAction, 'dispatch-initial-worker');
   assert.equal(decision.attempts.implementation, 0);
+});
+
+test('issue 266: adopted legacy PR title is normalized before remediation push while managed titles stay untouched', async () => {
+  const legacyPr = pr({ title: 'feat: legacy delivery title' });
+  const decision = evaluateReentry({
+    pullRequest: legacyPr,
+    stateEnvelope: null,
+    adoptionEnvelope: null,
+    bootstrapLease: null,
+    targetRepository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex'
+  });
+  assert.equal(decision.status, 'legacy-adopted');
+
+  let mutation = null;
+  assert.equal(await ensureLegacyAdoptionPullRequestTitle({
+    decision,
+    pullRequest: legacyPr,
+    repository: 'owner/repo',
+    getWriteToken: () => 'write-token',
+    mutate: async (url, token, options) => { mutation = { url, token, ...options }; }
+  }), true);
+  assert.equal(mutation.url, 'https://api.github.com/repos/owner/repo/pulls/77');
+  assert.equal(mutation.token, 'write-token');
+  assert.equal(mutation.method, 'PATCH');
+  assert.deepEqual(JSON.parse(mutation.body), { title: '[delivery-v2] feat: legacy delivery title' });
+
+  assert.equal(await ensureLegacyAdoptionPullRequestTitle({
+    decision,
+    pullRequest: { ...legacyPr, title: '[delivery-v2] feat: legacy delivery title' },
+    repository: 'owner/repo',
+    getWriteToken: () => { throw new Error('write token must remain lazy'); },
+    mutate: async () => { throw new Error('prefixed title must not mutate'); }
+  }), false);
+
+  await assert.rejects(() => ensureLegacyAdoptionPullRequestTitle({
+    decision,
+    pullRequest: { ...legacyPr, head: { ...legacyPr.head, sha: HEAD_B } },
+    repository: 'owner/repo',
+    getWriteToken: () => 'write-token',
+    mutate: async () => {}
+  }), /head mismatch/);
 });
 
 test('initial attempt is reserved only when deterministic dispatch has authorized material AI work', () => {
