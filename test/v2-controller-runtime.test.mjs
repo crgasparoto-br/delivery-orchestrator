@@ -716,18 +716,68 @@ test('CI remediation still ignores genuine ref arrow metadata with infrastructur
 });
 
 
-test('ready-for-review transition is idempotent for an already-ready pull request', async () => {
+test('ready-for-review transition is idempotent for a pull request that is still ready after refresh', async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => {
-    throw new Error('fetch must not be called for a pull request already out of draft');
+  const baseSha = 'c'.repeat(40);
+  let fetchCount = 0;
+  globalThis.fetch = async (url) => {
+    fetchCount += 1;
+    assert.equal(url, 'https://api.github.com/repos/owner/target/pulls/64');
+    return {
+      ok: true,
+      async json() {
+        return { number: 64, draft: false, node_id: 'PR_node', head: { sha: SHA }, base: { sha: baseSha } };
+      }
+    };
   };
   try {
     const result = await markPullRequestReadyForReview({
       repository: 'owner/target',
       pullRequest: { number: 64, draft: false, node_id: 'PR_node' },
+      materialHeadSha: SHA,
+      baseSha,
       token: 'token'
     });
     assert.deepEqual(result, { changed: false, pullRequestNumber: 64, draft: false });
+    assert.equal(fetchCount, 1, 'idempotent no-op must still refresh current pull request state');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ready-for-review transition promotes when the received ready snapshot became draft before the decision', async () => {
+  const originalFetch = globalThis.fetch;
+  const baseSha = 'c'.repeat(40);
+  const requests = [];
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init, body: init.body ? JSON.parse(init.body) : null });
+    if (String(url).endsWith('/repos/owner/target/pulls/64')) {
+      return {
+        ok: true,
+        async json() {
+          return { number: 64, draft: true, node_id: 'PR_node', head: { sha: SHA }, base: { sha: baseSha } };
+        }
+      };
+    }
+    return {
+      ok: true,
+      async json() {
+        return { data: { markPullRequestReadyForReview: { pullRequest: { number: 64, isDraft: false } } } };
+      }
+    };
+  };
+  try {
+    const result = await markPullRequestReadyForReview({
+      repository: 'owner/target',
+      pullRequest: { number: 64, draft: false, node_id: 'PR_node' },
+      materialHeadSha: SHA,
+      baseSha,
+      token: 'token'
+    });
+    assert.deepEqual(result, { changed: true, pullRequestNumber: 64, draft: false });
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url, 'https://api.github.com/repos/owner/target/pulls/64');
+    assert.equal(requests[1].url, 'https://api.github.com/graphql');
   } finally {
     globalThis.fetch = originalFetch;
   }

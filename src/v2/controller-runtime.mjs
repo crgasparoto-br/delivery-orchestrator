@@ -534,10 +534,6 @@ export async function markPullRequestReadyForReview({
   }
 
   const pullRequestNumber = requiredPositiveInteger(pullRequest.number, 'pullRequest.number');
-  if (pullRequest.draft !== true) {
-    return Object.freeze({ changed: false, pullRequestNumber, draft: false });
-  }
-
   const expectedHead = requiredSha(materialHeadSha, 'materialHeadSha');
   const expectedBase = requiredSha(baseSha, 'baseSha');
   const expectedPullRequestId = requiredString(pullRequest.node_id, 'pullRequest.node_id');
