@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ciFailureClassForEvidence, expectedDispatchTitle, mergePreviewEvidenceFromWorkflow, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload, validateTerminalAuditProviderFailurePayload } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForEvidence, expectedDispatchTitle, markPullRequestReadyForReview, mergePreviewEvidenceFromWorkflow, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload, validateTerminalAuditProviderFailurePayload } from '../src/v2/controller-runtime.mjs';
 
 const SHA = 'a'.repeat(40);
 
@@ -712,5 +712,85 @@ test('CI remediation still ignores genuine ref arrow metadata with infrastructur
       'actionable',
       metadataLine
     );
+  }
+});
+
+
+test('ready-for-review transition is idempotent for an already-ready pull request', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error('fetch must not be called for a pull request already out of draft');
+  };
+  try {
+    const result = await markPullRequestReadyForReview({
+      repository: 'owner/target',
+      pullRequest: { number: 64, draft: false, node_id: 'PR_node' },
+      token: 'token'
+    });
+    assert.deepEqual(result, { changed: false, pullRequestNumber: 64, draft: false });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('draft pull request is promoted only through the explicit ready-for-review mutation', async () => {
+  const originalFetch = globalThis.fetch;
+  let request = null;
+  globalThis.fetch = async (url, init) => {
+    request = { url, init, body: JSON.parse(init.body) };
+    return {
+      ok: true,
+      async json() {
+        return {
+          data: {
+            markPullRequestReadyForReview: {
+              pullRequest: { number: 64, isDraft: false }
+            }
+          }
+        };
+      }
+    };
+  };
+  try {
+    const result = await markPullRequestReadyForReview({
+      repository: 'owner/target',
+      pullRequest: { number: 64, draft: true, node_id: 'PR_node' },
+      token: 'token'
+    });
+    assert.deepEqual(result, { changed: true, pullRequestNumber: 64, draft: false });
+    assert.equal(request.url, 'https://api.github.com/graphql');
+    assert.equal(request.init.method, 'POST');
+    assert.equal(request.body.variables.pullRequestId, 'PR_node');
+    assert.match(request.body.query, /markPullRequestReadyForReview/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ready-for-review transition fails closed when GitHub does not confirm the draft transition', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        data: {
+          markPullRequestReadyForReview: {
+            pullRequest: { number: 64, isDraft: true }
+          }
+        }
+      };
+    }
+  });
+  try {
+    await assert.rejects(
+      markPullRequestReadyForReview({
+        repository: 'owner/target',
+        pullRequest: { number: 64, draft: true, node_id: 'PR_node' },
+        token: 'token'
+      }),
+      /did not confirm pull request ready-for-review transition/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
