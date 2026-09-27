@@ -13,17 +13,17 @@ async function sourceFor(relativePath) {
 
 function assertReleasePromotionOrdering(source, label) {
   const guard = source.indexOf("if (!release.readiness) throw new Error(");
-  const publish = source.indexOf("await publishReleaseStatus(", guard);
-  const promote = source.indexOf("await markPullRequestReadyForReview(", publish);
-  const persist = source.indexOf("await persist({ nextAction: 'human-merge-policy', release });", promote);
+  const promote = source.indexOf("await markPullRequestReadyForReview(", guard);
+  const publish = source.indexOf("await publishReleaseStatus(", promote);
+  const persist = source.indexOf("await persist({ nextAction: 'human-merge-policy', release });", publish);
 
   assert.notEqual(guard, -1, `${label}: missing release readiness fail-closed guard`);
-  assert.notEqual(publish, -1, `${label}: missing exact-head release status publication`);
   assert.notEqual(promote, -1, `${label}: missing ready-for-review promotion`);
+  assert.notEqual(publish, -1, `${label}: missing exact-head release status publication`);
   assert.notEqual(persist, -1, `${label}: missing human-merge terminal transition`);
-  assert.ok(guard < publish, `${label}: release guard must run before status publication`);
-  assert.ok(publish < promote, `${label}: promotion must run only after release status publication`);
-  assert.ok(promote < persist, `${label}: promotion must complete before human-merge terminal state`);
+  assert.ok(guard < promote, `${label}: rejected release must terminate before promotion`);
+  assert.ok(promote < publish, `${label}: promotion and identity revalidation must complete before release success publication`);
+  assert.ok(publish < persist, `${label}: release success must be published before human-merge terminal state`);
 }
 
 for (const controllerFile of controllerFiles) {
