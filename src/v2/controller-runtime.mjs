@@ -597,6 +597,9 @@ export async function markPullRequestReadyForReview({
     if (requiredString(confirmedPullRequest.node_id, 'confirmed pullRequest.node_id') !== pullRequestId) {
       throw new Error('ready-for-review pull request identity drift detected after mutation');
     }
+    if (confirmedPullRequest.draft !== false) {
+      throw new Error('ready-for-review pull request returned to draft after mutation');
+    }
   } catch (verificationError) {
     const rollbackResponse = await fetch('https://api.github.com/graphql', {
       method: 'POST',

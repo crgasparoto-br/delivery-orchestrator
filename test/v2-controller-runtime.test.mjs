@@ -957,3 +957,63 @@ test('ready-for-review transition rolls back to draft when head drifts after mut
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test('ready-for-review transition fails closed when the pull request returns to draft after mutation', async () => {
+  const originalFetch = globalThis.fetch;
+  const baseSha = 'c'.repeat(40);
+  const requests = [];
+  let pullReads = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    requests.push({ url, init, body });
+    if (String(url).endsWith('/repos/owner/target/pulls/64')) {
+      pullReads += 1;
+      return {
+        ok: true,
+        async json() {
+          return {
+            number: 64,
+            draft: true,
+            node_id: 'PR_node',
+            head: { sha: SHA },
+            base: { sha: baseSha }
+          };
+        }
+      };
+    }
+    if (body?.query?.includes('markPullRequestReadyForReview')) {
+      return {
+        ok: true,
+        async json() {
+          return { data: { markPullRequestReadyForReview: { pullRequest: { number: 64, isDraft: false } } } };
+        }
+      };
+    }
+    assert.match(body?.query ?? '', /convertPullRequestToDraft/);
+    return {
+      ok: true,
+      async json() {
+        return { data: { convertPullRequestToDraft: { pullRequest: { number: 64, isDraft: true } } } };
+      }
+    };
+  };
+  try {
+    await assert.rejects(
+      markPullRequestReadyForReview({
+        repository: 'owner/target',
+        pullRequest: { number: 64, draft: true, node_id: 'PR_node' },
+        materialHeadSha: SHA,
+        baseSha,
+        token: 'token'
+      }),
+      /returned to draft after mutation/
+    );
+    assert.equal(pullReads, 2);
+    assert.equal(requests.length, 4);
+    assert.match(requests[1].body.query, /markPullRequestReadyForReview/);
+    assert.match(requests[3].body.query, /convertPullRequestToDraft/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
