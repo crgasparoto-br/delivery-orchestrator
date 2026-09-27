@@ -582,5 +582,49 @@ export async function markPullRequestReadyForReview({
     throw new Error('GitHub did not confirm pull request ready-for-review transition');
   }
 
+  try {
+    const confirmedPullRequest = await fetchJson(
+      `https://api.github.com/repos/${repo}/pulls/${pullRequestNumber}`,
+      token
+    );
+    releaseIdentityFromPullRequest(confirmedPullRequest, {
+      materialHeadSha: expectedHead,
+      baseSha: expectedBase
+    });
+    if (requiredPositiveInteger(confirmedPullRequest.number, 'confirmed pullRequest.number') !== pullRequestNumber) {
+      throw new Error('ready-for-review pull request number drift detected after mutation');
+    }
+    if (requiredString(confirmedPullRequest.node_id, 'confirmed pullRequest.node_id') !== pullRequestId) {
+      throw new Error('ready-for-review pull request identity drift detected after mutation');
+    }
+  } catch (verificationError) {
+    const rollbackResponse = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: { ...githubHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: 'mutation ConvertPullRequestToDraft($pullRequestId: ID!) { convertPullRequestToDraft(input: { pullRequestId: $pullRequestId }) { pullRequest { number isDraft } } }',
+        variables: { pullRequestId }
+      })
+    });
+    if (!rollbackResponse.ok) {
+      throw new Error(
+        `ready-for-review post-mutation identity verification failed and draft rollback failed: ${verificationError.message}; GitHub API ${rollbackResponse.status}: ${await rollbackResponse.text()}`
+      );
+    }
+    const rollbackPayload = await rollbackResponse.json();
+    if (Array.isArray(rollbackPayload?.errors) && rollbackPayload.errors.length > 0) {
+      throw new Error(
+        `ready-for-review post-mutation identity verification failed and draft rollback failed: ${verificationError.message}; ${rollbackPayload.errors.map((error) => error?.message ?? 'unknown error').join('; ')}`
+      );
+    }
+    const rolledBack = rollbackPayload?.data?.convertPullRequestToDraft?.pullRequest;
+    if (Number(rolledBack?.number) !== pullRequestNumber || rolledBack?.isDraft !== true) {
+      throw new Error(
+        `ready-for-review post-mutation identity verification failed and GitHub did not confirm draft rollback: ${verificationError.message}`
+      );
+    }
+    throw verificationError;
+  }
+
   return Object.freeze({ changed: true, pullRequestNumber, draft: false });
 }
