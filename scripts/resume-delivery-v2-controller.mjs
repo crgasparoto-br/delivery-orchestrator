@@ -37,7 +37,7 @@ import { loadAiPricingCatalog, DEFAULT_AI_PRICING_FILE } from '../src/v2/ai-pric
 import { persistOperationalDeliveryMetrics } from '../src/v2/metrics-store.mjs';
 import { summarizeDeliveryAiUsage, renderDeliveryAiUsageSummary } from '../src/v2/ai-usage-summary.mjs';
 import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
-import { attachLegacyAdoptionAuditRun, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
+import { attachLegacyAdoptionAuditRun, legacyAdoptionComment, parseLegacyAdoptionEnvelope, rearmLegacyAdoptionAudit, reconcileLegacyAdoption, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
 import { fetchImmutableCompareEvidence } from '../src/v2/github-audit-evidence.mjs';
 import { resolveCheckedOutControlPlaneHeadSha } from './guard-delivery-v2-reentry.mjs';
@@ -2052,10 +2052,25 @@ export async function main() {
             controllerRef: orchestratorRef,
             controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml'
           },
-          mutate: (record) => attachLegacyAdoptionAuditRun(record, {
-            dispatchNonce: controller.auditDispatchNonce,
-            runId: auditRun.id
-          })
+          mutate: (record) => {
+            const recoverableLegacyAuditRunIds = [
+              ...(Array.isArray(observability.failedAuditRunIds)
+                ? observability.failedAuditRunIds
+                : []),
+              controller.auditWorkflowRecovery?.previousAuditRunId
+            ].filter((runId) => Number.isInteger(Number(runId)) && Number(runId) > 0)
+              .map(Number);
+
+            const aligned = rearmLegacyAdoptionAudit(record, {
+              dispatchNonce: controller.auditDispatchNonce,
+              recoverableRunIds: recoverableLegacyAuditRunIds
+            });
+
+            return attachLegacyAdoptionAuditRun(aligned, {
+              dispatchNonce: controller.auditDispatchNonce,
+              runId: auditRun.id
+            });
+          }
         });
       }
       if (

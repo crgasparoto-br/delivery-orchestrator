@@ -8,7 +8,7 @@ import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
 import { normalizePersistentDeliveryState } from '../src/v2/persistent-state.mjs';
 import { evaluateOperationalRelease } from '../src/v2/operational-controller.mjs';
-import { AUDIT_CONTINUATION_MARKER, LEGACY_ADOPTION_MARKER, attachLegacyAdoptionAuditRun, createLegacyAdoption, legacyAdoptionComment, normalizeLegacyAdoption, parseAuditContinuation, parseLegacyAdoptionEnvelope, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
+import { AUDIT_CONTINUATION_MARKER, LEGACY_ADOPTION_MARKER, attachLegacyAdoptionAuditRun, createLegacyAdoption, legacyAdoptionComment, normalizeLegacyAdoption, parseAuditContinuation, parseLegacyAdoptionEnvelope, rearmLegacyAdoptionAudit, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 
 const snapshot = JSON.parse(readFileSync(new URL('./fixtures/issue-105-existing-pr.json', import.meta.url), 'utf8'));
 const pr = snapshot.solverFin613.pullRequest;
@@ -343,6 +343,81 @@ test('issue 149: post-adoption audit uses a separate bounded idempotent budget w
   assert.throws(
     () => reserveLegacyAdoptionAudit({ ...frozen, legacyAdoptionAuditAttempts: 1 }, { dispatchNonce: 'legacy-audit-nonce-2' }),
     /budget exhausted/
+  );
+});
+
+test('legacy audit infrastructure recovery realigns chained stale nonces without spending another semantic attempt', () => {
+  const frozen = refreezeLegacyAdoption(evidence());
+  const firstReserved = reserveLegacyAdoptionAudit(frozen, {
+    dispatchNonce: 'legacy-audit-old-nonce'
+  });
+  const firstBound = attachLegacyAdoptionAuditRun(firstReserved, {
+    dispatchNonce: 'legacy-audit-old-nonce',
+    runId: 9101
+  });
+
+  const secondReserved = rearmLegacyAdoptionAudit(firstBound, {
+    dispatchNonce: 'legacy-audit-replacement-1',
+    recoverableRunIds: [9101]
+  });
+
+  assert.equal(secondReserved.legacyAdoptionAuditAttempts, 1);
+  assert.equal(secondReserved.legacyAudit.dispatchNonce, 'legacy-audit-replacement-1');
+  assert.equal(secondReserved.legacyAudit.runId, null);
+  assert.equal(secondReserved.nextAction, 'resolve-legacy-adoption-audit-run');
+
+  const secondBound = attachLegacyAdoptionAuditRun(secondReserved, {
+    dispatchNonce: 'legacy-audit-replacement-1',
+    runId: 9102
+  });
+  const thirdReserved = rearmLegacyAdoptionAudit(secondBound, {
+    dispatchNonce: 'legacy-audit-replacement-2',
+    recoverableRunIds: [9101, 9102]
+  });
+
+  assert.equal(thirdReserved.legacyAdoptionAuditAttempts, 1);
+  assert.equal(thirdReserved.legacyAudit.dispatchNonce, 'legacy-audit-replacement-2');
+  assert.equal(thirdReserved.legacyAudit.runId, null);
+
+  assert.deepEqual(
+    rearmLegacyAdoptionAudit(thirdReserved, {
+      dispatchNonce: 'legacy-audit-replacement-2',
+      recoverableRunIds: []
+    }),
+    thirdReserved,
+    'same replacement nonce must be idempotent'
+  );
+
+  const finalBound = attachLegacyAdoptionAuditRun(thirdReserved, {
+    dispatchNonce: 'legacy-audit-replacement-2',
+    runId: 9103
+  });
+  const approved = recordLegacyAdoptionAuditResult(finalBound, {
+    runId: 9103,
+    candidateSha: pr.head.sha,
+    decision: 'approved',
+    requestFingerprint: 'c'.repeat(64),
+    evidenceRef: 'https://github.com/crgasparoto-br/delivery-orchestrator/actions/runs/9103',
+    findings: []
+  });
+
+  assert.equal(approved.legacyAdoptionAuditAttempts, 1);
+  assert.equal(approved.legacyAudit.decision, 'approved');
+  assert.equal(approved.blockers.includes('independent-audit-required'), false);
+
+  assert.throws(
+    () => rearmLegacyAdoptionAudit(firstBound, {
+      dispatchNonce: 'legacy-audit-unauthorized',
+      recoverableRunIds: [9999]
+    }),
+    /recovery run is not authorized/
+  );
+  assert.throws(
+    () => rearmLegacyAdoptionAudit(approved, {
+      dispatchNonce: 'legacy-audit-after-result',
+      recoverableRunIds: [9103]
+    }),
+    /completed legacy audit cannot be rearmed/
   );
 });
 
