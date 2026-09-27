@@ -3,8 +3,10 @@
 The guard persists a `<!-- delivery-v2-legacy-adoption -->` comment for a uniquely
 identified, trusted legacy PR without canonical V2 state. It records repository,
 issue, PR, base/head refs and SHAs, author/association, a hash of the issue-binding
-body, PR evidence URL and controller-run provenance. It never renames the PR,
-force-pushes, opens a replacement PR or reserves initial implementation work.
+body, PR evidence URL and controller-run provenance. After that adoption checkpoint
+is persisted, the guard may normalize the same trusted PR title to the required
+`[delivery-v2] ` prefix before any remediation can publish material changes. It
+never force-pushes, opens a replacement PR or reserves initial implementation work.
 
 Unknown facts use `null`. A trusted bootstrap lease proves only its implementation
 counter, not zero historical audits or a material-producing worker. Its original
@@ -116,10 +118,13 @@ exact-identity evidence. The live PR is rechecked after collection and before
 persistence as well. The PR #122 conflict and historical escalation are fixtures,
 not special cases or manually reset state in this implementation.
 
-The guard requests write capability only when posting/updating adoption or
-terminalizing an exhausted pre-material lease. Infrastructure conclusions are
-recorded separately from unknown pre-material failures; no absent material
-candidate is mislabeled as a functional rejection. Audit-remediation budgets and
+The guard requests write capability only when posting/updating adoption,
+normalizing an adopted legacy PR title to the required `[delivery-v2] ` prefix,
+or terminalizing an exhausted pre-material lease. Title normalization remains
+lazy, is bound to the adopted repository/PR/material head, and happens only after
+the adoption checkpoint is persisted and before downstream remediation can proceed.
+Infrastructure conclusions are recorded separately from unknown pre-material
+failures; no absent material candidate is mislabeled as a functional rejection. Audit-remediation budgets and
 normal release gates remain unchanged from PR #146.
 
 The dispatcher also re-evaluates the guard after a failed initial-controller
