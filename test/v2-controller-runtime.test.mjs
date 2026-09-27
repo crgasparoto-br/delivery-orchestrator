@@ -749,13 +749,15 @@ test('ready-for-review transition promotes when the received ready snapshot beca
   const originalFetch = globalThis.fetch;
   const baseSha = 'c'.repeat(40);
   const requests = [];
+  let pullReads = 0;
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url, init, body: init.body ? JSON.parse(init.body) : null });
     if (String(url).endsWith('/repos/owner/target/pulls/64')) {
+      pullReads += 1;
       return {
         ok: true,
         async json() {
-          return { number: 64, draft: true, node_id: 'PR_node', head: { sha: SHA }, base: { sha: baseSha } };
+          return { number: 64, draft: pullReads === 1, node_id: 'PR_node', head: { sha: SHA }, base: { sha: baseSha } };
         }
       };
     }
@@ -787,13 +789,15 @@ test('draft pull request is promoted only through the explicit ready-for-review 
   const originalFetch = globalThis.fetch;
   const baseSha = 'c'.repeat(40);
   const requests = [];
+  let pullReads = 0;
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url, init, body: init.body ? JSON.parse(init.body) : null });
     if (String(url).endsWith('/repos/owner/target/pulls/64')) {
+      pullReads += 1;
       return {
         ok: true,
         async json() {
-          return { number: 64, draft: true, node_id: 'PR_node', head: { sha: SHA }, base: { sha: baseSha } };
+          return { number: 64, draft: pullReads === 1, node_id: 'PR_node', head: { sha: SHA }, base: { sha: baseSha } };
         }
       };
     }
