@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "classification": "implementation-only",
+  "source_event": {
+    "kind": "independent-rejection",
+    "rejection_id": "audit-rejection:264-457c474c-handoff-missing",
+    "audit_report_sha256": "3ce8cc237e32f59a86e7a0c283d87c89c509de4d6fd8dec6f897c49c0a482d71",
+    "finding_ids": [
+      "A-001"
+    ]
+  },
+  "generalized_learning": {
+    "promotion_status": "not-required",
+    "reason": "The rejection is a target-specific missing handoff artifact; the governing producer and auditor skills already contain generic prevention and terminal detection controls."
+  },
+  "skill_changes": []
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "repository": "crgasparoto-br/delivery-orchestrator",
+  "issue": 263,
+  "base_ref": "main",
+  "head_sha": "457c474cb5fdade00fe778015588c1f9c08464f3",
+  "primary_source_id": "issue-263-body",
+  "sources": [
+    {
+      "id": "issue-263-body",
+      "kind": "issue-body",
+      "path": "specification-sources/issue-263.md",
+      "sha256": "64ceec827ab39f3b691ec4b25c5c8966ded9dfb021fe5518ffc8734fdd07eeac",
+      "textual": true
+    }
+  ]
+}

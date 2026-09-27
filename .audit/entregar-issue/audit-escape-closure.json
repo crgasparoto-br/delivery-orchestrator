@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "escapes": [
+    {
+      "escape_id": "ESC-HANDOFF-NOT-PRODUCED-001",
+      "status": "passed",
+      "escape_class": "handoff-certification-gap",
+      "plausible_wrong_implementation": "Return a green material candidate to independent audit without publishing the certified handoff required by the selected transport.",
+      "source_audit": {
+        "rejection_id": "audit-rejection:264-457c474c-handoff-missing",
+        "finding_ids": [
+          "A-001"
+        ],
+        "audit_report_sha256": "3ce8cc237e32f59a86e7a0c283d87c89c509de4d6fd8dec6f897c49c0a482d71"
+      },
+      "literal_case": {
+        "status": "passed",
+        "observed": "The material candidate remains current and the missing certified handoff is rebuilt before re-audit."
+      },
+      "sibling_cases": [
+        {
+          "id": "SIB-1",
+          "status": "passed",
+          "surface": "missing-certificate",
+          "evidence": "Terminal guard rejects absence of handoff-ready.json before audit release."
+        },
+        {
+          "id": "SIB-2",
+          "status": "passed",
+          "surface": "wrong-parent-or-path",
+          "evidence": "Terminal guard verifies direct material parent and result-only allowlist before audit release."
+        }
+      ],
+      "prevention_change": {
+        "evidence": [
+          "Producer flow now executes builder and pre-publication terminal simulation before moving the PR ref."
+        ]
+      },
+      "detection_change": {
+        "evidence": [
+          "Post-write terminal validation re-reads remote head and compares published/current identities."
+        ]
+      },
+      "revalidated_head_sha": "457c474cb5fdade00fe778015588c1f9c08464f3"
+    }
+  ]
+}

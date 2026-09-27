@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "contract_version": "2026-08-20.3",
+  "resolution_policy": "all-actionable-items",
+  "status": "closed",
+  "candidate_head_sha": "457c474cb5fdade00fe778015588c1f9c08464f3",
+  "remediation_mode": "targeted-remediation",
+  "source": {
+    "rejection_id": "audit-rejection:264-457c474c-handoff-missing",
+    "audited_head_sha": "457c474cb5fdade00fe778015588c1f9c08464f3",
+    "audit_report_sha256": "3ce8cc237e32f59a86e7a0c283d87c89c509de4d6fd8dec6f897c49c0a482d71"
+  },
+  "items": [
+    {
+      "source_kind": "finding",
+      "source_id": "A-001",
+      "remediation_mode": "targeted-remediation",
+      "status": "fixed",
+      "closure_kind": "handoff-certification",
+      "evidence": [
+        "Certified handoff package rebuilt for the unchanged material head and current target."
+      ],
+      "validations": [
+        "CI exact-head run 36281282195 completed success; terminal handoff validator must pass before publication."
+      ]
+    }
+  ]
+}
