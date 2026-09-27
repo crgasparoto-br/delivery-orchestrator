@@ -18,7 +18,7 @@ import {
   persistentStateFromOperational
 } from '../src/v2/operational-controller.mjs';
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
-import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, markPullRequestReadyForReview, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
 import { parseTrustedJsonEnvelope, selectExistingPullRequest, selectTrustedMarkerComment, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-policy.mjs';
@@ -2448,6 +2448,7 @@ export async function main() {
     const release = evaluateOperationalRelease({ state, releaseInput });
     if (!release.readiness) throw new Error(`release gate did not become ready: ${release.reasons.join(', ')}`);
     await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'success', description: 'Delivery V2 exact-head release gate approved', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
+    await markPullRequestReadyForReview({ repository: targetRepository, pullRequest: finalPullRequest, token: targetWriteToken });
     await persist({ nextAction: 'human-merge-policy', release });
     releaseEvaluation = release;
   }
