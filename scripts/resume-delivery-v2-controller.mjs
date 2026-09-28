@@ -846,46 +846,73 @@ async function auditResultFromArtifact({
 function higherRisk(next, current) { return RISK_RANK[next] > RISK_RANK[current]; }
 
 async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber, materialHeadSha, baselineSha, previousMaterialSha = null, actionsToken, targetReadToken, authorizePromotion }) {
-  if (!hygiene?.promotionRequired) return { hygiene, state, plan, promotionRun: null };
+  if (!hygiene?.promotionRequired) return { hygiene, state, plan, promotionRun: null, promotionRuns: [] };
   const promotedPlan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk: 'standard', changedPaths, repositoryPolicy });
   let promotedState = applyOperationalEvent(state, { type: 'promote-risk', plan: promotedPlan });
-  const dispatchNonce = createDispatchNonce();
+
   if (typeof authorizePromotion !== 'function') {
     throw new Error('technical hygiene promotion authorization publisher is required');
   }
-  await authorizePromotion({
-    phase: 'dispatch',
-    dispatchNonce,
-    runId: null,
-    promotedState
-  });
-  let promotionRun = await dispatchWorker({
+
+  const stage = await runWorkflowStageWithInfrastructureRecovery({
+    stage: 'technical-hygiene',
     orchestratorRepository,
-    orchestratorRef,
-    plan: promotedPlan,
-    controllerRunId,
+    actionsToken,
     targetRepository,
-    issueNumber,
-    baseBranch,
-    targetRef: materialHeadSha,
     targetPr: pullRequestNumber,
-    remediationContext: JSON.stringify({ kind: 'technical-hygiene-evidence-promotion', evidenceOnly: true, materialSha: materialHeadSha, missingEvidence: hygiene.missingEvidence }),
-    token: actionsToken,
-    dispatchNonce
+    expectedHeadSha: materialHeadSha,
+    targetReadToken,
+    onDispatch: async ({ dispatchNonce }) => authorizePromotion({
+      phase: 'dispatch',
+      dispatchNonce,
+      runId: null,
+      promotedState
+    }),
+    onObserve: async ({ dispatchNonce, run }) => authorizePromotion({
+      phase: 'observe',
+      dispatchNonce,
+      runId: run.id,
+      promotedState
+    }),
+    dispatch: (dispatchNonce) => dispatchWorker({
+      orchestratorRepository,
+      orchestratorRef,
+      plan: promotedPlan,
+      controllerRunId,
+      targetRepository,
+      issueNumber,
+      baseBranch,
+      targetRef: materialHeadSha,
+      targetPr: pullRequestNumber,
+      remediationContext: JSON.stringify({ kind: 'technical-hygiene-evidence-promotion', evidenceOnly: true, materialSha: materialHeadSha, missingEvidence: hygiene.missingEvidence }),
+      token: actionsToken,
+      dispatchNonce
+    })
   });
-  await authorizePromotion({
-    phase: 'observe',
-    dispatchNonce,
-    runId: promotionRun.id,
-    promotedState
-  });
-  promotionRun = await waitWorkflowRun(orchestratorRepository, promotionRun.id, actionsToken);
-  if (promotionRun.conclusion !== 'success') throw new Error(`technical hygiene STANDARD promotion worker failed: ${promotionRun.html_url}`);
+
+  const promotionRun = stage.run;
+  if (promotionRun.conclusion !== 'success') {
+    throw new Error(
+      `technical hygiene STANDARD promotion worker failed: ${promotionRun.html_url}; classification=${stage.failure?.classification ?? 'unknown'}`
+    );
+  }
+
   const currentPr = await fetchPullRequest(targetRepository, pullRequestNumber, targetReadToken);
-  if (String(currentPr.head.sha).toLowerCase() !== materialHeadSha.toLowerCase()) throw new Error('technical hygiene evidence-only promotion mutated the material head');
-  const reevaluated = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: promotionRun.id, token: actionsToken, baselineSha, materialSha: materialHeadSha, previousMaterialSha, profile: promotedState.riskProfile });
+  if (String(currentPr.head.sha).toLowerCase() !== materialHeadSha.toLowerCase()) {
+    throw new Error('technical hygiene evidence-only promotion mutated the material head');
+  }
+
+  const reevaluated = await downloadGhAwTechnicalHygieneArtifact({
+    repository: orchestratorRepository,
+    runId: promotionRun.id,
+    token: actionsToken,
+    baselineSha,
+    materialSha: materialHeadSha,
+    previousMaterialSha,
+    profile: promotedState.riskProfile
+  });
   promotedState = applyOperationalEvent(promotedState, { type: 'technical-hygiene-result', result: reevaluated });
-  return { hygiene: reevaluated, state: promotedState, plan: promotedPlan, promotionRun };
+  return { hygiene: reevaluated, state: promotedState, plan: promotedPlan, promotionRun, promotionRuns: stage.runs };
 }
 
 export function controllerMetadataForNewMaterial({ controller = {}, workerRunId, plan } = {}) {
