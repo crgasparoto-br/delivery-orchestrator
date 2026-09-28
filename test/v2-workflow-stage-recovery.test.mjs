@@ -99,25 +99,34 @@ test('stage retry budget is bounded independently from semantic attempt counters
 });
 
 
-test('controller wires the recovery matrix into every bounded downstream stage', async () => {
-  const source = await readFile(
+test('both controllers wire the recovery matrix into bounded downstream stages', async () => {
+  const primary = await readFile(
     new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url),
     'utf8'
   );
+  const resumed = await readFile(
+    new URL('../scripts/resume-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
 
-  assert.match(source, /const MAX_INFRA_STAGE_RETRIES = 1/);
-  for (const stage of [
-    'ci-remediation',
-    'audit-remediation',
-    'technical-hygiene',
-    'independent-audit'
+  for (const [label, source] of [
+    ['primary', primary],
+    ['resume', resumed]
   ]) {
-    assert.match(
-      source,
-      new RegExp(`stage: '${stage}'`),
-      `controller must route ${stage} through deterministic stage recovery`
-    );
+    assert.match(source, /const MAX_INFRA_STAGE_RETRIES = 1/);
+    for (const stage of [
+      'ci-remediation',
+      'audit-remediation',
+      'technical-hygiene',
+      'independent-audit'
+    ]) {
+      assert.match(
+        source,
+        new RegExp(`stage: '${stage}'`),
+        `${label} controller must route ${stage} through deterministic stage recovery`
+      );
+    }
+    assert.match(source, /materialHeadChanged/);
+    assert.match(source, /downloadGhAwAgentOutputArtifact/);
   }
-  assert.match(source, /materialHeadChanged/);
-  assert.match(source, /workerEvidence = await downloadInitialWorkerEvidence/);
 });
