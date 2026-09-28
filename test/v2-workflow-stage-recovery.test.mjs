@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
 
 import {
   classifyWorkflowStageFailure,
@@ -95,4 +96,28 @@ test('stage retry budget is bounded independently from semantic attempt counters
     retriesUsed: 1,
     maxRetries: 1
   });
+});
+
+
+test('controller wires the recovery matrix into every bounded downstream stage', async () => {
+  const source = await readFile(
+    new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(source, /const MAX_INFRA_STAGE_RETRIES = 1/);
+  for (const stage of [
+    'ci-remediation',
+    'audit-remediation',
+    'technical-hygiene',
+    'independent-audit'
+  ]) {
+    assert.match(
+      source,
+      new RegExp(`stage: '${stage}'`),
+      `controller must route ${stage} through deterministic stage recovery`
+    );
+  }
+  assert.match(source, /materialHeadChanged/);
+  assert.match(source, /workerEvidence = await downloadInitialWorkerEvidence/);
 });
