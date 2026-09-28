@@ -678,14 +678,20 @@ async function runWorkflowStageWithInfrastructureRecovery({
   expectedHeadSha = null,
   targetReadToken = null,
   onDispatch = null,
-  onObserve = null
+  onObserve = null,
+  initialDispatchNonce = null
 } = {}) {
   let retriesUsed = 0;
   let lastDispatchNonce = null;
+  let firstDispatch = true;
   const runs = [];
 
   while (true) {
-    const dispatchNonce = createDispatchNonce();
+    const dispatchNonce =
+      firstDispatch && String(initialDispatchNonce ?? '').trim()
+        ? String(initialDispatchNonce).trim()
+        : createDispatchNonce();
+    firstDispatch = false;
     lastDispatchNonce = dispatchNonce;
 
     if (typeof onDispatch === 'function') {
