@@ -2466,7 +2466,19 @@ export async function main() {
 
           hygieneRun = recovered;
 
-          if (!hygieneRun) {
+          if (hygieneRun) {
+            await persist({
+              nextAction: 'observe-technical-hygiene',
+              hygieneDispatchNonce,
+              hygieneRunId: hygieneRun.id
+            });
+
+            hygieneRun = await waitWorkflowRun(
+              orchestratorRepository,
+              hygieneRun.id,
+              actionsToken
+            );
+          } else {
             if (
               controller.nextAction !== 'dispatch-technical-hygiene' ||
               controller.hygieneDispatchNonce !== hygieneDispatchNonce
@@ -2476,33 +2488,49 @@ export async function main() {
               );
             }
 
-            hygieneRun = await dispatchWorker({
+            const hygieneStage = await runWorkflowStageWithInfrastructureRecovery({
+              stage: 'technical-hygiene',
               orchestratorRepository,
-              orchestratorRef,
-              plan,
-              controllerRunId,
+              actionsToken,
               targetRepository,
-              issueNumber,
-              baseBranch,
-              targetRef: materialHeadSha,
               targetPr: resumePr,
-              remediationContext: hygieneContext,
-              token: actionsToken,
-              dispatchNonce: hygieneDispatchNonce
+              expectedHeadSha: materialHeadSha,
+              targetReadToken,
+              initialDispatchNonce: hygieneDispatchNonce,
+              onDispatch: async ({ dispatchNonce }) => {
+                hygieneDispatchNonce = dispatchNonce;
+                await persist({
+                  nextAction: 'dispatch-technical-hygiene',
+                  hygieneDispatchNonce: dispatchNonce,
+                  hygieneRunId: null
+                });
+              },
+              onObserve: async ({ dispatchNonce, run }) => {
+                hygieneDispatchNonce = dispatchNonce;
+                await persist({
+                  nextAction: 'observe-technical-hygiene',
+                  hygieneDispatchNonce: dispatchNonce,
+                  hygieneRunId: run.id
+                });
+              },
+              dispatch: (dispatchNonce) => dispatchWorker({
+                orchestratorRepository,
+                orchestratorRef,
+                plan,
+                controllerRunId,
+                targetRepository,
+                issueNumber,
+                baseBranch,
+                targetRef: materialHeadSha,
+                targetPr: resumePr,
+                remediationContext: hygieneContext,
+                token: actionsToken,
+                dispatchNonce
+              })
             });
+
+            hygieneRun = hygieneStage.run;
           }
-
-          await persist({
-            nextAction: 'observe-technical-hygiene',
-            hygieneDispatchNonce,
-            hygieneRunId: hygieneRun.id
-          });
-
-          hygieneRun = await waitWorkflowRun(
-            orchestratorRepository,
-            hygieneRun.id,
-            actionsToken
-          );
         }
 
         if (hygieneRun.conclusion !== 'success') {
