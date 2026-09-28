@@ -16,6 +16,7 @@ test('CI remediation requires explicit repository-cause evidence and fails close
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'tests', failedStepNames: ['unit tests'], log: 'AssertionError: expected true to equal false' }] }), 'actionable');
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'tests', failedStepNames: ['unit tests'], log: 'runner lost communication; connection reset' }] }), 'external');
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'browser tests', failedStepNames: ['pnpm test'], log: 'Error: Could not find Chrome (ver. 127.0.6533.88). cache path is /home/runner/.cache/puppeteer' }] }), 'actionable');
+  assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'CRITICAL validation', failedStepNames: ['Run npm run format:check'], log: 'npm run format:check\nCode style issues found. Run Prettier with --write.' }] }), 'actionable');
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'browser tests', failedStepNames: ['pnpm test'], log: 'Browser executable not found in Puppeteer cache' }] }), 'actionable');
   assert.equal(ciFailureClassForEvidence({ conclusion: 'failure', failedJobs: [{ name: 'browser tests', failedStepNames: ['pnpm test'], log: 'Could not find Chrome; runner offline while provisioning browser' }] }), 'external');
   assert.equal(

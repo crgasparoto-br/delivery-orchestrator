@@ -1306,7 +1306,10 @@ export async function main() {
 
     const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
 
-    if (payload.phase !== 'post-write-refreeze') {
+    if (
+      payload.phase !== 'post-write-refreeze' &&
+      payload.nextAction !== 'classify-ci-failure'
+    ) {
       await publishReleaseStatus({
         repository: targetRepository,
         sha: payload.materialHeadSha,
@@ -1325,8 +1328,143 @@ export async function main() {
       return;
     }
 
-    materialHeadSha = payload.materialHeadSha;
-    latestSourceRun = sourceRun;
+    if (payload.nextAction === 'classify-ci-failure') {
+      materialHeadSha = payload.materialHeadSha;
+      latestSourceRun = sourceRun;
+      if (
+        !latestSourceRun ||
+        latestSourceRun.status !== 'completed' ||
+        latestSourceRun.conclusion !== 'failure'
+      ) {
+        throw new Error('legacy CI failure transition requires terminal failed authoritative source run');
+      }
+
+      latestCheck = selectCheckForWorkflowRun(checkRuns, {
+        requiredStatusName: targetPolicy.requiredStatusName,
+        workflowRunId: latestSourceRun.id
+      });
+      if (
+        !latestCheck ||
+        latestCheck.status !== 'completed' ||
+        latestCheck.conclusion !== 'failure'
+      ) {
+        throw new Error('legacy CI failure transition requires exact-head failed required check');
+      }
+
+      const failureEvidence = await collectCiFailureEvidence({
+        repository: targetRepository,
+        check: latestCheck,
+        token: targetReadToken
+      });
+      const failureClass = ciFailureClassForEvidence({
+        conclusion: 'failure',
+        failedJobs: failureEvidence.failedJobs
+      });
+      const failureRef =
+        failureEvidence.workflowUrl ??
+        latestCheck.details_url ??
+        latestSourceRun.html_url ??
+        `github:check:${latestCheck.id}`;
+
+      if (failureClass !== 'actionable') {
+        const blockedPayload = {
+          ...payload,
+          nextAction: 'external-ci-blocker',
+          ciFailure: {
+            candidateSha: materialHeadSha,
+            failureClass,
+            cause: `${latestCheck.name}:failure:${failureClass}`,
+            evidenceRef: failureRef
+          }
+        };
+        await publishReleaseStatus({
+          repository: targetRepository,
+          sha: materialHeadSha,
+          context: targetPolicy.finalStatusName,
+          state: 'failure',
+          description: 'Legacy PR exact-head CI failed without safely remediable evidence',
+          token: targetWriteToken,
+          targetUrl: failureRef
+        });
+        await writeFile(resultPath, `${JSON.stringify(blockedPayload, null, 2)}\n`, 'utf8');
+        process.stdout.write(`${JSON.stringify(blockedPayload)}\n`);
+        return;
+      }
+
+      const adoptedFailedState = createAdoptedOperationalDelivery({
+        plan,
+        materialHeadSha,
+        ciEvidence: {
+          conclusion: 'failure',
+          failureClass,
+          cause: `${latestCheck.name}:failure:${failureClass}`,
+          evidenceRef: failureRef
+        }
+      });
+
+      await upsertStateComment({
+        repository: targetRepository,
+        prNumber: resumePr,
+        state: adoptedFailedState,
+        identity: {
+          issueNumber,
+          pullRequestNumber: resumePr,
+          baseRef: pullRequest.base.ref,
+          baseSha: pullRequest.base.sha,
+          headRef: pullRequest.head.ref,
+          provider
+        },
+        classifier,
+        latestCheck,
+        latestSourceRun,
+        token: targetWriteToken,
+        extra: {
+          controllerRunId,
+          controllerRepository: orchestratorRepository,
+          controllerRef: orchestratorRef,
+          controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml',
+          nextAction: adoptedFailedState.status,
+          auditRunId: null,
+          auditDispatchNonce: null,
+          auditRequestFingerprint: null,
+          materialWorkerRunId: null,
+          materialWorkerIdentity: null,
+          materialWorkerProvider: null,
+          technicalHygiene: null,
+          adoption: {
+            type: 'legacy-adopted-ci-remediation',
+            source: 'delivery-v2-legacy-adoption-checkpoint',
+            checkpointCommentId: envelope.commentId,
+            historicalAttempts: payload.adoption.attempts,
+            producerProvenance: 'legacy-unknown',
+            adoptedHeadSha: payload.adoption.adoption.adoptedHeadSha,
+            operationalEpochHeadSha: materialHeadSha
+          }
+        }
+      });
+
+      await publishReleaseStatus({
+        repository: targetRepository,
+        sha: materialHeadSha,
+        context: targetPolicy.finalStatusName,
+        state: 'pending',
+        description: 'Legacy PR exact-head CI failed; bounded remediation in progress',
+        token: targetWriteToken,
+        targetUrl: failureRef
+      });
+
+      const refreshedFailedComments = await listComments(
+        targetRepository,
+        resumePr,
+        targetReadToken
+      );
+      stateEnvelope = parseStateComment(refreshedFailedComments, trustedLogin);
+      if (!stateEnvelope) {
+        throw new Error('failed to persist failed-CI legacy adoption operational state');
+      }
+    } else {
+      materialHeadSha = payload.materialHeadSha;
+      latestSourceRun = sourceRun;
 
     if (!latestSourceRun) {
       throw new Error('post-write-refreeze requires authoritative source CI run');
@@ -1433,6 +1571,7 @@ export async function main() {
 
     if (!stateEnvelope) {
       throw new Error('failed to persist post-adoption operational state');
+    }
     }
   }
   classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);

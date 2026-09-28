@@ -75,6 +75,27 @@ test('issue 149: adopted operational epoch imports exact-head green CI without f
   assert.equal(nextOperationalAction(state), 'dispatch-audit');
 });
 
+test('issue 286: adopted actionable failed CI enters the canonical bounded remediation path', () => {
+  let state = createAdoptedOperationalDelivery({
+    plan: planFor('critical'),
+    materialHeadSha: A,
+    ciEvidence: {
+      conclusion: 'failure',
+      failureClass: 'actionable',
+      cause: 'Delivery V2 CI:failure:actionable',
+      evidenceRef: 'run:legacy-red'
+    }
+  });
+  assert.equal(state.status, 'ci-failed-remediable');
+  assert.equal(state.implementationAttempts, 0);
+  assert.equal(nextOperationalAction(state), 'dispatch-ci-remediation');
+  assert.equal(operationalRemediationInput(state).source, 'ci-failure');
+
+  state = applyOperationalEvent(state, { type: 'start-implementation' });
+  assert.equal(state.status, 'implementing');
+  assert.equal(state.implementationAttempts, 1);
+});
+
 test('actionable CI failure becomes the only bounded remediation input and preserves attempt budget', () => {
   let state = createOperationalDelivery({ plan: planFor('critical'), materialHeadSha: A });
   state = applyOperationalEvent(state, {

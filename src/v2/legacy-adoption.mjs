@@ -289,11 +289,16 @@ export function refreezeLegacyAdoption({ record, pullRequest, comments, checkout
   if (!/^[0-9a-f]{64}$/.test(classifier?.fingerprint ?? '') || !classifier.version || classifier.subjectSha !== next.materialHeadSha) throw new Error('real exact-head classifier identity required');
   const run = selectAuthoritativeSourceWorkflowRun(runs, { workflowName: targetPolicy.ciWorkflowName, sha: next.materialHeadSha });
   const check = run ? selectCheckForWorkflowRun(checks, { requiredStatusName: targetPolicy.requiredStatusName, workflowRunId: run.id }) : null;
-  const reusable = continuation.reuseExactHeadCi && run?.status === 'completed' && run.conclusion === 'success'
-    && run.repository?.full_name === next.repository && run.path === targetPolicy.ciWorkflowPath && run.head_branch === next.headRef
+  const trustedExactHeadCorrelation = continuation.reuseExactHeadCi
+    && run?.repository?.full_name === next.repository && run.path === targetPolicy.ciWorkflowPath && run.head_branch === next.headRef
     && check?.head_sha === next.materialHeadSha && check.app?.slug === 'github-actions'
-    && Number.isInteger(run.check_suite_id) && run.check_suite_id > 0 && check.check_suite?.id === run.check_suite_id
+    && Number.isInteger(run?.check_suite_id) && run.check_suite_id > 0 && check.check_suite?.id === run.check_suite_id;
+  const reusable = trustedExactHeadCorrelation
+    && run.status === 'completed' && run.conclusion === 'success'
     && check.status === 'completed' && check.conclusion === 'success';
+  const terminalFailure = trustedExactHeadCorrelation
+    && run.status === 'completed' && run.conclusion === 'failure'
+    && check.status === 'completed' && check.conclusion === 'failure';
   const auditRequired = plan.audit?.required === true;
   next = {
     ...next, revision: next.revision + 1, phase: reusable ? 'post-write-refreeze' : 'blocked',
@@ -304,10 +309,10 @@ export function refreezeLegacyAdoption({ record, pullRequest, comments, checkout
     // its own explicit budget and never rewrites attempts.audit/auditRemediation.
     blockers: reusable
       ? [...(auditRequired ? ['independent-audit-required'] : []), 'technical-hygiene-required']
-      : ['exact-head-ci-required'],
+      : [terminalFailure ? 'exact-head-ci-failed' : 'exact-head-ci-required'],
     nextAction: reusable
       ? (auditRequired ? 'dispatch-legacy-adoption-audit' : 'collect-technical-hygiene-evidence')
-      : 'observe-ci'
+      : (terminalFailure ? 'classify-ci-failure' : 'observe-ci')
   };
   return normalizeLegacyAdoption(next);
 }

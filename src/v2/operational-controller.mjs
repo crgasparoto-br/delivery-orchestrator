@@ -178,9 +178,9 @@ export function createAdoptedOperationalDelivery({ plan, materialHeadSha, ciEvid
 
   // This material existed before Delivery V2 adopted the PR. Do not call
   // startImplementation/publishMaterial: doing so would fabricate an
-  // implementation attempt. CI was already validated exact-head by the
-  // adoption refreeze and is imported explicitly as the first operational
-  // evidence of the new post-adoption epoch.
+  // implementation attempt. Import the trusted exact-head CI result into the
+  // canonical operational state machine so success and actionable failure use
+  // the same remediation budgets and dispatch contract.
   state = Object.freeze({
     ...state,
     status: 'ci-pending',
@@ -188,10 +188,15 @@ export function createAdoptedOperationalDelivery({ plan, materialHeadSha, ciEvid
     technicalHygiene: null
   });
 
+  const conclusion = optionalString(evidence.conclusion)?.toLowerCase() ?? 'success';
   state = recordCiResult(state, {
     candidateSha: sha,
-    conclusion: 'success',
-    evidenceRef: requiredString(evidence.evidenceRef, 'ciEvidence.evidenceRef')
+    conclusion,
+    evidenceRef: requiredString(evidence.evidenceRef, 'ciEvidence.evidenceRef'),
+    ...(conclusion === 'failure' ? {
+      failureClass: requiredString(evidence.failureClass, 'ciEvidence.failureClass'),
+      cause: requiredString(evidence.cause, 'ciEvidence.cause')
+    } : {})
   });
 
   return reconcileTechnicalHygieneReadiness(Object.freeze({ ...state, technicalHygiene: null }));
