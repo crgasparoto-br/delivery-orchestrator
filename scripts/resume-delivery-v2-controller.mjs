@@ -37,6 +37,8 @@ import { loadAiPricingCatalog, DEFAULT_AI_PRICING_FILE } from '../src/v2/ai-pric
 import { persistOperationalDeliveryMetrics } from '../src/v2/metrics-store.mjs';
 import { summarizeDeliveryAiUsage, renderDeliveryAiUsageSummary } from '../src/v2/ai-usage-summary.mjs';
 import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
+import { downloadGhAwAgentOutputArtifact } from '../src/v2/gh-aw-agent-output-artifact.mjs';
+import { classifyWorkflowStageFailure, decideWorkflowStageRetry } from '../src/v2/workflow-stage-recovery.mjs';
 import { attachLegacyAdoptionAuditRun, legacyAdoptionComment, parseLegacyAdoptionEnvelope, rearmLegacyAdoptionAudit, reconcileLegacyAdoption, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
 import { fetchImmutableCompareEvidence } from '../src/v2/github-audit-evidence.mjs';
@@ -663,6 +665,97 @@ async function waitWorkflowRun(repository, runId, token) {
     `${Math.floor((Date.now() - startedAt) / 1000)}s`
   );
 }
+
+const MAX_INFRA_STAGE_RETRIES = 1;
+
+async function runWorkflowStageWithInfrastructureRecovery({
+  stage,
+  dispatch,
+  orchestratorRepository,
+  actionsToken,
+  targetRepository = null,
+  targetPr = null,
+  expectedHeadSha = null,
+  targetReadToken = null,
+  onDispatch = null,
+  onObserve = null
+} = {}) {
+  let retriesUsed = 0;
+  let lastDispatchNonce = null;
+  const runs = [];
+
+  while (true) {
+    const dispatchNonce = createDispatchNonce();
+    lastDispatchNonce = dispatchNonce;
+
+    if (typeof onDispatch === 'function') {
+      await onDispatch({ dispatchNonce, retriesUsed });
+    }
+
+    let run = await dispatch(dispatchNonce);
+
+    if (typeof onObserve === 'function') {
+      await onObserve({ dispatchNonce, run, retriesUsed });
+    }
+
+    run = await waitWorkflowRun(orchestratorRepository, run.id, actionsToken);
+    runs.push(run);
+
+    if (run.conclusion === 'success') {
+      return Object.freeze({
+        run,
+        runs: Object.freeze([...runs]),
+        retriesUsed,
+        dispatchNonce: lastDispatchNonce
+      });
+    }
+
+    let materialHeadChanged = false;
+    if (targetRepository && targetPr && expectedHeadSha && targetReadToken) {
+      const currentPr = await fetchPullRequest(targetRepository, targetPr, targetReadToken);
+      materialHeadChanged =
+        String(currentPr.head.sha).toLowerCase() !==
+        String(expectedHeadSha).toLowerCase();
+    }
+
+    let workerEvidence = { hasPatch: null, agentOutput: null };
+    if (stage !== 'independent-audit' && run.conclusion === 'failure') {
+      workerEvidence = await downloadGhAwAgentOutputArtifact({
+        repository: orchestratorRepository,
+        runId: run.id,
+        token: actionsToken
+      });
+    }
+
+    const failure = classifyWorkflowStageFailure({
+      stage,
+      conclusion: run.conclusion,
+      materialHeadChanged,
+      hasPatch: workerEvidence.hasPatch,
+      agentOutput: workerEvidence.agentOutput
+    });
+
+    const retry = decideWorkflowStageRetry({
+      failure,
+      retriesUsed,
+      maxRetries: MAX_INFRA_STAGE_RETRIES
+    });
+
+    if (retry.action !== 'retry-same-stage') {
+      return Object.freeze({
+        run,
+        runs: Object.freeze([...runs]),
+        retriesUsed,
+        dispatchNonce: lastDispatchNonce,
+        failure,
+        retry
+      });
+    }
+
+    retriesUsed = retry.nextRetriesUsed;
+  }
+}
+
 
 async function waitHeadChange(repository, prNumber, previousSha, token) {
   const startedAt = Date.now();
