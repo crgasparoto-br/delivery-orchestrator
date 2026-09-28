@@ -566,6 +566,9 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
 
     if (recoveredWorkerRun?.status === 'completed' && recoveredWorkerRun?.conclusion !== 'success') {
       if (!observedFailureMatchesWorker) {
+        if (bootstrapLease.implementationAttempts >= policy.maxImplementationAttempts) {
+          return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-budget-exhausted', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
+        }
         return Object.freeze({
           runController: true,
           resumePr: null,
@@ -599,20 +602,30 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
       return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: null, status: 'retry-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'retry-initial-worker', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
     }
 
-    return Object.freeze({
-      runController: true,
-      resumePr: null,
-      recoverWorkerRunId: null,
-      reuseReservedAttempt: true,
-      status: 'resume-initial-delivery',
-      pullRequestNumber: null,
-      materialHeadSha: null,
-      staleStateDetected: false,
-      nextAction: 'dispatch-reserved-initial-attempt',
-      priorInitialAttempts: bootstrapLease.implementationAttempts,
-      dispatchNonce: bootstrapLease.dispatchNonce,
-      attempts: { implementation: bootstrapLease.implementationAttempts }
-    });
+    if (String(bootstrapLease.dispatchNonce ?? '').trim()) {
+      return Object.freeze({
+        runController: true,
+        resumePr: null,
+        recoverWorkerRunId: null,
+        reuseReservedAttempt: true,
+        status: 'resume-initial-delivery',
+        pullRequestNumber: null,
+        materialHeadSha: null,
+        staleStateDetected: false,
+        nextAction: 'dispatch-reserved-initial-attempt',
+        priorInitialAttempts: bootstrapLease.implementationAttempts,
+        dispatchNonce: bootstrapLease.dispatchNonce,
+        attempts: { implementation: bootstrapLease.implementationAttempts }
+      });
+    }
+
+    // Legacy reservations created before dispatch nonces cannot prove that an
+    // undispatched slot is safely reusable. Preserve their historical bounded
+    // retry/exhaustion behavior instead of fabricating a reusable reservation.
+    if (bootstrapLease.implementationAttempts >= policy.maxImplementationAttempts) {
+      return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-budget-exhausted', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
+    }
+    return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: null, status: 'retry-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'retry-initial-worker', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
   }
 
   return Object.freeze({
