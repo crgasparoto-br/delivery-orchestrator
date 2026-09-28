@@ -2164,19 +2164,45 @@ export async function main() {
           }
         );
 
-        auditRun = recovered ?? await dispatchCurrentAudit(auditDispatchNonce);
+        if (recovered) {
+          auditRun = recovered;
 
-        await persist({
-          nextAction: 'observe-audit',
-          auditRunId: auditRun.id,
-          auditDispatchNonce
-        });
+          await persist({
+            nextAction: 'observe-audit',
+            auditRunId: auditRun.id,
+            auditDispatchNonce
+          });
 
-        auditRun = await waitWorkflowRun(
-          orchestratorRepository,
-          auditRun.id,
-          actionsToken
-        );
+          auditRun = await waitWorkflowRun(
+            orchestratorRepository,
+            auditRun.id,
+            actionsToken
+          );
+        } else {
+          const auditStage = await runWorkflowStageWithInfrastructureRecovery({
+            stage: 'independent-audit',
+            orchestratorRepository,
+            actionsToken,
+            initialDispatchNonce: auditDispatchNonce,
+            onDispatch: async ({ dispatchNonce }) => {
+              await persist({
+                nextAction: 'dispatch-audit',
+                auditRunId: null,
+                auditDispatchNonce: dispatchNonce
+              });
+            },
+            onObserve: async ({ dispatchNonce, run }) => {
+              await persist({
+                nextAction: 'observe-audit',
+                auditRunId: run.id,
+                auditDispatchNonce: dispatchNonce
+              });
+            },
+            dispatch: (dispatchNonce) => dispatchCurrentAudit(dispatchNonce)
+          });
+
+          auditRun = auditStage.run;
+        }
       } else {
         throw new Error(
           'audit-pending state has inconsistent persisted audit identity'
