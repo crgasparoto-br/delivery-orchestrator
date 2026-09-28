@@ -711,10 +711,12 @@ async function runWorkflowStageWithInfrastructureRecovery({
   onObserve = null
 } = {}) {
   let retriesUsed = 0;
+  let lastDispatchNonce = null;
   const runs = [];
 
   while (true) {
     const dispatchNonce = createDispatchNonce();
+    lastDispatchNonce = dispatchNonce;
     if (typeof onDispatch === 'function') {
       await onDispatch({ dispatchNonce, retriesUsed });
     }
@@ -727,7 +729,7 @@ async function runWorkflowStageWithInfrastructureRecovery({
     runs.push(run);
 
     if (run.conclusion === 'success') {
-      return Object.freeze({ run, runs: Object.freeze([...runs]), retriesUsed });
+      return Object.freeze({ run, runs: Object.freeze([...runs]), retriesUsed, dispatchNonce: lastDispatchNonce });
     }
 
     let materialHeadChanged = false;
@@ -764,6 +766,7 @@ async function runWorkflowStageWithInfrastructureRecovery({
         run,
         runs: Object.freeze([...runs]),
         retriesUsed,
+        dispatchNonce: lastDispatchNonce,
         failure,
         retry
       });
@@ -1376,6 +1379,7 @@ export async function main() {
         })
       });
       let auditRun = auditStage.run;
+      const auditDispatchNonce = auditStage.dispatchNonce;
       auditRuns.push(...auditStage.runs);
       for (const failedAuditRun of auditStage.runs.slice(0, -1)) {
         if (failedAuditRun.conclusion === 'success') continue;
