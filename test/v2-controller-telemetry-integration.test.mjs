@@ -78,10 +78,10 @@ test('resume persists failed remediation worker observation before surfacing fai
   assert.ok(recoveredStatus < recoveredThrow);
 
   const dispatchedThrow = resumeController.indexOf(
-    'throw new Error(`remediation worker failed: ${worker.html_url}`);'
+    '`remediation worker failed: ${worker.html_url}; classification=${remediationStage.failure?.classification ?? \'unknown\'}`'
   );
   const dispatchedRecord = resumeController.lastIndexOf(
-    'await recordWorkerUsage(worker);',
+    'await recordWorkerUsage(remediationRun);',
     dispatchedThrow
   );
   const dispatchedPersist = resumeController.lastIndexOf(
