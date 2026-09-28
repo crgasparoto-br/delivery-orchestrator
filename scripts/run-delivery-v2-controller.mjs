@@ -23,7 +23,8 @@ import { summarizeDeliveryAiUsage, renderDeliveryAiUsageSummary } from '../src/v
 import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
 import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, markPullRequestReadyForReview, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
-import { selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
+import { parseTrustedJsonEnvelope, selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
+import { boundedPreMaterialRetryContext, classifyPreMaterialWorkerFailure, decidePreMaterialRetry } from '../src/v2/pre-material-recovery.mjs';
 import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-policy.mjs';
 import { withTransientFetchRetry } from '../src/v2/github-api-retry.mjs';
 import {
@@ -38,6 +39,7 @@ import {
 import { recordControllerTechnicalError } from '../src/v2/controller-summary.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
+const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
 const POLL_MS = Number(process.env.DELIVERY_V2_POLL_MS || 10000);
@@ -484,6 +486,137 @@ async function downloadWorkerUsage(orchestratorRepository, runId, token) {
   }
 }
 
+async function downloadInitialWorkerEvidence(orchestratorRepository, runId, token) {
+  try {
+    const payload = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${runId}/artifacts?per_page=100`, token);
+    const artifacts = payload.artifacts ?? [];
+    const artifact = artifacts.find((item) => item.name === 'agent')
+      ?? artifacts.find((item) => item.name === 'agent-output-fallback');
+    if (!artifact) return { hasPatch: null, agentOutput: null, evidenceRef: null, error: 'agent output artifact is unavailable' };
+
+    const response = await fetch(
+      `https://api.github.com/repos/${orchestratorRepository}/actions/artifacts/${artifact.id}/zip`,
+      { headers: headers(token) }
+    );
+    if (!response.ok) throw new Error(`agent output artifact download failed: ${response.status}`);
+
+    const root = await mkdtemp(path.join(tmpdir(), 'dv2-initial-evidence-'));
+    try {
+      const zip = path.join(root, 'agent.zip');
+      await writeFile(zip, Buffer.from(await response.arrayBuffer()));
+      execFileSync('unzip', ['-q', zip, '-d', root]);
+
+      const stack = [root];
+      let agentOutputPath = null;
+      const patchPaths = [];
+      while (stack.length) {
+        const current = stack.pop();
+        for (const entry of await readdir(current, { withFileTypes: true })) {
+          const full = path.join(current, entry.name);
+          if (entry.isDirectory()) stack.push(full);
+          else if (entry.name === 'agent_output.json') agentOutputPath = full;
+          else if (/^aw-.*\.patch$/.test(entry.name)) patchPaths.push(full);
+        }
+      }
+
+      if (!agentOutputPath) {
+        return { hasPatch: null, agentOutput: null, evidenceRef: artifact.archive_download_url, artifactId: artifact.id, error: 'agent_output.json is unavailable' };
+      }
+      return {
+        hasPatch: patchPaths.length > 0,
+        agentOutput: JSON.parse(await readFile(agentOutputPath, 'utf8')),
+        evidenceRef: artifact.archive_download_url,
+        artifactId: artifact.id
+      };
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  } catch (error) {
+    return { hasPatch: null, agentOutput: null, evidenceRef: null, error: error.message };
+  }
+}
+
+async function loadBootstrapLeaseForController({ repository, issueNumber, token }) {
+  const comments = [];
+  for (let page = 1; ; page += 1) {
+    const batch = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=100&page=${page}`, token);
+    comments.push(...batch);
+    if (batch.length < 100) break;
+  }
+  const parsed = parseTrustedJsonEnvelope(comments, {
+    marker: BOOTSTRAP_MARKER,
+    label: 'Delivery V2 bootstrap state',
+    trustedLogin: trustedCommentAuthorForRepository(repository)
+  });
+  if (!parsed) throw new Error('trusted Delivery V2 bootstrap state is unavailable');
+  return Object.freeze({ ...parsed.value, commentId: parsed.commentId });
+}
+
+async function persistBootstrapLeaseForController({ repository, lease, token }) {
+  const { commentId, ...value } = lease;
+  const id = positiveInteger(commentId, 'bootstrap commentId');
+  const body = `${BOOTSTRAP_MARKER}\n## Delivery V2 bootstrap state\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
+  await patchJson(`https://api.github.com/repos/${repository}/issues/comments/${id}`, token, { body });
+  return Object.freeze({ ...value, commentId: id });
+}
+
+async function recordInitialWorkerFailure({ repository, issueNumber, token, attempt, dispatchNonce, worker, failure, evidence }) {
+  const lease = await loadBootstrapLeaseForController({ repository, issueNumber, token });
+  if (Number(lease.implementationAttempts) !== Number(attempt)) throw new Error('bootstrap implementation attempt drift before recording worker failure');
+  if (String(lease.dispatchNonce ?? '') !== String(dispatchNonce ?? '')) throw new Error('bootstrap dispatch nonce drift before recording worker failure');
+
+  const observation = Object.freeze({
+    schemaVersion: 1,
+    attempt: Number(attempt),
+    workerRunId: Number(worker.id),
+    workerConclusion: worker.conclusion ?? null,
+    classification: failure.classification,
+    reason: failure.reason,
+    failureStage: failure.failureStage,
+    failureClass: failure.failureClass,
+    recoverable: failure.recoverable === true,
+    hasPatch: evidence.hasPatch === false ? false : evidence.hasPatch === true ? true : null,
+    evidenceRef: evidence.evidenceRef ?? worker.html_url ?? null
+  });
+  return persistBootstrapLeaseForController({
+    repository,
+    token,
+    lease: {
+      ...lease,
+      workerRunId: Number(worker.id),
+      lastFailure: observation,
+      status: failure.recoverable === true ? 'reserved-initial-attempt' : 'escalated-initial-nonrecoverable'
+    }
+  });
+}
+
+async function reserveNextInitialAttempt({ repository, issueNumber, token, currentAttempt, maxAttempts, workerWorkflow, failure, workerRunId }) {
+  const decision = decidePreMaterialRetry({ failure, currentAttempt, maxAttempts });
+  if (decision.action !== 'retry') return Object.freeze({ decision });
+
+  const lease = await loadBootstrapLeaseForController({ repository, issueNumber, token });
+  if (lease.status !== 'reserved-initial-attempt') throw new Error('same-cycle retry requires reserved-initial-attempt bootstrap state');
+  if (Number(lease.implementationAttempts) !== Number(currentAttempt)) throw new Error('bootstrap implementation attempt drift before same-cycle retry reservation');
+  if (Number(lease.lastFailure?.workerRunId) !== Number(workerRunId)) throw new Error('bootstrap failure observation does not match failed worker before retry reservation');
+
+  const dispatchNonce = createDispatchNonce();
+  const retryContext = boundedPreMaterialRetryContext({ failure, previousAttempt: currentAttempt, previousWorkerRunId: workerRunId });
+  const reserved = await persistBootstrapLeaseForController({
+    repository,
+    token,
+    lease: {
+      ...lease,
+      implementationAttempts: decision.nextAttempt,
+      status: 'reserved-initial-attempt',
+      workerRunId: null,
+      workerWorkflow,
+      dispatchNonce,
+      retryContext
+    }
+  });
+  return Object.freeze({ decision, lease: reserved, dispatchNonce, retryContext });
+}
+
 function checkEvidence(check, sourceRun, sha) {
   return [{
     name: check.name,
@@ -628,36 +761,84 @@ export async function main() {
   const auditRuns = [];
   const evidenceRefs = [];
   let initialDispatchAt = Date.now();
-  let worker;
+  let currentInitialAttempt = initialAttempts;
+  let currentDispatchNonce = initialDispatchNonce;
+  let currentRetryContext = '';
+  let observability = createControllerObservability({ startedAtMs: startedAt });
+  let worker = null;
+
   if (recoverWorkerRunId) {
     worker = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${recoverWorkerRunId}`, actionsToken);
     initialDispatchAt = Date.parse(worker.created_at ?? worker.run_started_at ?? new Date().toISOString());
   } else {
-    worker = await dispatchWorker({ orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch, targetRef: baseBranch, token: actionsToken, dispatchNonce: initialDispatchNonce });
+    const bootstrapLease = await loadBootstrapLeaseForController({ repository: targetRepository, issueNumber, token: targetReadToken });
+    if (String(bootstrapLease.dispatchNonce ?? '') === currentDispatchNonce && bootstrapLease.retryContext && typeof bootstrapLease.retryContext === 'object') {
+      currentRetryContext = JSON.stringify(bootstrapLease.retryContext);
+    }
   }
-  worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
-  workerRuns.push(worker);
-  const workerUsage = await downloadWorkerUsage(orchestratorRepository, worker.id, actionsToken);
-  let observability = recordControllerProviderObservation(createControllerObservability({ startedAtMs: startedAt }), {
-    runId: worker.id,
-    stage: 'implementation',
-    phase: 'implementation',
-    provider,
-    role: 'implementation-worker',
-    worker: initialWorkerIdentity,
-    workflowRunId: worker.id,
-    implementationAttempt: initialAttempts,
-    remediationAttempt: 0,
-    startedAtIso: worker.run_started_at ?? null,
-    endedAtIso: worker.updated_at ?? null,
-    terminalState: worker.conclusion ?? null,
-    usage: workerUsage.usage,
-    rawUsagePayload: workerUsage.rawUsagePayload,
-    pricingCatalog,
-    evidenceRef: workerUsage.evidenceRef ?? worker.html_url
-  });
-  if (workerUsage.evidenceRef) evidenceRefs.push(workerUsage.evidenceRef);
-  if (worker.conclusion !== 'success') throw new Error(`initial implementation worker failed: ${worker.html_url}`);
+
+  for (;;) {
+    if (!worker) {
+      worker = await dispatchWorker({
+        orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch,
+        targetRef: baseBranch, remediationContext: currentRetryContext, token: actionsToken, dispatchNonce: currentDispatchNonce
+      });
+    }
+
+    worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
+    workerRuns.push(worker);
+    const workerUsage = await downloadWorkerUsage(orchestratorRepository, worker.id, actionsToken);
+    observability = recordControllerProviderObservation(observability, {
+      runId: worker.id,
+      stage: 'implementation',
+      phase: 'implementation',
+      provider,
+      role: 'implementation-worker',
+      worker: initialWorkerIdentity,
+      workflowRunId: worker.id,
+      implementationAttempt: currentInitialAttempt,
+      remediationAttempt: 0,
+      startedAtIso: worker.run_started_at ?? null,
+      endedAtIso: worker.updated_at ?? null,
+      terminalState: worker.conclusion ?? null,
+      usage: workerUsage.usage,
+      rawUsagePayload: workerUsage.rawUsagePayload,
+      pricingCatalog,
+      evidenceRef: workerUsage.evidenceRef ?? worker.html_url
+    });
+    if (workerUsage.evidenceRef) evidenceRefs.push(workerUsage.evidenceRef);
+    if (worker.conclusion === 'success') break;
+
+    const materialEvidence = await downloadInitialWorkerEvidence(orchestratorRepository, worker.id, actionsToken);
+    if (materialEvidence.evidenceRef) evidenceRefs.push(materialEvidence.evidenceRef);
+    const failure = classifyPreMaterialWorkerFailure({
+      workerConclusion: worker.conclusion,
+      hasPatch: materialEvidence.hasPatch,
+      agentOutput: materialEvidence.agentOutput
+    });
+
+    await recordInitialWorkerFailure({
+      repository: targetRepository, issueNumber, token: targetWriteToken, attempt: currentInitialAttempt,
+      dispatchNonce: currentDispatchNonce, worker, failure, evidence: materialEvidence
+    });
+
+    const retry = await reserveNextInitialAttempt({
+      repository: targetRepository, issueNumber, token: targetWriteToken, currentAttempt: currentInitialAttempt,
+      maxAttempts: plan.implementation.maxAttempts, workerWorkflow: initialWorkerIdentity, failure, workerRunId: worker.id
+    });
+
+    if (retry.decision.action === 'fail-closed') {
+      throw new Error(`initial implementation worker failed without eligible pre-material recovery: ${worker.html_url}`);
+    }
+    if (retry.decision.action === 'budget-exhausted') {
+      throw new Error(`initial implementation budget exhausted after recoverable pre-material failure: ${worker.html_url}`);
+    }
+
+    currentInitialAttempt = retry.decision.nextAttempt;
+    currentDispatchNonce = retry.dispatchNonce;
+    currentRetryContext = JSON.stringify(retry.retryContext);
+    worker = null;
+  }
 
   let pullRequest = await findManagedPullRequest({ repository: targetRepository, issueNumber, baseBranch, since: initialDispatchAt, token: targetReadToken });
   let materialHeadSha = String(pullRequest.head.sha).toLowerCase();
@@ -665,7 +846,7 @@ export async function main() {
   changedPaths = await fetchChangedPaths(targetRepository, pullRequest.number, targetReadToken);
   plan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk, changedPaths, repositoryPolicy });
   let state = createOperationalDelivery({ plan, materialHeadSha });
-  state = Object.freeze({ ...state, implementationAttempts: Math.max(state.implementationAttempts, initialAttempts) });
+  state = Object.freeze({ ...state, implementationAttempts: Math.max(state.implementationAttempts, currentInitialAttempt) });
   let classifier = await classifierIdentity(targetRepository, materialHeadSha, targetReadToken);
   let latestCheck = null;
   let latestSourceRun = null;
