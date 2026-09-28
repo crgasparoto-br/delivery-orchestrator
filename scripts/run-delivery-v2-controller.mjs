@@ -25,6 +25,7 @@ import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePrevie
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
 import { parseTrustedJsonEnvelope, selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
 import { boundedPreMaterialRetryContext, classifyPreMaterialWorkerFailure, decidePreMaterialRetry } from '../src/v2/pre-material-recovery.mjs';
+import { classifyWorkflowStageFailure, decideWorkflowStageRetry } from '../src/v2/workflow-stage-recovery.mjs';
 import { normalizeControllerTargetPolicy } from '../src/v2/controller-target-policy.mjs';
 import { withTransientFetchRetry } from '../src/v2/github-api-retry.mjs';
 import {
@@ -693,6 +694,83 @@ async function detectBootstrapControllerRunMismatch({
   }
 
   return null;
+}
+
+const MAX_INFRA_STAGE_RETRIES = 1;
+
+async function runWorkflowStageWithInfrastructureRecovery({
+  stage,
+  dispatch,
+  orchestratorRepository,
+  actionsToken,
+  targetRepository = null,
+  targetPr = null,
+  expectedHeadSha = null,
+  targetReadToken = null,
+  onDispatch = null,
+  onObserve = null
+} = {}) {
+  let retriesUsed = 0;
+  const runs = [];
+
+  while (true) {
+    const dispatchNonce = createDispatchNonce();
+    if (typeof onDispatch === 'function') {
+      await onDispatch({ dispatchNonce, retriesUsed });
+    }
+
+    let run = await dispatch(dispatchNonce);
+    if (typeof onObserve === 'function') {
+      await onObserve({ dispatchNonce, run, retriesUsed });
+    }
+    run = await waitWorkflowRun(orchestratorRepository, run.id, actionsToken);
+    runs.push(run);
+
+    if (run.conclusion === 'success') {
+      return Object.freeze({ run, runs: Object.freeze([...runs]), retriesUsed });
+    }
+
+    let materialHeadChanged = false;
+    if (targetRepository && targetPr && expectedHeadSha && targetReadToken) {
+      const currentPr = await fetchPullRequest(targetRepository, targetPr, targetReadToken);
+      materialHeadChanged =
+        String(currentPr.head.sha).toLowerCase() !== String(expectedHeadSha).toLowerCase();
+    }
+
+    let workerEvidence = { hasPatch: null, agentOutput: null };
+    if (stage !== 'independent-audit' && run.conclusion === 'failure') {
+      workerEvidence = await downloadInitialWorkerEvidence(
+        orchestratorRepository,
+        run.id,
+        actionsToken
+      );
+    }
+
+    const failure = classifyWorkflowStageFailure({
+      stage,
+      conclusion: run.conclusion,
+      materialHeadChanged,
+      hasPatch: workerEvidence.hasPatch,
+      agentOutput: workerEvidence.agentOutput
+    });
+    const retry = decideWorkflowStageRetry({
+      failure,
+      retriesUsed,
+      maxRetries: MAX_INFRA_STAGE_RETRIES
+    });
+
+    if (retry.action !== 'retry-same-stage') {
+      return Object.freeze({
+        run,
+        runs: Object.freeze([...runs]),
+        retriesUsed,
+        failure,
+        retry
+      });
+    }
+
+    retriesUsed = retry.nextRetriesUsed;
+  }
 }
 
 async function recordInitialWorkerFailure({ repository, issueNumber, token, attempt, dispatchNonce, worker, failure, evidence }) {
