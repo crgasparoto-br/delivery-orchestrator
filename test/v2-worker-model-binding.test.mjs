@@ -98,3 +98,27 @@ test('every worker authorizes the exact model expression executed by its engine'
     }
   }
 });
+
+
+test('initial worker authorizes only the controller run persisted as active authority', () => {
+  const envelope = {
+    ...bootstrapEnvelope('model-a'),
+    controllerRunId: 44,
+    controllerRunHistory: [21]
+  };
+
+  assert.doesNotThrow(() => validateAuthorizationEnvelope({
+    envelope,
+    ...baseArgs({ controllerRunId: 44 })
+  }));
+
+  assert.throws(() => validateAuthorizationEnvelope({
+    envelope,
+    ...baseArgs({ controllerRunId: 21 })
+  }), /bootstrap controller run mismatch/);
+
+  assert.throws(() => validateAuthorizationEnvelope({
+    envelope,
+    ...baseArgs({ controllerRunId: 45 })
+  }), /bootstrap controller run mismatch/);
+});
