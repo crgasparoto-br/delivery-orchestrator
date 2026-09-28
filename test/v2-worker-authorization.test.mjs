@@ -231,16 +231,40 @@ test('technical hygiene promotion persists exact authorization before waiting fo
     assert.match(body, /hygieneRunId: runId/);
 
     const observeAuthorization = body.indexOf("phase: 'observe'");
-    const waitForWorker = body.indexOf(
-      'promotionRun = await waitWorkflowRun(orchestratorRepository, promotionRun.id, actionsToken)'
-    );
-
     assert.ok(observeAuthorization >= 0, `${path} must persist observe authorization`);
-    assert.ok(waitForWorker >= 0, `${path} must wait for promotion worker`);
-    assert.ok(
-      observeAuthorization < waitForWorker,
-      `${path} must persist exact hygiene run authorization before waiting`
-    );
+
+    if (body.includes('async function runWorkflowStageWithInfrastructureRecovery')) {
+      const helperStart = body.indexOf('async function runWorkflowStageWithInfrastructureRecovery');
+      const helperEnd = body.indexOf('\n}\n\n', helperStart);
+      const helper = body.slice(helperStart, helperEnd + 3);
+      const helperObserve = helper.indexOf('await onObserve');
+      const helperWaitAfterObserve = helper.indexOf(
+        'run = await waitWorkflowRun(orchestratorRepository, run.id, actionsToken)',
+        helperObserve
+      );
+      assert.ok(helperObserve >= 0, `${path} recovery helper must persist observe authorization`);
+      assert.ok(
+        helperWaitAfterObserve >= 0,
+        `${path} recovery helper must wait for a newly dispatched worker after authorization`
+      );
+      assert.ok(
+        helperObserve < helperWaitAfterObserve,
+        `${path} recovery helper must authorize a newly dispatched run before waiting`
+      );
+      assert.match(
+        body,
+        /onObserve: async \(\{ dispatchNonce, run, retriesUsed \}\)[\s\S]*?phase: 'observe'[\s\S]*?runId: run\.id[\s\S]*?hygieneInfrastructureRetriesUsed: retriesUsed/
+      );
+    } else {
+      const waitForWorker = body.indexOf(
+        'promotionRun = await waitWorkflowRun(orchestratorRepository, promotionRun.id, actionsToken)'
+      );
+      assert.ok(waitForWorker >= 0, `${path} must wait for promotion worker`);
+      assert.ok(
+        observeAuthorization < waitForWorker,
+        `${path} must persist exact hygiene run authorization before waiting`
+      );
+    }
   }
 });
 
