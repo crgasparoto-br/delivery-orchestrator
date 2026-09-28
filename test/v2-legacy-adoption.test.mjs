@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { evaluateReentry, persistReentryMutation, terminalBootstrapLease } from '../scripts/guard-delivery-v2-reentry.mjs';
+import { buildReentryGuardFailure, evaluateReentry, persistReentryMutation, terminalBootstrapLease } from '../scripts/guard-delivery-v2-reentry.mjs';
 import { auditProducerInputs, legacyTechnicalHygieneContext, persistLegacyRefreeze } from '../scripts/resume-delivery-v2-controller.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
@@ -264,6 +264,112 @@ test('attempt provenance is preserved, never defaulted, decremented or consumed 
   const altered = structuredClone(data.record);
   altered.attempts.audit = 0;
   assert.throws(() => normalizeLegacyAdoption(altered), /cannot infer historical audit/);
+});
+
+test('issue 283: material PR adopts supported historical nonrecoverable bootstrap as provenance without rearming it', () => {
+  const historical = {
+    ...bootstrap,
+    implementationAttempts: 2,
+    status: 'escalated-initial-nonrecoverable',
+    workerRunId: 36406891567,
+    lastFailure: {
+      attempt: 2,
+      workerRunId: 36406891567,
+      workerConclusion: 'failure',
+      classification: 'ambiguous-agent-output',
+      reason: 'structured agent output is ambiguous or contains framework errors',
+      failureStage: 'pre-material',
+      failureClass: 'unknown',
+      recoverable: false,
+      hasPatch: false
+    }
+  };
+
+  const decision = evaluateReentry({
+    pullRequest: pr,
+    bootstrapLease: historical,
+    targetRepository: repository,
+    issueNumber: 613,
+    baseBranch: 'main',
+    provider: 'codex'
+  });
+
+  assert.equal(decision.status, 'legacy-adopted');
+  assert.equal(decision.resumePr, 660);
+  assert.deepEqual(decision.attempts, { implementation: 2, audit: null, auditRemediation: null });
+  assert.equal(decision.dispatchNonce, undefined);
+  assert.equal(decision.priorInitialAttempts, undefined);
+  assert.equal(decision.recoverWorkerRunId, undefined);
+  assert.equal(decision.adoption.adoption.bootstrapProvenance.status, 'escalated-initial-nonrecoverable');
+  assert.equal(decision.adoption.adoption.bootstrapProvenance.classification, 'historical-adoptable');
+  assert.equal(decision.adoption.adoption.bootstrapProvenance.reason, 'historical-nonrecoverable-provenance');
+  assert.equal(decision.adoption.adoption.bootstrapProvenance.controllerRunId, historical.controllerRunId);
+  assert.equal(decision.adoption.adoption.bootstrapProvenance.workerRunId, historical.workerRunId);
+  assert.deepEqual(decision.adoption.adoption.bootstrapProvenance.lastFailure, historical.lastFailure);
+  assert.match(decision.adoption.adoption.attemptEvidenceRef, /issues\/613#issuecomment-10$/);
+
+  const resumed = evaluateReentry({
+    pullRequest: pr,
+    adoptionEnvelope: { adoption: decision.adoption },
+    targetRepository: repository,
+    issueNumber: 613,
+    baseBranch: 'main',
+    provider: 'codex'
+  });
+  assert.equal(resumed.status, 'legacy-adopted');
+  assert.deepEqual(resumed.adoption, decision.adoption, 're-entry reuses the persisted adoption instead of creating a second adoption');
+  assert.deepEqual(resumed.attempts, decision.attempts);
+});
+
+test('issue 283: legacy adoption bootstrap allowlist remains closed and failures are machine-readable', () => {
+  const unknown = { ...bootstrap, status: 'future-terminal-state' };
+  let failure;
+  try {
+    createLegacyAdoption({ ...input, bootstrapLease: unknown });
+    assert.fail('unknown bootstrap state must fail closed');
+  } catch (error) {
+    failure = error;
+  }
+
+  assert.equal(failure.code, 'LEGACY_BOOTSTRAP_NOT_ADOPTABLE');
+  assert.equal(failure.bootstrapStatus, 'future-terminal-state');
+  assert.equal(failure.bootstrapClassification, 'invalid');
+  assert.equal(failure.bootstrapReason, 'unsupported-bootstrap-status');
+  assert.equal(failure.adoptionPersisted, false);
+
+  const artifact = buildReentryGuardFailure(failure, {
+    repository,
+    issueNumber: 613,
+    pullRequest: pr,
+    bootstrapLease: unknown
+  });
+  assert.equal(artifact.status, 'reentry-guard-failed');
+  assert.equal(artifact.repository, repository);
+  assert.equal(artifact.issueNumber, 613);
+  assert.equal(artifact.pullRequestNumber, pr.number);
+  assert.equal(artifact.materialHeadSha, pr.head.sha);
+  assert.deepEqual(artifact.reentry, {
+    bootstrapStatus: 'future-terminal-state',
+    bootstrapClassification: 'invalid',
+    reason: 'unsupported-bootstrap-status',
+    adoptionPersisted: false,
+    retryPersisted: false
+  });
+});
+
+test('issue 283: supported historical exhaustion keeps its existing adoption semantics and active lease stays active', () => {
+  const exhausted = createLegacyAdoption({
+    ...input,
+    bootstrapLease: { ...bootstrap, status: 'escalated-initial-budget-exhausted' }
+  });
+  assert.equal(exhausted.attempts.implementation, bootstrap.implementationAttempts);
+  assert.equal(exhausted.adoption.bootstrapProvenance.classification, 'historical-adoptable');
+  assert.equal(exhausted.adoption.bootstrapProvenance.reason, 'historical-budget-exhausted-provenance');
+
+  const active = createLegacyAdoption({ ...input, bootstrapLease: bootstrap });
+  assert.equal(active.adoption.bootstrapProvenance.classification, 'active');
+  assert.equal(active.adoption.bootstrapProvenance.reason, 'active-bootstrap-lease');
+  assert.equal(active.attempts.implementation, bootstrap.implementationAttempts);
 });
 
 test('issue 149: pre-149 persisted adoption checkpoints upgrade in memory without fabricating historical counters', () => {
