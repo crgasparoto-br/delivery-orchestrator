@@ -172,6 +172,7 @@ const NEXT_ACTION_GUIDANCE = Object.freeze({
   implement: { kind: RESUME, detail: 'A implementacao ainda precisa ser despachada.' },
   'continue-implementation': { kind: RESUME, detail: 'A implementacao em andamento precisa ser retomada.' },
   'dispatch-initial-worker': { kind: RESUME, detail: 'A implementacao inicial ainda precisa ser despachada.' },
+  'dispatch-reserved-initial-attempt': { kind: RESUME, detail: 'Uma tentativa inicial ja reservada precisa ser despachada sem consumir outro slot.' },
   'dispatch-material-worker': { kind: RESUME, detail: 'A implementacao inicial ainda precisa ser despachada.' },
   'dispatch-implementation': { kind: RESUME, detail: 'A implementacao ainda precisa ser despachada.' },
   'await-material-head': { kind: RESUME, detail: 'Aguardando a publicacao do HEAD material pela implementacao.' },

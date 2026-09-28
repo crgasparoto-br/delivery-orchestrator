@@ -122,7 +122,7 @@ jobs:
 
       - name: Reserve initial implementation attempt
         id: reserve
-        if: steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr == '' && steps.reentry.outputs.recover_worker_run_id == ''
+        if: steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr == '' && steps.reentry.outputs.recover_worker_run_id == '' && steps.reentry.outputs.reuse_reserved_attempt != 'true'
         env:
           DELIVERY_V2_PRIOR_INITIAL_ATTEMPTS: ${{ steps.reentry.outputs.prior_initial_attempts }}
           DELIVERY_V2_RECOVERY_REASON: ${{ steps.reentry.outputs.recovery_reason }}

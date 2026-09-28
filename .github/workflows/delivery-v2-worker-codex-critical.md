@@ -17,6 +17,9 @@ permissions:
   actions: read
   contents: read
   issues: read
+jobs:
+  detection:
+    if: needs.agent.outputs.has_patch == 'true'
 env:
   GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST: "${{ github.event.inputs.target_pr == '' && 'true' || 'false' }}"
   GH_AW_CODEX_CONTEXT_REBUILD_CIRCUIT_BREAKER: "true"

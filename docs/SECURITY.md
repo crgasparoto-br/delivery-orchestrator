@@ -1,6 +1,6 @@
 # Security and independence model
 
-Delivery V2 treats GitHub and deterministic code as the control plane. AI execution is bounded by explicit provider/model/risk policy and cannot grant itself additional attempts, credentials, release authority, another provider, or another model. The only bounded exception is controller-owned pre-material recovery: the deterministic controller may authorize one recovery dispatch after a verified control-plane SHA change when trusted evidence proves an eligible pre-material infrastructure/unknown failure.
+Delivery V2 treats GitHub and deterministic code as the control plane. AI execution is bounded by explicit provider/model/risk policy and cannot grant itself additional attempts, credentials, release authority, another provider, or another model. The controller-owned pre-material recovery has two different budget semantics. A narrowly classified context-rebuild circuit-breaker failure with authoritative `has_patch=false` may consume the next ordinary implementation slot immediately in the same controller cycle, with a fresh nonce and durable pre-dispatch reservation. Separately, the deterministic controller may authorize one exceptional recovery dispatch after a verified control-plane SHA change when trusted evidence proves an eligible exhausted pre-material infrastructure/unknown failure. Neither mechanism raises the configured ceiling, and ambiguous/nonrecoverable evidence fails closed.
 
 ## Deterministic control plane
 

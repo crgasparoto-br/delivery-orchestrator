@@ -492,9 +492,25 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
         }
       });
     }
+    if (bootstrapLease.status === 'escalated-initial-nonrecoverable') {
+      return Object.freeze({
+        runController: false,
+        resumePr: null,
+        recoverWorkerRunId: null,
+        status: 'escalated-initial-nonrecoverable',
+        pullRequestNumber: null,
+        materialHeadSha: null,
+        staleStateDetected: false,
+        nextAction: 'human-escalation',
+        priorInitialAttempts: bootstrapLease.implementationAttempts,
+        attempts: { implementation: bootstrapLease.implementationAttempts }
+      });
+    }
+
     if (recoveredWorkerRun && !['completed'].includes(String(recoveredWorkerRun.status ?? ''))) {
       return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: Number(recoveredWorkerRun.id), status: 'resume-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'recover-initial-attempt', priorInitialAttempts: bootstrapLease.implementationAttempts, dispatchNonce: bootstrapLease.dispatchNonce, attempts: { implementation: bootstrapLease.implementationAttempts } });
     }
+
     if (recoveredWorkerRun?.status === 'completed' && recoveredWorkerRun?.conclusion === 'success') {
       const recovery = recoveryContextForSuccessfulBootstrapWithoutPr({
         bootstrapLease,
@@ -539,6 +555,73 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
         }
       });
     }
+
+    const observedFailure = (
+      bootstrapLease.lastFailure
+      && Number(bootstrapLease.lastFailure.attempt) === Number(bootstrapLease.implementationAttempts)
+    ) ? bootstrapLease.lastFailure : null;
+    const observedFailureMatchesWorker = observedFailure && recoveredWorkerRun
+      ? Number(observedFailure.workerRunId) === Number(recoveredWorkerRun.id)
+      : Boolean(observedFailure);
+
+    if (recoveredWorkerRun?.status === 'completed' && recoveredWorkerRun?.conclusion !== 'success') {
+      if (!observedFailureMatchesWorker) {
+        if (bootstrapLease.implementationAttempts >= policy.maxImplementationAttempts) {
+          return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-budget-exhausted', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
+        }
+        return Object.freeze({
+          runController: true,
+          resumePr: null,
+          recoverWorkerRunId: Number(recoveredWorkerRun.id),
+          status: 'resume-initial-delivery',
+          pullRequestNumber: null,
+          materialHeadSha: null,
+          staleStateDetected: false,
+          nextAction: 'recover-initial-attempt',
+          priorInitialAttempts: bootstrapLease.implementationAttempts,
+          dispatchNonce: bootstrapLease.dispatchNonce,
+          attempts: { implementation: bootstrapLease.implementationAttempts }
+        });
+      }
+      if (observedFailure.recoverable !== true) {
+        return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-nonrecoverable', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
+      }
+      if (bootstrapLease.implementationAttempts >= policy.maxImplementationAttempts) {
+        return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-budget-exhausted', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
+      }
+      return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: null, status: 'retry-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'retry-initial-worker', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
+    }
+
+    if (!recoveredWorkerRun && observedFailure) {
+      if (observedFailure.recoverable !== true) {
+        return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-nonrecoverable', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
+      }
+      if (bootstrapLease.implementationAttempts >= policy.maxImplementationAttempts) {
+        return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-budget-exhausted', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
+      }
+      return Object.freeze({ runController: true, resumePr: null, recoverWorkerRunId: null, status: 'retry-initial-delivery', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'retry-initial-worker', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
+    }
+
+    if (String(bootstrapLease.dispatchNonce ?? '').trim()) {
+      return Object.freeze({
+        runController: true,
+        resumePr: null,
+        recoverWorkerRunId: null,
+        reuseReservedAttempt: true,
+        status: 'resume-initial-delivery',
+        pullRequestNumber: null,
+        materialHeadSha: null,
+        staleStateDetected: false,
+        nextAction: 'dispatch-reserved-initial-attempt',
+        priorInitialAttempts: bootstrapLease.implementationAttempts,
+        dispatchNonce: bootstrapLease.dispatchNonce,
+        attempts: { implementation: bootstrapLease.implementationAttempts }
+      });
+    }
+
+    // Legacy reservations created before dispatch nonces cannot prove that an
+    // undispatched slot is safely reusable. Preserve their historical bounded
+    // retry/exhaustion behavior instead of fabricating a reusable reservation.
     if (bootstrapLease.implementationAttempts >= policy.maxImplementationAttempts) {
       return Object.freeze({ runController: false, resumePr: null, recoverWorkerRunId: null, status: 'escalated-initial-budget-exhausted', pullRequestNumber: null, materialHeadSha: null, staleStateDetected: false, nextAction: 'human-escalation', priorInitialAttempts: bootstrapLease.implementationAttempts, attempts: { implementation: bootstrapLease.implementationAttempts } });
     }
@@ -610,6 +693,7 @@ async function writeGithubOutput(decision) {
     `prior_initial_attempts=${decision.priorInitialAttempts ?? 0}`,
     `recover_worker_run_id=${decision.recoverWorkerRunId ?? ''}`,
     `dispatch_nonce=${decision.dispatchNonce ?? ''}`,
+    `reuse_reserved_attempt=${decision.reuseReservedAttempt ? 'true' : 'false'}`,
     `adoption_head=${decision.adoption ? decision.materialHeadSha : ''}`,
     `recovery_reason=${decision.recovery?.reason ?? ''}`,
     `recovery_previous_attempts=${decision.recovery?.previousImplementationAttempts ?? ''}`,
@@ -639,11 +723,13 @@ export function terminalBootstrapLease(
     ...(controllerHeadSha ? { controllerHeadSha } : {}),
     status: decision.status,
     workerRunId: recoveredWorkerRun?.id ?? value.workerRunId,
-    failureClass: ['timed_out', 'startup_failure', 'cancelled'].includes(
-      recoveredWorkerRun?.conclusion
-    ) ? 'infrastructure' : 'unknown',
-    failureStage: 'pre-material',
-    workerConclusion: recoveredWorkerRun?.conclusion ?? null
+    failureClass: value.lastFailure?.failureClass ?? (
+      ['timed_out', 'startup_failure', 'cancelled'].includes(
+        recoveredWorkerRun?.conclusion
+      ) ? 'infrastructure' : 'unknown'
+    ),
+    failureStage: value.lastFailure?.failureStage ?? 'pre-material',
+    workerConclusion: value.lastFailure?.workerConclusion ?? recoveredWorkerRun?.conclusion ?? null
   };
 }
 
