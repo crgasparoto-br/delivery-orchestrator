@@ -247,7 +247,7 @@ test('technical hygiene promotion persists exact authorization before waiting fo
       );
       assert.match(
         body,
-        /onObserve: async \(\{ dispatchNonce, run \}\)[\s\S]*?phase: 'observe'[\s\S]*?runId: run\.id/
+        /onObserve: async \(\{ dispatchNonce, run, retriesUsed \}\)[\s\S]*?phase: 'observe'[\s\S]*?runId: run\.id[\s\S]*?hygieneInfrastructureRetriesUsed: retriesUsed/
       );
     } else {
       const waitForWorker = body.indexOf(
