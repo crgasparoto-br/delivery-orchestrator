@@ -520,3 +520,114 @@ export async function publishReleaseStatus({ repository, sha, context, state, de
   if (!response.ok) throw new Error(`GitHub API ${response.status} POST commit status: ${await response.text()}`);
   return response.json();
 }
+
+export async function markPullRequestReadyForReview({
+  repository,
+  pullRequest,
+  materialHeadSha,
+  baseSha,
+  token
+} = {}) {
+  const repo = requiredString(repository, 'repository');
+  if (!pullRequest || Array.isArray(pullRequest) || typeof pullRequest !== 'object') {
+    throw new Error('pullRequest is required');
+  }
+
+  const pullRequestNumber = requiredPositiveInteger(pullRequest.number, 'pullRequest.number');
+  const expectedHead = requiredSha(materialHeadSha, 'materialHeadSha');
+  const expectedBase = requiredSha(baseSha, 'baseSha');
+  const expectedPullRequestId = requiredString(pullRequest.node_id, 'pullRequest.node_id');
+  const currentPullRequest = await fetchJson(
+    `https://api.github.com/repos/${repo}/pulls/${pullRequestNumber}`,
+    token
+  );
+
+  releaseIdentityFromPullRequest(currentPullRequest, {
+    materialHeadSha: expectedHead,
+    baseSha: expectedBase
+  });
+
+  if (requiredPositiveInteger(currentPullRequest.number, 'current pullRequest.number') !== pullRequestNumber) {
+    throw new Error('ready-for-review pull request number drift detected');
+  }
+
+  const pullRequestId = requiredString(currentPullRequest.node_id, 'current pullRequest.node_id');
+  if (pullRequestId !== expectedPullRequestId) {
+    throw new Error('ready-for-review pull request identity drift detected');
+  }
+
+  if (currentPullRequest.draft !== true) {
+    return Object.freeze({ changed: false, pullRequestNumber, draft: false });
+  }
+
+  const response = await fetch('https://api.github.com/graphql', {
+    method: 'POST',
+    headers: { ...githubHeaders(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query: 'mutation MarkPullRequestReadyForReview($pullRequestId: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) { pullRequest { number isDraft } } }',
+      variables: { pullRequestId }
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub API ${response.status} mark pull request ready for review: ${await response.text()}`);
+  }
+
+  const payload = await response.json();
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`GitHub GraphQL mark pull request ready for review failed: ${payload.errors.map((error) => error?.message ?? 'unknown error').join('; ')}`);
+  }
+
+  const updated = payload?.data?.markPullRequestReadyForReview?.pullRequest;
+  if (Number(updated?.number) !== pullRequestNumber || updated?.isDraft !== false) {
+    throw new Error('GitHub did not confirm pull request ready-for-review transition');
+  }
+
+  try {
+    const confirmedPullRequest = await fetchJson(
+      `https://api.github.com/repos/${repo}/pulls/${pullRequestNumber}`,
+      token
+    );
+    releaseIdentityFromPullRequest(confirmedPullRequest, {
+      materialHeadSha: expectedHead,
+      baseSha: expectedBase
+    });
+    if (requiredPositiveInteger(confirmedPullRequest.number, 'confirmed pullRequest.number') !== pullRequestNumber) {
+      throw new Error('ready-for-review pull request number drift detected after mutation');
+    }
+    if (requiredString(confirmedPullRequest.node_id, 'confirmed pullRequest.node_id') !== pullRequestId) {
+      throw new Error('ready-for-review pull request identity drift detected after mutation');
+    }
+    if (confirmedPullRequest.draft !== false) {
+      throw new Error('ready-for-review pull request returned to draft after mutation');
+    }
+  } catch (verificationError) {
+    const rollbackResponse = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: { ...githubHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: 'mutation ConvertPullRequestToDraft($pullRequestId: ID!) { convertPullRequestToDraft(input: { pullRequestId: $pullRequestId }) { pullRequest { number isDraft } } }',
+        variables: { pullRequestId }
+      })
+    });
+    if (!rollbackResponse.ok) {
+      throw new Error(
+        `ready-for-review post-mutation identity verification failed and draft rollback failed: ${verificationError.message}; GitHub API ${rollbackResponse.status}: ${await rollbackResponse.text()}`
+      );
+    }
+    const rollbackPayload = await rollbackResponse.json();
+    if (Array.isArray(rollbackPayload?.errors) && rollbackPayload.errors.length > 0) {
+      throw new Error(
+        `ready-for-review post-mutation identity verification failed and draft rollback failed: ${verificationError.message}; ${rollbackPayload.errors.map((error) => error?.message ?? 'unknown error').join('; ')}`
+      );
+    }
+    const rolledBack = rollbackPayload?.data?.convertPullRequestToDraft?.pullRequest;
+    if (Number(rolledBack?.number) !== pullRequestNumber || rolledBack?.isDraft !== true) {
+      throw new Error(
+        `ready-for-review post-mutation identity verification failed and GitHub did not confirm draft rollback: ${verificationError.message}`
+      );
+    }
+    throw verificationError;
+  }
+
+  return Object.freeze({ changed: true, pullRequestNumber, draft: false });
+}

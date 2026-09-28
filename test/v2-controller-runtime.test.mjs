@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ciFailureClassForEvidence, expectedDispatchTitle, mergePreviewEvidenceFromWorkflow, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload, validateTerminalAuditProviderFailurePayload } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForEvidence, expectedDispatchTitle, markPullRequestReadyForReview, mergePreviewEvidenceFromWorkflow, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload, validateTerminalAuditProviderFailurePayload } from '../src/v2/controller-runtime.mjs';
 
 const SHA = 'a'.repeat(40);
 
@@ -712,5 +712,312 @@ test('CI remediation still ignores genuine ref arrow metadata with infrastructur
       'actionable',
       metadataLine
     );
+  }
+});
+
+
+test('ready-for-review transition is idempotent for a pull request that is still ready after refresh', async () => {
+  const originalFetch = globalThis.fetch;
+  const baseSha = 'c'.repeat(40);
+  let fetchCount = 0;
+  globalThis.fetch = async (url) => {
+    fetchCount += 1;
+    assert.equal(url, 'https://api.github.com/repos/owner/target/pulls/64');
+    return {
+      ok: true,
+      async json() {
+        return { number: 64, draft: false, node_id: 'PR_node', head: { sha: SHA }, base: { sha: baseSha } };
+      }
+    };
+  };
+  try {
+    const result = await markPullRequestReadyForReview({
+      repository: 'owner/target',
+      pullRequest: { number: 64, draft: false, node_id: 'PR_node' },
+      materialHeadSha: SHA,
+      baseSha,
+      token: 'token'
+    });
+    assert.deepEqual(result, { changed: false, pullRequestNumber: 64, draft: false });
+    assert.equal(fetchCount, 1, 'idempotent no-op must still refresh current pull request state');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ready-for-review transition promotes when the received ready snapshot became draft before the decision', async () => {
+  const originalFetch = globalThis.fetch;
+  const baseSha = 'c'.repeat(40);
+  const requests = [];
+  let pullReads = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init, body: init.body ? JSON.parse(init.body) : null });
+    if (String(url).endsWith('/repos/owner/target/pulls/64')) {
+      pullReads += 1;
+      return {
+        ok: true,
+        async json() {
+          return { number: 64, draft: pullReads === 1, node_id: 'PR_node', head: { sha: SHA }, base: { sha: baseSha } };
+        }
+      };
+    }
+    return {
+      ok: true,
+      async json() {
+        return { data: { markPullRequestReadyForReview: { pullRequest: { number: 64, isDraft: false } } } };
+      }
+    };
+  };
+  try {
+    const result = await markPullRequestReadyForReview({
+      repository: 'owner/target',
+      pullRequest: { number: 64, draft: false, node_id: 'PR_node' },
+      materialHeadSha: SHA,
+      baseSha,
+      token: 'token'
+    });
+    assert.deepEqual(result, { changed: true, pullRequestNumber: 64, draft: false });
+    assert.equal(requests.length, 3);
+    assert.equal(requests[0].url, 'https://api.github.com/repos/owner/target/pulls/64');
+    assert.equal(requests[1].url, 'https://api.github.com/graphql');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('draft pull request is promoted only through the explicit ready-for-review mutation', async () => {
+  const originalFetch = globalThis.fetch;
+  const baseSha = 'c'.repeat(40);
+  const requests = [];
+  let pullReads = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init, body: init.body ? JSON.parse(init.body) : null });
+    if (String(url).endsWith('/repos/owner/target/pulls/64')) {
+      pullReads += 1;
+      return {
+        ok: true,
+        async json() {
+          return { number: 64, draft: pullReads === 1, node_id: 'PR_node', head: { sha: SHA }, base: { sha: baseSha } };
+        }
+      };
+    }
+    return {
+      ok: true,
+      async json() {
+        return { data: { markPullRequestReadyForReview: { pullRequest: { number: 64, isDraft: false } } } };
+      }
+    };
+  };
+  try {
+    const result = await markPullRequestReadyForReview({
+      repository: 'owner/target',
+      pullRequest: { number: 64, draft: true, node_id: 'PR_node' },
+      materialHeadSha: SHA,
+      baseSha,
+      token: 'token'
+    });
+    assert.deepEqual(result, { changed: true, pullRequestNumber: 64, draft: false });
+    assert.equal(requests.length, 3);
+    assert.equal(requests[0].url, 'https://api.github.com/repos/owner/target/pulls/64');
+    assert.equal(requests[1].url, 'https://api.github.com/graphql');
+    assert.equal(requests[1].init.method, 'POST');
+    assert.equal(requests[1].body.variables.pullRequestId, 'PR_node');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ready-for-review transition fails closed when GitHub does not confirm the draft transition', async () => {
+  const originalFetch = globalThis.fetch;
+  const baseSha = 'c'.repeat(40);
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith('/repos/owner/target/pulls/64')) {
+      return {
+        ok: true,
+        async json() {
+          return { number: 64, draft: true, node_id: 'PR_node', head: { sha: SHA }, base: { sha: baseSha } };
+        }
+      };
+    }
+    return {
+      ok: true,
+      async json() {
+        return { data: { markPullRequestReadyForReview: { pullRequest: { number: 64, isDraft: true } } } };
+      }
+    };
+  };
+  try {
+    await assert.rejects(
+      markPullRequestReadyForReview({
+        repository: 'owner/target',
+        pullRequest: { number: 64, draft: true, node_id: 'PR_node' },
+        materialHeadSha: SHA,
+        baseSha,
+        token: 'token'
+      }),
+      /did not confirm pull request ready-for-review transition/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ready-for-review transition rechecks exact head and base immediately before mutation', async () => {
+  const originalFetch = globalThis.fetch;
+  const baseSha = 'c'.repeat(40);
+  try {
+    for (const [name, currentHead, currentBase, expectedError] of [
+      ['head', 'b'.repeat(40), baseSha, /release head drift detected/],
+      ['base', SHA, 'd'.repeat(40), /release base drift detected/]
+    ]) {
+      let fetchCount = 0;
+      globalThis.fetch = async (url) => {
+        fetchCount += 1;
+        assert.equal(url, 'https://api.github.com/repos/owner/target/pulls/64', name);
+        return {
+          ok: true,
+          async json() {
+            return { number: 64, draft: true, node_id: 'PR_node', head: { sha: currentHead }, base: { sha: currentBase } };
+          }
+        };
+      };
+
+      await assert.rejects(
+        markPullRequestReadyForReview({
+          repository: 'owner/target',
+          pullRequest: { number: 64, draft: true, node_id: 'PR_node' },
+          materialHeadSha: SHA,
+          baseSha,
+          token: 'token'
+        }),
+        expectedError,
+        name
+      );
+      assert.equal(fetchCount, 1, `${name} drift must fail before GraphQL mutation`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test('ready-for-review transition rolls back to draft when head drifts after mutation', async () => {
+  const originalFetch = globalThis.fetch;
+  const baseSha = 'c'.repeat(40);
+  const driftedHead = 'b'.repeat(40);
+  const requests = [];
+  let pullReads = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    requests.push({ url, init, body });
+    if (String(url).endsWith('/repos/owner/target/pulls/64')) {
+      pullReads += 1;
+      return {
+        ok: true,
+        async json() {
+          return {
+            number: 64,
+            draft: pullReads === 1,
+            node_id: 'PR_node',
+            head: { sha: pullReads === 1 ? SHA : driftedHead },
+            base: { sha: baseSha }
+          };
+        }
+      };
+    }
+    if (body?.query?.includes('markPullRequestReadyForReview')) {
+      return {
+        ok: true,
+        async json() {
+          return { data: { markPullRequestReadyForReview: { pullRequest: { number: 64, isDraft: false } } } };
+        }
+      };
+    }
+    assert.match(body?.query ?? '', /convertPullRequestToDraft/);
+    return {
+      ok: true,
+      async json() {
+        return { data: { convertPullRequestToDraft: { pullRequest: { number: 64, isDraft: true } } } };
+      }
+    };
+  };
+  try {
+    await assert.rejects(
+      markPullRequestReadyForReview({
+        repository: 'owner/target',
+        pullRequest: { number: 64, draft: true, node_id: 'PR_node' },
+        materialHeadSha: SHA,
+        baseSha,
+        token: 'token'
+      }),
+      /release head drift detected/
+    );
+    assert.equal(requests.length, 4);
+    assert.equal(requests[0].url, 'https://api.github.com/repos/owner/target/pulls/64');
+    assert.match(requests[1].body.query, /markPullRequestReadyForReview/);
+    assert.equal(requests[2].url, 'https://api.github.com/repos/owner/target/pulls/64');
+    assert.match(requests[3].body.query, /convertPullRequestToDraft/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test('ready-for-review transition fails closed when the pull request returns to draft after mutation', async () => {
+  const originalFetch = globalThis.fetch;
+  const baseSha = 'c'.repeat(40);
+  const requests = [];
+  let pullReads = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    requests.push({ url, init, body });
+    if (String(url).endsWith('/repos/owner/target/pulls/64')) {
+      pullReads += 1;
+      return {
+        ok: true,
+        async json() {
+          return {
+            number: 64,
+            draft: true,
+            node_id: 'PR_node',
+            head: { sha: SHA },
+            base: { sha: baseSha }
+          };
+        }
+      };
+    }
+    if (body?.query?.includes('markPullRequestReadyForReview')) {
+      return {
+        ok: true,
+        async json() {
+          return { data: { markPullRequestReadyForReview: { pullRequest: { number: 64, isDraft: false } } } };
+        }
+      };
+    }
+    assert.match(body?.query ?? '', /convertPullRequestToDraft/);
+    return {
+      ok: true,
+      async json() {
+        return { data: { convertPullRequestToDraft: { pullRequest: { number: 64, isDraft: true } } } };
+      }
+    };
+  };
+  try {
+    await assert.rejects(
+      markPullRequestReadyForReview({
+        repository: 'owner/target',
+        pullRequest: { number: 64, draft: true, node_id: 'PR_node' },
+        materialHeadSha: SHA,
+        baseSha,
+        token: 'token'
+      }),
+      /returned to draft after mutation/
+    );
+    assert.equal(pullReads, 2);
+    assert.equal(requests.length, 4);
+    assert.match(requests[1].body.query, /markPullRequestReadyForReview/);
+    assert.match(requests[3].body.query, /convertPullRequestToDraft/);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
