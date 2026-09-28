@@ -68,8 +68,15 @@ The CI record must be from the configured workflow in the same repository and
 branch at exactly the material SHA, with a matching GitHub Actions check suite
 and terminal-success run and check. A newer pending/failed run prevents reuse of
 an older success. Ancestor/merge-preview SHA results are not material-head proof.
-Without authorized reusable CI, the checkpoint selects `observe-ci` and remains
-blocked; a later re-entry re-observes evidence without dispatching implementation.
+Absent or non-terminal exact-head CI selects `observe-ci` and remains blocked.
+A trusted terminal-success run/check may be reused. A trusted terminal-failure
+run/check selects `classify-ci-failure`: the resume controller collects failure
+evidence with the canonical CI collector and only an `actionable` classification
+enters the normal bounded `ci-failed-remediable` operational path. That path owns
+attempt budgets, persists the dispatch nonce/reservation before the worker effect,
+binds the workflow run afterward, and recovers the same in-flight worker on
+re-entry. Ambiguous/external evidence fails closed. Any material HEAD published
+by remediation invalidates prior CI, audit, hygiene and release evidence.
 
 Successful refreeze persists phase `post-write-refreeze`, the real CI references,
 classification and continuation reference. It does **not** report release ready.
