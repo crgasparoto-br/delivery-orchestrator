@@ -9,6 +9,47 @@ const FINGERPRINT = /^[0-9a-f]{64}$/i;
 const IDENTITY_KEYS = ['repository', 'issueNumber', 'pullRequestNumber', 'baseRef', 'baseSha', 'headRef', 'materialHeadSha'];
 export const LEGACY_ADOPTION_AUDIT_MAX_ATTEMPTS = 1;
 
+const LEGACY_BOOTSTRAP_ADOPTION_CLASSES = Object.freeze({
+  'reserved-initial-attempt': Object.freeze({
+    classification: 'active',
+    reason: 'active-bootstrap-lease'
+  }),
+  'escalated-initial-budget-exhausted': Object.freeze({
+    classification: 'historical-adoptable',
+    reason: 'historical-budget-exhausted-provenance'
+  }),
+  'escalated-initial-nonrecoverable': Object.freeze({
+    classification: 'historical-adoptable',
+    reason: 'historical-nonrecoverable-provenance'
+  })
+});
+
+export function classifyLegacyAdoptionBootstrap(bootstrapLease) {
+  if (!bootstrapLease) {
+    return Object.freeze({
+      status: null,
+      classification: 'absent',
+      reason: 'bootstrap-absent'
+    });
+  }
+  const status = String(bootstrapLease.status ?? '').trim();
+  const known = LEGACY_BOOTSTRAP_ADOPTION_CLASSES[status];
+  return Object.freeze(known
+    ? { status, ...known }
+    : { status: status || null, classification: 'invalid', reason: 'unsupported-bootstrap-status' });
+}
+
+function unsupportedBootstrapError(classification, identity) {
+  const error = new Error('unsupported legacy bootstrap state');
+  error.code = 'LEGACY_BOOTSTRAP_NOT_ADOPTABLE';
+  error.bootstrapStatus = classification.status;
+  error.bootstrapClassification = classification.classification;
+  error.bootstrapReason = classification.reason;
+  error.targetIdentity = identity;
+  error.adoptionPersisted = false;
+  return error;
+}
+
 function positive(value, label) {
   if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer`);
   return value;
@@ -33,7 +74,8 @@ export function createLegacyAdoption({ pullRequest, repository, issueNumber, bas
     if (bootstrapLease.schemaVersion !== 1 || bootstrapLease.repository !== repository || bootstrapLease.issueNumber !== issueNumber || bootstrapLease.baseBranch !== baseBranch) {
       throw new Error('legacy adoption bootstrap identity mismatch');
     }
-    if (!['reserved-initial-attempt', 'escalated-initial-budget-exhausted'].includes(bootstrapLease.status)) throw new Error('unsupported legacy bootstrap state');
+    const bootstrapClassification = classifyLegacyAdoptionBootstrap(bootstrapLease);
+    if (bootstrapClassification.classification === 'invalid') throw unsupportedBootstrapError(bootstrapClassification, identity);
     implementation = positive(bootstrapLease.implementationAttempts, 'bootstrap implementationAttempts');
     positive(bootstrapLease.controllerRunId, 'bootstrap controllerRunId');
     attemptEvidenceRef = `https://github.com/${repository}/issues/${issueNumber}#issuecomment-${positive(bootstrapLease.commentId, 'bootstrap commentId')}`;
@@ -44,7 +86,15 @@ export function createLegacyAdoption({ pullRequest, repository, issueNumber, bas
       source: 'github-open-pull-request', evidenceRef: `https://github.com/${repository}/pull/${pullRequest.number}`,
       author: pullRequest.user.login, authorAssociation: pullRequest.author_association,
       issueBindingSha256: createHash('sha256').update(pullRequest.body).digest('hex'),
-      adoptedHeadSha: identity.materialHeadSha, adoptedBaseSha: identity.baseSha, attemptEvidenceRef
+      adoptedHeadSha: identity.materialHeadSha, adoptedBaseSha: identity.baseSha, attemptEvidenceRef,
+      bootstrapProvenance: bootstrapLease ? {
+        status: bootstrapLease.status,
+        classification: classifyLegacyAdoptionBootstrap(bootstrapLease).classification,
+        reason: classifyLegacyAdoptionBootstrap(bootstrapLease).reason,
+        controllerRunId: bootstrapLease.controllerRunId,
+        workerRunId: Number.isInteger(bootstrapLease.workerRunId) && bootstrapLease.workerRunId > 0 ? bootstrapLease.workerRunId : null,
+        lastFailure: bootstrapLease.lastFailure ? structuredClone(bootstrapLease.lastFailure) : null
+      } : null
     },
     // This is a pre-operational checkpoint, NOT a fabricated operational state.
     effectiveRisk: null, classifier: null,
@@ -76,6 +126,14 @@ export function normalizeLegacyAdoption(value) {
   if (!value.baseRef || !value.headRef || !SHA.test(value.baseSha ?? '') || !SHA.test(value.materialHeadSha ?? '')) throw new Error('invalid adoption branch/SHA identity');
   if (value.adoption?.source !== 'github-open-pull-request' || value.adoption.evidenceRef !== `https://github.com/${value.repository}/pull/${value.pullRequestNumber}`) throw new Error('invalid adoption source');
   if (!SHA.test(value.adoption.adoptedHeadSha ?? '') || !SHA.test(value.adoption.adoptedBaseSha ?? '') || !/^[0-9a-f]{64}$/.test(value.adoption.issueBindingSha256 ?? '')) throw new Error('invalid adoption source identity');
+  const bootstrapProvenance = value.adoption.bootstrapProvenance ?? null;
+  if (bootstrapProvenance !== null) {
+    const classification = classifyLegacyAdoptionBootstrap({ status: bootstrapProvenance.status });
+    if (classification.classification === 'invalid') throw new Error('invalid adoption bootstrap provenance status');
+    if (bootstrapProvenance.classification !== classification.classification || bootstrapProvenance.reason !== classification.reason) throw new Error('invalid adoption bootstrap provenance classification');
+    positive(bootstrapProvenance.controllerRunId, 'adoption bootstrap controllerRunId');
+    if (bootstrapProvenance.workerRunId !== null) positive(bootstrapProvenance.workerRunId, 'adoption bootstrap workerRunId');
+  }
   if (!isTrustedRepositoryAuthor({ user: { login: value.adoption.author }, author_association: value.adoption.authorAssociation }, trustedCommentAuthorForRepository(value.repository))) throw new Error('invalid adoption author provenance');
   for (const key of ['implementation', 'audit', 'auditRemediation']) {
     const count = value.attempts?.[key];

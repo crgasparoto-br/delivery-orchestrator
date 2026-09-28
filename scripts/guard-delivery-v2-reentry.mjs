@@ -9,7 +9,7 @@ import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { resolveProviderSelectionForRisk } from '../src/v2/provider-policy.mjs';
 import { createDispatchNonce, expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { parseTrustedJsonEnvelope, selectExistingPullRequest, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
-import { createLegacyAdoption, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
+import { classifyLegacyAdoptionBootstrap, createLegacyAdoption, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { withTransientFetchRetry } from '../src/v2/github-api-retry.mjs';
 import { recordControllerTechnicalError } from '../src/v2/controller-summary.mjs';
 
@@ -882,6 +882,57 @@ export function rearmLegacyNonrecoverableBootstrapLease(
   });
 }
 
+export function buildReentryGuardFailure(error, {
+  repository = null,
+  issueNumber = null,
+  pullRequest = null,
+  bootstrapLease = null
+} = {}) {
+  const explicitClassification = error?.bootstrapClassification
+    ? {
+        status: error.bootstrapStatus ?? null,
+        classification: error.bootstrapClassification,
+        reason: error.bootstrapReason ?? 'bootstrap-classification-failed'
+      }
+    : classifyLegacyAdoptionBootstrap(bootstrapLease);
+  const identity = error?.targetIdentity ?? null;
+  return Object.freeze({
+    schemaVersion: 1,
+    status: 'reentry-guard-failed',
+    repository,
+    issueNumber,
+    pullRequestNumber: identity?.pullRequestNumber ?? pullRequest?.number ?? null,
+    materialHeadSha: identity?.materialHeadSha ?? pullRequest?.head?.sha ?? null,
+    reentry: {
+      bootstrapStatus: explicitClassification.status,
+      bootstrapClassification: explicitClassification.classification,
+      reason: explicitClassification.reason,
+      adoptionPersisted: error?.adoptionPersisted === true,
+      retryPersisted: false
+    },
+    error: {
+      code: error?.code ?? 'REENTRY_GUARD_ERROR',
+      message: String(error?.message ?? error)
+    }
+  });
+}
+
+export async function recordReentryGuardFailure(error, context = error?.reentryGuardContext ?? {}) {
+  const resultPath = String(process.env.CONTROLLER_RESULT_PATH ?? '').trim();
+  const errorPath = String(process.env.CONTROLLER_ERROR_PATH ?? '').trim();
+  if (!resultPath && !errorPath) return;
+  const repository = String(context.repository ?? process.env.TARGET_REPOSITORY ?? '').trim() || null;
+  const rawIssue = Number(context.issueNumber ?? process.env.TARGET_ISSUE);
+  const payload = buildReentryGuardFailure(error, {
+    repository,
+    issueNumber: Number.isInteger(rawIssue) && rawIssue > 0 ? rawIssue : null,
+    pullRequest: context.pullRequest ?? null,
+    bootstrapLease: context.bootstrapLease ?? null
+  });
+  if (resultPath) await writeFile(resultPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  if (errorPath) await appendFile(errorPath, `${JSON.stringify(payload)}\n`, 'utf8');
+}
+
 async function writeGithubOutput(decision) {
   const outputPath = String(process.env.GITHUB_OUTPUT ?? '').trim();
   if (!outputPath) return;
@@ -1044,22 +1095,33 @@ async function main() {
   const effectiveRisk = stateEnvelope?.persistent?.effectiveRisk ?? bootstrapLease?.effectiveRisk ?? 'critical';
   const aiPolicy = loadV2Config({}, process.env).aiPolicy;
   const expectedImplementer = resolveProviderSelectionForRisk(aiPolicy, effectiveRisk).implementer;
-  const decision = evaluateReentry({
-    pullRequest,
-    stateEnvelope,
-    adoptionEnvelope,
-    bootstrapLease,
-    targetRepository,
-    issueNumber,
-    baseBranch,
-    provider: expectedImplementer.provider,
-    model: expectedImplementer.model,
-    recoveredWorkerRun,
-    bootstrapControllerHeadSha,
-    currentControllerHeadSha,
-    legacyAuthorizationFailure,
-    rearmDispatchNonce: legacyAuthorizationFailure ? createDispatchNonce() : null
-  });
+  let decision;
+  try {
+    decision = evaluateReentry({
+      pullRequest,
+      stateEnvelope,
+      adoptionEnvelope,
+      bootstrapLease,
+      targetRepository,
+      issueNumber,
+      baseBranch,
+      provider: expectedImplementer.provider,
+      model: expectedImplementer.model,
+      recoveredWorkerRun,
+      bootstrapControllerHeadSha,
+      currentControllerHeadSha,
+      legacyAuthorizationFailure,
+      rearmDispatchNonce: legacyAuthorizationFailure ? createDispatchNonce() : null
+    });
+  } catch (error) {
+    error.reentryGuardContext = {
+      repository: targetRepository,
+      issueNumber,
+      pullRequest,
+      bootstrapLease
+    };
+    throw error;
+  }
   await persistReentryMutation({
     decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository: targetRepository,
     currentControllerRunId,
@@ -1099,6 +1161,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   main().catch(async (error) => {
     process.stderr.write(`${error.stack || error.message}\n`);
     process.exitCode = 1;
+    await recordReentryGuardFailure(error).catch((recordError) => {
+      process.stderr.write(`failed to record structured reentry guard error: ${recordError.message}\n`);
+    });
     await recordControllerTechnicalError(error, { source: 'reentry-guard' }).catch((recordError) => {
       process.stderr.write(`failed to record reentry guard technical error: ${recordError.message}\n`);
     });
