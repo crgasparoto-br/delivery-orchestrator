@@ -1712,7 +1712,7 @@ jobs:
     needs:
       - activation
       - agent
-    if: always() && needs.agent.result != 'skipped'
+    if: (always() && needs.agent.result != 'skipped') && (needs.agent.outputs.has_patch == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
