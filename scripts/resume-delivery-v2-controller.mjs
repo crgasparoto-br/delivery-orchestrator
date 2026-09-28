@@ -1729,7 +1729,9 @@ export async function main() {
         }, promotedState);
       } });
       if (hygienePromotion.promotionRun) {
-        await recordWorkerUsage(hygienePromotion.promotionRun);
+        for (const promotionRun of hygienePromotion.promotionRuns ?? [hygienePromotion.promotionRun]) {
+          await recordWorkerUsage(promotionRun);
+        }
         state = hygienePromotion.state;
         plan = hygienePromotion.plan;
         technicalHygiene = hygienePromotion.hygiene;
@@ -1803,49 +1805,62 @@ export async function main() {
         await persist({ nextAction: 'human-escalation' });
         break;
       }
-      const workerDispatchNonce = createDispatchNonce();
-      await persist({
-        nextAction: 'dispatch-remediation',
-        workerRunId: null,
-        workerDispatchNonce,
-        remediationContext: remediation
-      });
-      let worker = await dispatchWorker({
+      const remediationStage = await runWorkflowStageWithInfrastructureRecovery({
+        stage: state.status === 'ci-failed-remediable' ? 'ci-remediation' : 'audit-remediation',
         orchestratorRepository,
-        orchestratorRef,
-        plan,
-        controllerRunId,
+        actionsToken,
         targetRepository,
-        issueNumber,
-        baseBranch,
-        targetRef: beforeSha,
         targetPr: resumePr,
-        remediationContext: JSON.stringify(remediation),
-        token: actionsToken,
-        dispatchNonce: workerDispatchNonce
+        expectedHeadSha: beforeSha,
+        targetReadToken,
+        onDispatch: async ({ dispatchNonce }) => {
+          await persist({
+            nextAction: 'dispatch-remediation',
+            workerRunId: null,
+            workerDispatchNonce: dispatchNonce,
+            remediationContext: remediation
+          });
+        },
+        onObserve: async ({ dispatchNonce, run }) => {
+          await persist({
+            nextAction: 'observe-remediation',
+            workerRunId: run.id,
+            workerDispatchNonce: dispatchNonce,
+            remediationContext: remediation
+          });
+        },
+        dispatch: (dispatchNonce) => dispatchWorker({
+          orchestratorRepository,
+          orchestratorRef,
+          plan,
+          controllerRunId,
+          targetRepository,
+          issueNumber,
+          baseBranch,
+          targetRef: beforeSha,
+          targetPr: resumePr,
+          remediationContext: JSON.stringify(remediation),
+          token: actionsToken,
+          dispatchNonce
+        })
       });
-      await persist({
-        nextAction: 'observe-remediation',
-        workerRunId: worker.id,
-        workerDispatchNonce,
-        remediationContext: remediation
-      });
-      worker = await waitWorkflowRun(
-        orchestratorRepository,
-        worker.id,
-        actionsToken
-      );
-      await recordWorkerUsage(worker);
+
+      let worker = remediationStage.run;
+      for (const remediationRun of remediationStage.runs) {
+        await recordWorkerUsage(remediationRun);
+      }
+
       if (worker.conclusion !== 'success') {
         await persist({
           nextAction: 'remediation-worker-failed',
           workerRunId: worker.id,
-          workerDispatchNonce,
+          workerDispatchNonce: remediationStage.dispatchNonce,
           remediationContext: remediation,
           remediationFailure: {
             schemaVersion: 1,
             workerRunId: worker.id,
             conclusion: worker.conclusion,
+            classification: remediationStage.failure?.classification ?? 'unknown',
             workerControllerSha:
               normalizedRecoverySha(worker.head_sha),
             materialHeadSha,
@@ -1861,7 +1876,9 @@ export async function main() {
           token: targetWriteToken,
           targetUrl: worker.html_url
         });
-        throw new Error(`remediation worker failed: ${worker.html_url}`);
+        throw new Error(
+          `remediation worker failed: ${worker.html_url}; classification=${remediationStage.failure?.classification ?? 'unknown'}`
+        );
       }
       pullRequest = await waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken);
       materialHeadSha = String(pullRequest.head.sha).toLowerCase();
@@ -1887,7 +1904,9 @@ export async function main() {
         }, promotedState);
       } });
       if (hygienePromotion.promotionRun) {
-        await recordWorkerUsage(hygienePromotion.promotionRun);
+        for (const promotionRun of hygienePromotion.promotionRuns ?? [hygienePromotion.promotionRun]) {
+          await recordWorkerUsage(promotionRun);
+        }
         state = hygienePromotion.state;
         plan = hygienePromotion.plan;
         technicalHygiene = hygienePromotion.hygiene;
@@ -2512,7 +2531,9 @@ export async function main() {
         });
         state = promotion.state;
         plan = promotion.plan;
-        await recordWorkerUsage(promotion.promotionRun);
+        for (const promotionRun of promotion.promotionRuns ?? [promotion.promotionRun]) {
+          await recordWorkerUsage(promotionRun);
+        }
         await persist({ hygieneRunId: promotion.promotionRun.id, technicalHygiene: state.technicalHygiene });
       }
 
