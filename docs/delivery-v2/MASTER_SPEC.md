@@ -327,7 +327,25 @@ Budgets are ceilings, not targets. A pre-material control-plane recovery does no
 
 ### 8.1 Pre-material control-plane recovery
 
-Pre-material bootstrap recovery is fail-closed by default and has exactly two deterministic controller-owned paths. Neither path increases the configured implementation-attempt ceiling.
+Pre-material bootstrap recovery is fail-closed by default and has three deterministic controller-owned paths. None increases the configured implementation-attempt ceiling.
+
+#### Same-cycle context-rebuild circuit-breaker retry
+
+Before a material candidate exists, a failed initial implementation worker is automatically retryable in the **same controller invocation** only when trusted worker evidence proves all of the following:
+
+- the terminal worker conclusion is `failure`;
+- structured agent output contains exactly one `report_incomplete` item and no framework errors;
+- that item has `reason=infrastructure_error`;
+- its detail matches the versioned context-rebuild circuit-breaker signature (`rebuild_factor`, `cumulative_input_tokens`, and `thresholds`);
+- authoritative material evidence is exactly `has_patch=false`.
+
+The controller records the failed worker identity and bounded classification in the bootstrap lease before deciding continuation. If budget remains, it reserves the **next** implementation attempt and a fresh dispatch nonce before dispatching a new worker, then supplies only bounded durable retry context (classification/reason/stage/previous attempt/run identity), never the previous transcript, tool trace or full model history. An actually executed retry therefore consumes one ordinary implementation slot. For a CRITICAL ceiling of three, the only same-cycle sequence is 1 -> 2 -> 3; a third recoverable failure becomes `escalated-initial-budget-exhausted` / `human-escalation`.
+
+Reservation is crash-safe. Re-entry with a trusted `reserved-initial-attempt` for which no correlated worker exists reuses that same attempt number and dispatch nonce instead of reserving another slot. Re-entry after a terminal failed worker that was not yet classified recovers that exact worker so the controller can classify its authoritative artifact. Missing/invalid/inconsistent `has_patch` evidence, a material patch, arbitrary `infrastructure_error`, or any unrecognized structured output fails closed and is not automatically retried.
+
+Material/threat detection is material-gated for the Codex implementation workers: the generated `detection` job itself requires `needs.agent.outputs.has_patch == 'true'`. Thus `has_patch=false` pre-material failures do not enter the material scope guard or AWF detector, while executions that do carry a patch still execute the existing threat-detection path with AWF provisioned.
+
+This same-cycle path does **not** consume or replace either changed-control-plane recovery below and does not modify the circuit-breaker thresholds.
 
 #### Exhausted bootstrap recovery
 
@@ -357,7 +375,7 @@ The re-entry guard clears `recoverWorkerRunId` only for an eligible changed-SHA 
 
 The reservation step independently re-derives recovery eligibility from the trusted persisted bootstrap lease plus the actually checked-out control-plane SHA, and for the successful-worker path it independently re-fetches and validates the correlated worker. Workflow-provided recovery fields are compatibility cross-checks, not sole authority. For exhausted legacy leases, historical checkout-log reconstruction remains allowed as described above; a successful `reserved-initial-attempt` without trusted prior control-plane SHA fails closed.
 
-For both recovery paths, provenance records the prior implementation-attempt count, prior/current controller SHAs, recovery reason and `grantedImplementationAttempts=1`. The same control-plane SHA cannot grant a second recovery. If the recovery dispatch also fails before material output, subsequent recovery requires another verified control-plane SHA change. Ambiguous provenance, an ineligible worker state or conclusion, or any material candidate already present fails closed into the ordinary deterministic continuation/escalation rules.
+For the two changed-control-plane recovery paths, provenance records the prior implementation-attempt count, prior/current controller SHAs, recovery reason and `grantedImplementationAttempts=1`. The same control-plane SHA cannot grant a second changed-SHA recovery. If such a recovery dispatch also fails before material output, subsequent changed-SHA recovery requires another verified control-plane SHA change. This rule is independent of the ordinary same-cycle context-rebuild retries above, which consume normal implementation slots. Ambiguous provenance, an ineligible worker state or conclusion, or any material candidate already present fails closed into the ordinary deterministic continuation/escalation rules.
 ## 9. DV2-005 and DV2-006 — Adaptive CI and safe classification
 
 The classifier is deterministic. It decides **how much validation is required**, while each target repository owns the actual commands for build, test, lint, migrations, browser checks, and domain validation.
