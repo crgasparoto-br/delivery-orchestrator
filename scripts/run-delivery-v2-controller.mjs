@@ -61,6 +61,72 @@ export function nonNegativeInteger(value, label) {
   if (!normalized || !Number.isInteger(result) || result < 0) throw new Error(`${label} must be a non-negative integer`);
   return result;
 }
+
+export function transferBootstrapControllerAuthority(lease, {
+  controllerRunId,
+  controllerHeadSha = null
+} = {}) {
+  if (!lease || typeof lease !== 'object' || Array.isArray(lease)) {
+    throw new Error('bootstrap lease is required for controller authority transfer');
+  }
+  if (String(lease.status ?? '') !== 'reserved-initial-attempt') {
+    throw new Error('controller authority transfer requires reserved-initial-attempt bootstrap state');
+  }
+
+  const activeControllerRunId = positiveInteger(controllerRunId, 'controllerRunId');
+  const previousControllerRunId = positiveInteger(lease.controllerRunId, 'bootstrap controllerRunId');
+  const history = [...new Set([
+    ...(Array.isArray(lease.controllerRunHistory) ? lease.controllerRunHistory : []),
+    previousControllerRunId
+  ].map(Number).filter((value) => Number.isInteger(value) && value > 0 && value !== activeControllerRunId))];
+  const previousControllerHeadSha = String(lease.controllerHeadSha ?? '').trim().toLowerCase();
+  const provenanceHistory = [
+    ...(Array.isArray(lease.controllerProvenanceHistory)
+      ? lease.controllerProvenanceHistory.filter(
+          (entry) =>
+            Number.isInteger(Number(entry?.controllerRunId))
+            && Number(entry.controllerRunId) > 0
+            && (entry.controllerHeadSha == null || SHA_RE.test(String(entry.controllerHeadSha)))
+        ).map((entry) => ({
+          controllerRunId: Number(entry.controllerRunId),
+          controllerHeadSha: entry.controllerHeadSha == null
+            ? null
+            : String(entry.controllerHeadSha).trim().toLowerCase()
+        }))
+      : []),
+    ...(previousControllerRunId !== activeControllerRunId
+      ? [{
+          controllerRunId: previousControllerRunId,
+          controllerHeadSha: SHA_RE.test(previousControllerHeadSha)
+            ? previousControllerHeadSha
+            : null
+        }]
+      : [])
+  ].filter(
+    (entry, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          candidate.controllerRunId === entry.controllerRunId
+          && candidate.controllerHeadSha === entry.controllerHeadSha
+      ) === index
+  );
+
+  const normalizedHeadSha = controllerHeadSha == null
+    ? null
+    : String(controllerHeadSha).trim().toLowerCase();
+  if (normalizedHeadSha != null && !SHA_RE.test(normalizedHeadSha)) {
+    throw new Error('controllerHeadSha must be an exact Git commit SHA');
+  }
+
+  return Object.freeze({
+    ...lease,
+    controllerRunId: activeControllerRunId,
+    controllerRunHistory: history,
+    controllerProvenanceHistory: provenanceHistory,
+    ...(normalizedHeadSha ? { controllerHeadSha: normalizedHeadSha } : {})
+  });
+}
+
 function splitPaths(value) {
   return [...new Set(String(value ?? '').split(/[\n,]/).map((item) => item.trim()).filter(Boolean))];
 }
@@ -80,6 +146,11 @@ async function postJson(url, token, body) {
 }
 async function patchJson(url, token, body) {
   return api(url, token, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+async function fetchText(url, token) {
+  const response = await fetch(url, { headers: headers(token) });
+  if (!response.ok) throw new Error(`GitHub API ${response.status} GET ${url}: ${await response.text()}`);
+  return response.text();
 }
 function encodeRepoPath(value) { return value.split('/').map(encodeURIComponent).join('/'); }
 
@@ -563,6 +634,67 @@ async function persistBootstrapLeaseForController({ repository, lease, token }) 
   return Object.freeze({ ...value, commentId: id });
 }
 
+async function detectBootstrapControllerRunMismatch({
+  repository,
+  issueNumber,
+  targetReadToken,
+  orchestratorRepository,
+  actionsToken,
+  controllerRunId,
+  attempt,
+  dispatchNonce,
+  worker
+}) {
+  if (String(worker?.conclusion ?? '').toLowerCase() !== 'failure') return null;
+
+  const lease = await loadBootstrapLeaseForController({
+    repository,
+    issueNumber,
+    token: targetReadToken
+  });
+  if (String(lease.status ?? '') !== 'reserved-initial-attempt') return null;
+  if (Number(lease.implementationAttempts) !== Number(attempt)) return null;
+  if (String(lease.dispatchNonce ?? '') !== String(dispatchNonce ?? '')) return null;
+
+  const persistedControllerRunId = Number(lease.controllerRunId);
+  const activeControllerRunId = Number(controllerRunId);
+  if (
+    !Number.isInteger(persistedControllerRunId)
+    || persistedControllerRunId < 1
+    || !Number.isInteger(activeControllerRunId)
+    || activeControllerRunId < 1
+    || persistedControllerRunId === activeControllerRunId
+  ) return null;
+
+  const jobsPayload = await api(
+    `https://api.github.com/repos/${orchestratorRepository}/actions/runs/${worker.id}/jobs?per_page=100`,
+    actionsToken
+  );
+  for (const job of jobsPayload.jobs ?? []) {
+    const failedAuthorizationStep = (job.steps ?? []).find(
+      (step) =>
+        String(step?.name ?? '') === 'Validate controller-selected worker authorization'
+        && String(step?.conclusion ?? '') === 'failure'
+    );
+    if (!failedAuthorizationStep) continue;
+
+    const log = await fetchText(
+      `https://api.github.com/repos/${orchestratorRepository}/actions/jobs/${job.id}/logs`,
+      actionsToken
+    );
+    if (!log.includes('bootstrap controller run mismatch')) continue;
+
+    return Object.freeze({
+      classification: 'bootstrap-controller-run-mismatch',
+      activeControllerRunId,
+      persistedControllerRunId,
+      evidenceRef: job.html_url ?? worker.html_url ?? null
+    });
+  }
+
+  return null;
+}
+
 async function recordInitialWorkerFailure({ repository, issueNumber, token, attempt, dispatchNonce, worker, failure, evidence }) {
   const lease = await loadBootstrapLeaseForController({ repository, issueNumber, token });
   if (Number(lease.implementationAttempts) !== Number(attempt)) throw new Error('bootstrap implementation attempt drift before recording worker failure');
@@ -593,9 +725,22 @@ async function recordInitialWorkerFailure({ repository, issueNumber, token, atte
   });
 }
 
-async function reserveNextInitialAttempt({ repository, issueNumber, token, currentAttempt, maxAttempts, workerWorkflow, failure, workerRunId }) {
+async function reserveNextInitialAttempt({
+  repository,
+  issueNumber,
+  token,
+  currentAttempt,
+  maxAttempts,
+  workerWorkflow,
+  failure,
+  workerRunId,
+  controllerRunId,
+  controllerHeadSha
+}) {
   const decision = decidePreMaterialRetry({ failure, currentAttempt, maxAttempts });
-  if (decision.action !== 'retry') return Object.freeze({ decision });
+  if (!['retry', 'retry-same-attempt'].includes(decision.action)) {
+    return Object.freeze({ decision });
+  }
 
   const lease = await loadBootstrapLeaseForController({ repository, issueNumber, token });
   if (lease.status !== 'reserved-initial-attempt') throw new Error('same-cycle retry requires reserved-initial-attempt bootstrap state');
@@ -604,11 +749,15 @@ async function reserveNextInitialAttempt({ repository, issueNumber, token, curre
 
   const dispatchNonce = createDispatchNonce();
   const retryContext = boundedPreMaterialRetryContext({ failure, previousAttempt: currentAttempt, previousWorkerRunId: workerRunId });
+  const authoritativeLease = transferBootstrapControllerAuthority(lease, {
+    controllerRunId,
+    controllerHeadSha
+  });
   const reserved = await persistBootstrapLeaseForController({
     repository,
     token,
     lease: {
-      ...lease,
+      ...authoritativeLease,
       implementationAttempts: decision.nextAttempt,
       status: 'reserved-initial-attempt',
       workerRunId: null,
@@ -738,6 +887,8 @@ export async function main() {
   const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
   const actionsToken = requiredEnv('GITHUB_TOKEN');
   const controllerRunId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
+  const controllerHeadSha = requiredEnv('GITHUB_SHA').toLowerCase();
+  if (!SHA_RE.test(controllerHeadSha)) throw new Error('GITHUB_SHA must be an exact Git commit SHA');
   const resultPath = process.env.CONTROLLER_RESULT_PATH || path.join(process.env.RUNNER_TEMP || tmpdir(), 'delivery-v2-controller-result.json');
   const initialAttempts = nonNegativeInteger(process.env.DELIVERY_V2_INITIAL_ATTEMPTS || '1', 'DELIVERY_V2_INITIAL_ATTEMPTS');
   const recoverWorkerRunId = String(process.env.DELIVERY_V2_RECOVER_WORKER_RUN_ID ?? '').trim() ? positiveInteger(process.env.DELIVERY_V2_RECOVER_WORKER_RUN_ID, 'DELIVERY_V2_RECOVER_WORKER_RUN_ID') : null;
@@ -775,8 +926,22 @@ export async function main() {
     initialDispatchAt = Date.parse(worker.created_at ?? worker.run_started_at ?? new Date().toISOString());
   } else {
     const bootstrapLease = await loadBootstrapLeaseForController({ repository: targetRepository, issueNumber, token: targetReadToken });
-    if (String(bootstrapLease.dispatchNonce ?? '') === currentDispatchNonce && bootstrapLease.retryContext && typeof bootstrapLease.retryContext === 'object') {
-      currentRetryContext = JSON.stringify(bootstrapLease.retryContext);
+    const authoritativeLease = transferBootstrapControllerAuthority(bootstrapLease, {
+      controllerRunId,
+      controllerHeadSha
+    });
+    if (
+      Number(authoritativeLease.controllerRunId) !== Number(bootstrapLease.controllerRunId)
+      || String(authoritativeLease.controllerHeadSha ?? '') !== String(bootstrapLease.controllerHeadSha ?? '')
+    ) {
+      await persistBootstrapLeaseForController({
+        repository: targetRepository,
+        token: targetWriteToken,
+        lease: authoritativeLease
+      });
+    }
+    if (String(authoritativeLease.dispatchNonce ?? '') === currentDispatchNonce && authoritativeLease.retryContext && typeof authoritativeLease.retryContext === 'object') {
+      currentRetryContext = JSON.stringify(authoritativeLease.retryContext);
     }
   }
 
@@ -814,10 +979,22 @@ export async function main() {
 
     const materialEvidence = await downloadInitialWorkerEvidence(orchestratorRepository, worker.id, actionsToken);
     if (materialEvidence.evidenceRef) evidenceRefs.push(materialEvidence.evidenceRef);
+    const authorizationFailure = await detectBootstrapControllerRunMismatch({
+      repository: targetRepository,
+      issueNumber,
+      targetReadToken,
+      orchestratorRepository,
+      actionsToken,
+      controllerRunId,
+      attempt: currentInitialAttempt,
+      dispatchNonce: currentDispatchNonce,
+      worker
+    });
     const failure = classifyPreMaterialWorkerFailure({
       workerConclusion: worker.conclusion,
       hasPatch: materialEvidence.hasPatch,
-      agentOutput: materialEvidence.agentOutput
+      agentOutput: materialEvidence.agentOutput,
+      authorizationFailure
     });
 
     await recordInitialWorkerFailure({
@@ -827,7 +1004,8 @@ export async function main() {
 
     const retry = await reserveNextInitialAttempt({
       repository: targetRepository, issueNumber, token: targetWriteToken, currentAttempt: currentInitialAttempt,
-      maxAttempts: plan.implementation.maxAttempts, workerWorkflow: initialWorkerIdentity, failure, workerRunId: worker.id
+      maxAttempts: plan.implementation.maxAttempts, workerWorkflow: initialWorkerIdentity, failure, workerRunId: worker.id,
+      controllerRunId, controllerHeadSha
     });
 
     if (retry.decision.action === 'fail-closed') {
@@ -835,6 +1013,9 @@ export async function main() {
     }
     if (retry.decision.action === 'budget-exhausted') {
       throw new Error(`initial implementation budget exhausted after recoverable pre-material failure: ${worker.html_url}`);
+    }
+    if (!['retry', 'retry-same-attempt'].includes(retry.decision.action)) {
+      throw new Error(`unsupported initial retry decision: ${retry.decision.action}`);
     }
 
     currentInitialAttempt = retry.decision.nextAttempt;

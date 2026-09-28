@@ -14,8 +14,37 @@ function failClosed(classification, reason, extra = {}) {
 export function classifyPreMaterialWorkerFailure({
   workerConclusion,
   hasPatch,
-  agentOutput
+  agentOutput,
+  authorizationFailure = null
 } = {}) {
+  if (authorizationFailure?.classification === 'bootstrap-controller-run-mismatch') {
+    if (String(workerConclusion ?? '').trim().toLowerCase() !== 'failure') {
+      return failClosed(
+        'unsupported-worker-conclusion',
+        'bootstrap authorization recovery requires terminal worker failure'
+      );
+    }
+    if (hasPatch === true) {
+      return failClosed(
+        'material-status-not-trusted-no-patch',
+        'worker produced material patch before bootstrap authorization recovery'
+      );
+    }
+    return Object.freeze({
+      recoverable: true,
+      classification: 'bootstrap-controller-run-mismatch',
+      reason: 'control-plane-authorization-envelope-mismatch',
+      failureStage: 'pre-material',
+      failureClass: 'control-plane-authorization',
+      retryMode: 'reuse-current-attempt',
+      evidence: Object.freeze({
+        evidenceRef: String(authorizationFailure.evidenceRef ?? ''),
+        activeControllerRunId: Number(authorizationFailure.activeControllerRunId),
+        persistedControllerRunId: Number(authorizationFailure.persistedControllerRunId)
+      })
+    });
+  }
+
   if (hasPatch !== false) {
     return failClosed(
       'material-status-not-trusted-no-patch',
@@ -100,6 +129,14 @@ export function decidePreMaterialRetry({
   if (!failure?.recoverable) {
     return Object.freeze({ action: 'fail-closed', currentAttempt: attempt, maxAttempts: ceiling });
   }
+  if (failure.retryMode === 'reuse-current-attempt') {
+    return Object.freeze({
+      action: 'retry-same-attempt',
+      currentAttempt: attempt,
+      nextAttempt: attempt,
+      maxAttempts: ceiling
+    });
+  }
   if (attempt >= ceiling) {
     return Object.freeze({ action: 'budget-exhausted', currentAttempt: attempt, maxAttempts: ceiling });
   }
@@ -116,7 +153,10 @@ export function boundedPreMaterialRetryContext({
   previousAttempt,
   previousWorkerRunId
 } = {}) {
-  if (!failure?.recoverable || failure.classification !== 'context-rebuild-circuit-breaker') {
+  if (
+    !failure?.recoverable
+    || !['context-rebuild-circuit-breaker', 'bootstrap-controller-run-mismatch'].includes(failure.classification)
+  ) {
     throw new Error('bounded retry context requires a recognized recoverable pre-material failure');
   }
   const attempt = Number(previousAttempt);

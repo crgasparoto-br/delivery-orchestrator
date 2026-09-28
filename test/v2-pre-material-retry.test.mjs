@@ -8,6 +8,7 @@ import {
   decidePreMaterialRetry
 } from '../src/v2/pre-material-recovery.mjs';
 import { evaluateReentry } from '../scripts/guard-delivery-v2-reentry.mjs';
+import { transferBootstrapControllerAuthority } from '../scripts/run-delivery-v2-controller.mjs';
 
 function breakerOutput(details = 'context-rebuild circuit breaker tripped: rebuild_factor=35.63 cumulative_input_tokens=2931337 thresholds=35/1000000') {
   return {
@@ -220,4 +221,77 @@ test('Codex workers skip the whole detection job without a material patch and ke
     assert.match(detection, /- name: Install AWF binary/);
     assert.match(detection, /install_awf_binary\.sh/);
   }
+});
+
+
+test('bootstrap controller authorization mismatch retries the same material attempt', () => {
+  const failure = classifyPreMaterialWorkerFailure({
+    workerConclusion: 'failure',
+    hasPatch: null,
+    agentOutput: null,
+    authorizationFailure: {
+      classification: 'bootstrap-controller-run-mismatch',
+      evidenceRef: 'https://github.com/example/actions/runs/2',
+      activeControllerRunId: 22,
+      persistedControllerRunId: 21
+    }
+  });
+
+  assert.equal(failure.recoverable, true);
+  assert.equal(failure.failureClass, 'control-plane-authorization');
+  assert.equal(failure.retryMode, 'reuse-current-attempt');
+  assert.deepEqual(decidePreMaterialRetry({
+    failure,
+    currentAttempt: 3,
+    maxAttempts: 3
+  }), {
+    action: 'retry-same-attempt',
+    currentAttempt: 3,
+    nextAttempt: 3,
+    maxAttempts: 3
+  });
+});
+
+test('controller authority transfer preserves attempt and nonce while leaving one active controller', () => {
+  const original = lease({
+    controllerRunId: 21,
+    implementationAttempts: 2,
+    dispatchNonce: 'nonce-attempt-2',
+    controllerHeadSha: 'a'.repeat(40)
+  });
+  const transferred = transferBootstrapControllerAuthority(original, {
+    controllerRunId: 22,
+    controllerHeadSha: 'b'.repeat(40)
+  });
+
+  assert.equal(transferred.controllerRunId, 22);
+  assert.deepEqual(transferred.controllerRunHistory, [21]);
+  assert.deepEqual(transferred.controllerProvenanceHistory, [{
+    controllerRunId: 21,
+    controllerHeadSha: 'a'.repeat(40)
+  }]);
+  assert.equal(transferred.implementationAttempts, 2);
+  assert.equal(transferred.dispatchNonce, 'nonce-attempt-2');
+  assert.equal(transferred.controllerHeadSha, 'b'.repeat(40));
+
+  const repeated = transferBootstrapControllerAuthority(transferred, {
+    controllerRunId: 22,
+    controllerHeadSha: 'b'.repeat(40)
+  });
+  assert.deepEqual(repeated.controllerRunHistory, [21]);
+  assert.deepEqual(repeated.controllerProvenanceHistory, [{
+    controllerRunId: 21,
+    controllerHeadSha: 'a'.repeat(40)
+  }]);
+});
+
+test('same-attempt authorization retry is a reservable retry action', async () => {
+  const source = await readFile(
+    new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
+  assert.match(
+    source,
+    /\['retry', 'retry-same-attempt'\]\.includes\(decision\.action\)/
+  );
 });
