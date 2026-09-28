@@ -79,6 +79,37 @@ export function transferBootstrapControllerAuthority(lease, {
     ...(Array.isArray(lease.controllerRunHistory) ? lease.controllerRunHistory : []),
     previousControllerRunId
   ].map(Number).filter((value) => Number.isInteger(value) && value > 0 && value !== activeControllerRunId))];
+  const previousControllerHeadSha = String(lease.controllerHeadSha ?? '').trim().toLowerCase();
+  const provenanceHistory = [
+    ...(Array.isArray(lease.controllerProvenanceHistory)
+      ? lease.controllerProvenanceHistory.filter(
+          (entry) =>
+            Number.isInteger(Number(entry?.controllerRunId))
+            && Number(entry.controllerRunId) > 0
+            && (entry.controllerHeadSha == null || SHA_RE.test(String(entry.controllerHeadSha)))
+        ).map((entry) => ({
+          controllerRunId: Number(entry.controllerRunId),
+          controllerHeadSha: entry.controllerHeadSha == null
+            ? null
+            : String(entry.controllerHeadSha).trim().toLowerCase()
+        }))
+      : []),
+    ...(previousControllerRunId !== activeControllerRunId
+      ? [{
+          controllerRunId: previousControllerRunId,
+          controllerHeadSha: SHA_RE.test(previousControllerHeadSha)
+            ? previousControllerHeadSha
+            : null
+        }]
+      : [])
+  ].filter(
+    (entry, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          candidate.controllerRunId === entry.controllerRunId
+          && candidate.controllerHeadSha === entry.controllerHeadSha
+      ) === index
+  );
 
   const normalizedHeadSha = controllerHeadSha == null
     ? null
@@ -91,6 +122,7 @@ export function transferBootstrapControllerAuthority(lease, {
     ...lease,
     controllerRunId: activeControllerRunId,
     controllerRunHistory: history,
+    controllerProvenanceHistory: provenanceHistory,
     ...(normalizedHeadSha ? { controllerHeadSha: normalizedHeadSha } : {})
   });
 }
@@ -706,7 +738,9 @@ async function reserveNextInitialAttempt({
   controllerHeadSha
 }) {
   const decision = decidePreMaterialRetry({ failure, currentAttempt, maxAttempts });
-  if (decision.action !== 'retry') return Object.freeze({ decision });
+  if (!['retry', 'retry-same-attempt'].includes(decision.action)) {
+    return Object.freeze({ decision });
+  }
 
   const lease = await loadBootstrapLeaseForController({ repository, issueNumber, token });
   if (lease.status !== 'reserved-initial-attempt') throw new Error('same-cycle retry requires reserved-initial-attempt bootstrap state');

@@ -266,6 +266,10 @@ test('controller authority transfer preserves attempt and nonce while leaving on
 
   assert.equal(transferred.controllerRunId, 22);
   assert.deepEqual(transferred.controllerRunHistory, [21]);
+  assert.deepEqual(transferred.controllerProvenanceHistory, [{
+    controllerRunId: 21,
+    controllerHeadSha: 'a'.repeat(40)
+  }]);
   assert.equal(transferred.implementationAttempts, 2);
   assert.equal(transferred.dispatchNonce, 'nonce-attempt-2');
   assert.equal(transferred.controllerHeadSha, 'b'.repeat(40));
@@ -275,4 +279,19 @@ test('controller authority transfer preserves attempt and nonce while leaving on
     controllerHeadSha: 'b'.repeat(40)
   });
   assert.deepEqual(repeated.controllerRunHistory, [21]);
+  assert.deepEqual(repeated.controllerProvenanceHistory, [{
+    controllerRunId: 21,
+    controllerHeadSha: 'a'.repeat(40)
+  }]);
+});
+
+test('same-attempt authorization retry is a reservable retry action', async () => {
+  const source = await readFile(
+    new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
+  assert.match(
+    source,
+    /\['retry', 'retry-same-attempt'\]\.includes\(decision\.action\)/
+  );
 });
