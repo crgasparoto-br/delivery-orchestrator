@@ -869,16 +869,18 @@ async function ensurePromotedTechnicalHygiene({ hygiene, state, plan, repository
     targetPr: pullRequestNumber,
     expectedHeadSha: materialHeadSha,
     targetReadToken,
-    onDispatch: async ({ dispatchNonce }) => authorizePromotion({
+    onDispatch: async ({ dispatchNonce, retriesUsed }) => authorizePromotion({
       phase: 'dispatch',
       dispatchNonce,
       runId: null,
+      retriesUsed,
       promotedState
     }),
-    onObserve: async ({ dispatchNonce, run }) => authorizePromotion({
+    onObserve: async ({ dispatchNonce, run, retriesUsed }) => authorizePromotion({
       phase: 'observe',
       dispatchNonce,
       runId: run.id,
+      retriesUsed,
       promotedState
     }),
     dispatch: (dispatchNonce) => dispatchWorker({
@@ -1119,13 +1121,14 @@ export async function main() {
   let initialTechnicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: null, profile: state.riskProfile });
   state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: initialTechnicalHygiene });
   evidenceRefs.push(initialTechnicalHygiene.evidenceRef);
-  const initialPromotion = await ensurePromotedTechnicalHygiene({ hygiene: initialTechnicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: pullRequest.number, materialHeadSha, baselineSha: expectedBaseSha, actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, promotedState }) => {
+  const initialPromotion = await ensurePromotedTechnicalHygiene({ hygiene: initialTechnicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: pullRequest.number, materialHeadSha, baselineSha: expectedBaseSha, actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, retriesUsed, promotedState }) => {
         await persist({
           nextAction: phase === 'observe'
             ? 'observe-technical-hygiene'
             : 'dispatch-technical-hygiene',
           hygieneDispatchNonce: dispatchNonce,
-          hygieneRunId: runId
+          hygieneRunId: runId,
+          hygieneInfrastructureRetriesUsed: retriesUsed
         }, promotedState);
       } });
   if (initialPromotion.promotionRun) {
@@ -1211,11 +1214,21 @@ export async function main() {
         targetPr: pullRequest.number,
         expectedHeadSha: beforeSha,
         targetReadToken,
-        onDispatch: async ({ dispatchNonce }) => {
-          await persist({ nextAction: 'dispatch-ci-remediation', workerRunId: null, workerDispatchNonce: dispatchNonce });
+        onDispatch: async ({ dispatchNonce, retriesUsed }) => {
+          await persist({
+            nextAction: 'dispatch-ci-remediation',
+            workerRunId: null,
+            workerDispatchNonce: dispatchNonce,
+            workerInfrastructureRetriesUsed: retriesUsed
+          });
         },
-        onObserve: async ({ dispatchNonce, run }) => {
-          await persist({ nextAction: 'observe-remediation', workerRunId: run.id, workerDispatchNonce: dispatchNonce });
+        onObserve: async ({ dispatchNonce, run, retriesUsed }) => {
+          await persist({
+            nextAction: 'observe-remediation',
+            workerRunId: run.id,
+            workerDispatchNonce: dispatchNonce,
+            workerInfrastructureRetriesUsed: retriesUsed
+          });
         },
         dispatch: (dispatchNonce) => dispatchWorker({
           orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch,
@@ -1260,13 +1273,14 @@ export async function main() {
       let remediationTechnicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });
       state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: remediationTechnicalHygiene });
       evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);
-      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: remediationTechnicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: pullRequest.number, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, promotedState }) => {
+      const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: remediationTechnicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: pullRequest.number, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, retriesUsed, promotedState }) => {
         await persist({
           nextAction: phase === 'observe'
             ? 'observe-technical-hygiene'
             : 'dispatch-technical-hygiene',
           hygieneDispatchNonce: dispatchNonce,
-          hygieneRunId: runId
+          hygieneRunId: runId,
+          hygieneInfrastructureRetriesUsed: retriesUsed
         }, promotedState);
       } });
       if (hygienePromotion.promotionRun) {
@@ -1300,11 +1314,21 @@ export async function main() {
         stage: 'independent-audit',
         orchestratorRepository,
         actionsToken,
-        onDispatch: async ({ dispatchNonce }) => {
-          await persist({ nextAction: 'dispatch-audit', auditRunId: null, auditDispatchNonce: dispatchNonce });
+        onDispatch: async ({ dispatchNonce, retriesUsed }) => {
+          await persist({
+            nextAction: 'dispatch-audit',
+            auditRunId: null,
+            auditDispatchNonce: dispatchNonce,
+            auditInfrastructureRetriesUsed: retriesUsed
+          });
         },
-        onObserve: async ({ dispatchNonce, run }) => {
-          await persist({ nextAction: 'observe-audit', auditRunId: run.id, auditDispatchNonce: dispatchNonce });
+        onObserve: async ({ dispatchNonce, run, retriesUsed }) => {
+          await persist({
+            nextAction: 'observe-audit',
+            auditRunId: run.id,
+            auditDispatchNonce: dispatchNonce,
+            auditInfrastructureRetriesUsed: retriesUsed
+          });
         },
         dispatch: (dispatchNonce) => dispatchWorkflowAndResolveRun({
           repository: orchestratorRepository,
@@ -1439,11 +1463,21 @@ export async function main() {
           targetPr: pullRequest.number,
           expectedHeadSha: beforeSha,
           targetReadToken,
-          onDispatch: async ({ dispatchNonce }) => {
-            await persist({ nextAction: 'dispatch-audit-remediation', workerRunId: null, workerDispatchNonce: dispatchNonce });
+          onDispatch: async ({ dispatchNonce, retriesUsed }) => {
+            await persist({
+              nextAction: 'dispatch-audit-remediation',
+              workerRunId: null,
+              workerDispatchNonce: dispatchNonce,
+              workerInfrastructureRetriesUsed: retriesUsed
+            });
           },
-          onObserve: async ({ dispatchNonce, run }) => {
-            await persist({ nextAction: 'observe-remediation', workerRunId: run.id, workerDispatchNonce: dispatchNonce });
+          onObserve: async ({ dispatchNonce, run, retriesUsed }) => {
+            await persist({
+              nextAction: 'observe-remediation',
+              workerRunId: run.id,
+              workerDispatchNonce: dispatchNonce,
+              workerInfrastructureRetriesUsed: retriesUsed
+            });
           },
           dispatch: (dispatchNonce) => dispatchWorker({
             orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch,
@@ -1488,13 +1522,14 @@ export async function main() {
         let remediationTechnicalHygiene = await downloadGhAwTechnicalHygieneArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken, baselineSha: expectedBaseSha, materialSha: materialHeadSha, previousMaterialSha: beforeSha, profile: state.riskProfile });
         state = applyOperationalEvent(state, { type: 'technical-hygiene-result', result: remediationTechnicalHygiene });
         evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);
-        const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: remediationTechnicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: pullRequest.number, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, promotedState }) => {
+        const hygienePromotion = await ensurePromotedTechnicalHygiene({ hygiene: remediationTechnicalHygiene, state, plan, repositoryPolicy, changedPaths, provider, orchestratorRepository, orchestratorRef, controllerRunId, targetRepository, issueNumber, baseBranch, pullRequestNumber: pullRequest.number, materialHeadSha, baselineSha: expectedBaseSha, previousMaterialSha: beforeSha, actionsToken, targetReadToken, authorizePromotion: async ({ phase, dispatchNonce, runId, retriesUsed, promotedState }) => {
         await persist({
           nextAction: phase === 'observe'
             ? 'observe-technical-hygiene'
             : 'dispatch-technical-hygiene',
           hygieneDispatchNonce: dispatchNonce,
-          hygieneRunId: runId
+          hygieneRunId: runId,
+          hygieneInfrastructureRetriesUsed: retriesUsed
         }, promotedState);
       } });
         if (hygienePromotion.promotionRun) {

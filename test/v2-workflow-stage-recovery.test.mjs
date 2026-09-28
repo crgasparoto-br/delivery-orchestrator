@@ -131,3 +131,55 @@ test('both controllers wire the recovery matrix into bounded downstream stages',
     assert.match(source, /downloadGhAwAgentOutputArtifact/);
   }
 });
+
+
+test('infrastructure retry budget survives controller restart for remediation, hygiene, and audit', async () => {
+  const resumed = await readFile(
+    new URL('../scripts/resume-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
+  const primary = await readFile(
+    new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url),
+    'utf8'
+  );
+
+  for (const field of [
+    'workerInfrastructureRetriesUsed',
+    'hygieneInfrastructureRetriesUsed',
+    'auditInfrastructureRetriesUsed'
+  ]) {
+    assert.match(resumed, new RegExp(field));
+    assert.match(primary, new RegExp(field));
+  }
+
+  assert.match(
+    resumed,
+    /initialRun:\s*run[\s\S]*?initialRetriesUsed:\s*controller\.workerInfrastructureRetriesUsed/
+  );
+  assert.match(
+    resumed,
+    /initialRun:\s*hygieneRun[\s\S]*?initialRetriesUsed:\s*controller\.hygieneInfrastructureRetriesUsed/
+  );
+  assert.match(
+    resumed,
+    /initialRun:\s*auditRun[\s\S]*?initialRetriesUsed:\s*controller\.auditInfrastructureRetriesUsed/
+  );
+
+  const failure = classifyWorkflowStageFailure({
+    stage: 'independent-audit',
+    conclusion: 'timed_out'
+  });
+
+  assert.deepEqual(
+    decideWorkflowStageRetry({
+      failure,
+      retriesUsed: 1,
+      maxRetries: 1
+    }),
+    {
+      action: 'retry-budget-exhausted',
+      retriesUsed: 1,
+      maxRetries: 1
+    }
+  );
+});
