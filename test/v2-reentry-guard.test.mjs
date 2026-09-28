@@ -3,10 +3,12 @@ import test from 'node:test';
 
 import { createPersistentDeliveryState } from '../src/v2/persistent-state.mjs';
 import {
+  detectLegacyBootstrapControllerRunMismatch,
   ensureLegacyAdoptionPullRequestTitle,
   evaluateReentry,
   parseBootstrapLease,
   parsePersistentStateEnvelope,
+  rearmLegacyNonrecoverableBootstrapLease,
   selectManagedPullRequest
 } from '../scripts/guard-delivery-v2-reentry.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
@@ -385,6 +387,181 @@ test('exhausted bootstrap remains blocked without a new control-plane epoch or f
 
   assert.equal(materialFailure.runController, false);
   assert.equal(materialFailure.nextAction, 'human-escalation');
+});
+
+test('legacy nonrecoverable bootstrap is rearmed only for proven historical controller authorization failure after a control-plane change', () => {
+  const bootstrapLease = {
+    repository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    implementationAttempts: 2,
+    status: 'escalated-initial-nonrecoverable',
+    effectiveRisk: 'critical',
+    controllerRunId: 41,
+    controllerHeadSha: CONTROLLER_OLD,
+    workerRunId: 88,
+    dispatchNonce: 'old-nonce',
+    workerWorkflow: 'worker.yml',
+    lastFailure: {
+      schemaVersion: 1,
+      attempt: 2,
+      workerRunId: 88,
+      workerConclusion: 'failure',
+      classification: 'ambiguous-agent-output',
+      reason: 'structured agent output is ambiguous or contains framework errors',
+      failureStage: 'pre-material',
+      failureClass: 'unknown',
+      recoverable: false,
+      hasPatch: false
+    }
+  };
+
+  const decision = evaluateReentry({
+    bootstrapLease,
+    targetRepository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    bootstrapControllerHeadSha: CONTROLLER_OLD,
+    currentControllerHeadSha: CONTROLLER_NEW,
+    legacyAuthorizationFailure: {
+      classification: 'bootstrap-controller-run-mismatch',
+      workerRunId: 88,
+      evidenceRef: 'github:job/88'
+    },
+    rearmDispatchNonce: 'fresh-nonce'
+  });
+
+  assert.equal(decision.runController, true);
+  assert.equal(decision.reuseReservedAttempt, true);
+  assert.equal(decision.priorInitialAttempts, 2);
+  assert.equal(decision.attempts.implementation, 2);
+  assert.equal(decision.dispatchNonce, 'fresh-nonce');
+  assert.equal(decision.recovery.retryMode, 'reuse-current-attempt');
+  assert.equal(decision.recovery.grantedImplementationAttempts, 0);
+
+  const rearmed = rearmLegacyNonrecoverableBootstrapLease(
+    bootstrapLease,
+    decision,
+    {
+      currentControllerRunId: 42,
+      currentControllerHeadSha: CONTROLLER_NEW
+    }
+  );
+
+  assert.equal(rearmed.status, 'reserved-initial-attempt');
+  assert.equal(rearmed.implementationAttempts, 2);
+  assert.equal(rearmed.workerRunId, null);
+  assert.equal(rearmed.dispatchNonce, 'fresh-nonce');
+  assert.equal(rearmed.controllerRunId, 42);
+  assert.deepEqual(rearmed.controllerRunHistory, [41]);
+  assert.equal(rearmed.controllerHeadSha, CONTROLLER_NEW);
+  assert.equal(rearmed.recovery.previousFailure.workerRunId, 88);
+  assert.equal(Object.hasOwn(rearmed, 'lastFailure'), false);
+});
+
+test('legacy nonrecoverable bootstrap remains fail-closed without exact authorization evidence or without a new control-plane epoch', () => {
+  const bootstrapLease = {
+    repository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    implementationAttempts: 2,
+    status: 'escalated-initial-nonrecoverable',
+    effectiveRisk: 'critical',
+    controllerRunId: 41,
+    controllerHeadSha: CONTROLLER_OLD,
+    lastFailure: {
+      attempt: 2,
+      workerRunId: 88,
+      workerConclusion: 'failure',
+      classification: 'ambiguous-agent-output',
+      failureStage: 'pre-material',
+      failureClass: 'unknown',
+      recoverable: false,
+      hasPatch: false
+    }
+  };
+
+  const withoutEvidence = evaluateReentry({
+    bootstrapLease,
+    targetRepository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    bootstrapControllerHeadSha: CONTROLLER_OLD,
+    currentControllerHeadSha: CONTROLLER_NEW
+  });
+  assert.equal(withoutEvidence.runController, false);
+  assert.equal(withoutEvidence.nextAction, 'human-escalation');
+
+  const sameEpoch = evaluateReentry({
+    bootstrapLease,
+    targetRepository: 'owner/repo',
+    issueNumber: 63,
+    baseBranch: 'main',
+    provider: 'codex',
+    bootstrapControllerHeadSha: CONTROLLER_OLD,
+    currentControllerHeadSha: CONTROLLER_OLD,
+    legacyAuthorizationFailure: {
+      classification: 'bootstrap-controller-run-mismatch',
+      workerRunId: 88
+    },
+    rearmDispatchNonce: 'unused'
+  });
+  assert.equal(sameEpoch.runController, false);
+  assert.equal(sameEpoch.nextAction, 'human-escalation');
+});
+
+test('legacy authorization recovery requires failed guard evidence before agent execution', async () => {
+  const lease = {
+    status: 'escalated-initial-nonrecoverable',
+    lastFailure: {
+      workerRunId: 88,
+      failureStage: 'pre-material',
+      hasPatch: false
+    }
+  };
+  const worker = { id: 88, status: 'completed', conclusion: 'failure', html_url: 'github:run/88' };
+
+  const detected = await detectLegacyBootstrapControllerRunMismatch({
+    bootstrapLease: lease,
+    recoveredWorkerRun: worker,
+    orchestratorRepository: 'owner/orchestrator',
+    actionsToken: 'token',
+    listJobs: async () => [{
+      id: 99,
+      html_url: 'github:job/99',
+      steps: [
+        { name: 'Validate controller-selected worker authorization', conclusion: 'failure' },
+        { name: 'Execute Codex CLI', conclusion: 'skipped' }
+      ]
+    }],
+    readJobLog: async () => 'Error: bootstrap controller run mismatch'
+  });
+
+  assert.deepEqual(detected, {
+    classification: 'bootstrap-controller-run-mismatch',
+    workerRunId: 88,
+    evidenceRef: 'github:job/99'
+  });
+
+  const rejected = await detectLegacyBootstrapControllerRunMismatch({
+    bootstrapLease: lease,
+    recoveredWorkerRun: worker,
+    orchestratorRepository: 'owner/orchestrator',
+    actionsToken: 'token',
+    listJobs: async () => [{
+      id: 100,
+      steps: [
+        { name: 'Validate controller-selected worker authorization', conclusion: 'failure' },
+        { name: 'Execute Codex CLI', conclusion: 'success' }
+      ]
+    }],
+    readJobLog: async () => 'Error: bootstrap controller run mismatch'
+  });
+  assert.equal(rejected, null);
 });
 
 test('duplicate managed PRs fail closed rather than selecting one nondeterministically', () => {
