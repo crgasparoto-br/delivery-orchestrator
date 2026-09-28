@@ -1337,34 +1337,50 @@ export async function main() {
 
     if (state.status === 'audit-pending') {
       state = applyOperationalEvent(state, { type: 'start-audit' });
-      const auditDispatchNonce = createDispatchNonce();
-      await persist({ nextAction: 'dispatch-audit', auditRunId: null, auditDispatchNonce });
-      let auditRun = await dispatchWorkflowAndResolveRun({
-        repository: orchestratorRepository,
-        workflow: 'delivery-v2-audit.yml',
-        ref: orchestratorRef,
-        token: actionsToken,
-        kind: 'audit',
-        dispatchNonce: auditDispatchNonce,
-        inputs: {
-          target_repository: targetRepository,
-          target_issue: String(issueNumber),
-          target_pr: String(pullRequest.number),
-          risk_profile: state.riskProfile,
-          source_workflow_run_id: String(latestSourceRun.id),
-          source_workflow_name: targetPolicy.ciWorkflowName,
-          source_workflow_path: targetPolicy.ciWorkflowPath,
-          implementation_attempt: String(state.implementationAttempts),
-          implementer_provenance: 'known',
-          implementer_provider: controller.materialWorkerProvider ?? initialWorkerProvider,
-          implementer_worker_identity: controller.materialWorkerIdentity ?? initialWorkerIdentity,
-          implementer_run_id: String(controller.materialWorkerRunId ?? worker.id),
-          prior_findings_json: JSON.stringify(controller.priorFindings ?? [])
-        }
+      const auditStage = await runWorkflowStageWithInfrastructureRecovery({
+        stage: 'independent-audit',
+        orchestratorRepository,
+        actionsToken,
+        onDispatch: async ({ dispatchNonce }) => {
+          await persist({ nextAction: 'dispatch-audit', auditRunId: null, auditDispatchNonce: dispatchNonce });
+        },
+        onObserve: async ({ dispatchNonce, run }) => {
+          await persist({ nextAction: 'observe-audit', auditRunId: run.id, auditDispatchNonce: dispatchNonce });
+        },
+        dispatch: (dispatchNonce) => dispatchWorkflowAndResolveRun({
+          repository: orchestratorRepository,
+          workflow: 'delivery-v2-audit.yml',
+          ref: orchestratorRef,
+          token: actionsToken,
+          kind: 'audit',
+          dispatchNonce,
+          inputs: {
+            target_repository: targetRepository,
+            target_issue: String(issueNumber),
+            target_pr: String(pullRequest.number),
+            risk_profile: state.riskProfile,
+            source_workflow_run_id: String(latestSourceRun.id),
+            source_workflow_name: targetPolicy.ciWorkflowName,
+            source_workflow_path: targetPolicy.ciWorkflowPath,
+            implementation_attempt: String(state.implementationAttempts),
+            implementer_provenance: 'known',
+            implementer_provider: controller.materialWorkerProvider ?? initialWorkerProvider,
+            implementer_worker_identity: controller.materialWorkerIdentity ?? initialWorkerIdentity,
+            implementer_run_id: String(controller.materialWorkerRunId ?? worker.id),
+            prior_findings_json: JSON.stringify(controller.priorFindings ?? [])
+          }
+        })
       });
-      await persist({ nextAction: 'observe-audit', auditRunId: auditRun.id, auditDispatchNonce });
-      auditRun = await waitWorkflowRun(orchestratorRepository, auditRun.id, actionsToken);
-      auditRuns.push(auditRun);
+      let auditRun = auditStage.run;
+      auditRuns.push(...auditStage.runs);
+      for (const failedAuditRun of auditStage.runs.slice(0, -1)) {
+        if (failedAuditRun.conclusion === 'success') continue;
+        observability = recordControllerAuditWorkflowFailure(observability, {
+          runId: failedAuditRun.id,
+          durationMs: runDurationMs(failedAuditRun),
+          evidenceRef: failedAuditRun.html_url
+        });
+      }
       if (auditRun.conclusion !== 'success') {
         const terminalReason =
           `independent-audit-workflow-${auditRun.conclusion ?? 'failed'}`;
