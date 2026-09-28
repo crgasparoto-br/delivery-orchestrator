@@ -1798,6 +1798,10 @@ export async function main() {
     }
 
     if (state.status === 'ci-failed-remediable' || state.status === 'audit-failed-remediable') {
+      const remediationStageName =
+        state.status === 'ci-failed-remediable'
+          ? 'ci-remediation'
+          : 'audit-remediation';
       const remediation = operationalRemediationInput(state);
       const beforeSha = materialHeadSha;
       state = applyOperationalEvent(state, { type: 'start-implementation' });
@@ -1806,7 +1810,7 @@ export async function main() {
         break;
       }
       const remediationStage = await runWorkflowStageWithInfrastructureRecovery({
-        stage: state.status === 'ci-failed-remediable' ? 'ci-remediation' : 'audit-remediation',
+        stage: remediationStageName,
         orchestratorRepository,
         actionsToken,
         targetRepository,
