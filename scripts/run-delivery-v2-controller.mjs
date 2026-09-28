@@ -523,7 +523,10 @@ async function downloadInitialWorkerEvidence(orchestratorRepository, runId, toke
         return { hasPatch: null, agentOutput: null, evidenceRef: artifact.archive_download_url, artifactId: artifact.id, error: 'agent_output.json is unavailable' };
       }
       return {
-        hasPatch: patchPaths.length > 0,
+        // Only the full agent artifact carries the same aw-*.patch envelope
+        // used by gh-aw to publish has_patch. The fallback artifact deliberately
+        // omits patches, so its absence is not authoritative no-patch evidence.
+        hasPatch: artifact.name === 'agent' ? patchPaths.length > 0 : null,
         agentOutput: JSON.parse(await readFile(agentOutputPath, 'utf8')),
         evidenceRef: artifact.archive_download_url,
         artifactId: artifact.id
