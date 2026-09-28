@@ -126,6 +126,20 @@ The configured provider and model are part of the delivery contract. Supported p
 
 CI, technical-hygiene and audit evidence applies only to the material SHA it actually examined. Any material commit after validation invalidates downstream approvals that depend on the old SHA. The controller must re-enter the minimum safe stage for the new material SHA.
 
+### 4.4.1 Legacy adoption exact-head CI recovery
+
+Legacy adoption must distinguish the authoritative exact-head CI state before
+post-write refreeze. Missing or non-terminal CI remains bounded observation;
+terminal success may be reused only with the normal exact-head correlation;
+terminal failure must be classified by the canonical CI failure collector.
+Actionable material failure converges on the same bounded
+`ci-failed-remediable` operational state used by normal delivery, including
+pre-dispatch persisted attempt/nonce reservation, post-dispatch run binding,
+idempotent re-entry and the existing workflow-stage recovery matrix. Ambiguous
+or non-actionable evidence fails closed. If remediation publishes a new material
+HEAD, all CI, classifier, audit, Technical Hygiene and release evidence from the
+old SHA is stale and cannot authorize the new candidate.
+
 ### 4.5 Bounded loops
 
 There are no open-ended AI-on-AI loops. Every implementation and review cycle consumes explicit attempt budgets. Exhaustion escalates to a human with structured findings/state.
