@@ -917,7 +917,7 @@ export function buildReentryGuardFailure(error, {
   });
 }
 
-async function recordReentryGuardFailure(error) {
+export async function recordReentryGuardFailure(error) {
   const resultPath = String(process.env.CONTROLLER_RESULT_PATH ?? '').trim();
   const errorPath = String(process.env.CONTROLLER_ERROR_PATH ?? '').trim();
   if (!resultPath && !errorPath) return;

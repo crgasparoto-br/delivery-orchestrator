@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { buildReentryGuardFailure, evaluateReentry, persistReentryMutation, terminalBootstrapLease } from '../scripts/guard-delivery-v2-reentry.mjs';
+import { buildReentryGuardFailure, evaluateReentry, persistReentryMutation, recordReentryGuardFailure, terminalBootstrapLease } from '../scripts/guard-delivery-v2-reentry.mjs';
 import { auditProducerInputs, legacyTechnicalHygieneContext, persistLegacyRefreeze } from '../scripts/resume-delivery-v2-controller.mjs';
 import { createDeliveryPlan } from '../src/v2/delivery-plan.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
@@ -355,6 +357,148 @@ test('issue 283: legacy adoption bootstrap allowlist remains closed and failures
     adoptionPersisted: false,
     retryPersisted: false
   });
+});
+
+test('issue 283: early guard failure writes structured controller result and error artifacts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'delivery-v2-reentry-'));
+  const resultPath = join(dir, 'controller-result.json');
+  const errorPath = join(dir, 'controller-error.ndjson');
+  const previous = {
+    CONTROLLER_RESULT_PATH: process.env.CONTROLLER_RESULT_PATH,
+    CONTROLLER_ERROR_PATH: process.env.CONTROLLER_ERROR_PATH,
+    TARGET_REPOSITORY: process.env.TARGET_REPOSITORY,
+    TARGET_ISSUE: process.env.TARGET_ISSUE
+  };
+
+  try {
+    process.env.CONTROLLER_RESULT_PATH = resultPath;
+    process.env.CONTROLLER_ERROR_PATH = errorPath;
+    process.env.TARGET_REPOSITORY = repository;
+    process.env.TARGET_ISSUE = '613';
+
+    const unknown = { ...bootstrap, status: 'future-terminal-state' };
+    let failure;
+    try {
+      createLegacyAdoption({ ...input, bootstrapLease: unknown });
+      assert.fail('unknown bootstrap state must fail closed');
+    } catch (error) {
+      failure = error;
+    }
+
+    await recordReentryGuardFailure(failure);
+
+    const resultArtifact = JSON.parse(readFileSync(resultPath, 'utf8'));
+    const errorArtifact = JSON.parse(readFileSync(errorPath, 'utf8').trim().split('\n').at(-1));
+    assert.deepEqual(errorArtifact, resultArtifact);
+    assert.equal(resultArtifact.status, 'reentry-guard-failed');
+    assert.equal(resultArtifact.repository, repository);
+    assert.equal(resultArtifact.issueNumber, 613);
+    assert.equal(resultArtifact.pullRequestNumber, pr.number);
+    assert.equal(resultArtifact.materialHeadSha, pr.head.sha);
+    assert.deepEqual(resultArtifact.reentry, {
+      bootstrapStatus: 'future-terminal-state',
+      bootstrapClassification: 'invalid',
+      reason: 'unsupported-bootstrap-status',
+      adoptionPersisted: false,
+      retryPersisted: false
+    });
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('issue 283: captured SolverFin #620/#681 live shape crosses the guard into persisted legacy adoption', async () => {
+  const liveRepository = 'crgasparoto-br/SolverFin';
+  const livePr = {
+    number: 681,
+    state: 'open',
+    title: 'feat: tornar recorrências acionáveis nas jornadas existentes',
+    body: 'Closes #620',
+    user: { login: 'crgasparoto-br' },
+    author_association: 'OWNER',
+    head: {
+      ref: 'feat/620-actionable-recurrences',
+      sha: 'b0204401d2dd52a636867d6352c10b52a34a9213',
+      repo: { full_name: liveRepository }
+    },
+    base: {
+      ref: 'main',
+      sha: '01398022e05dd0560c6d6c3a38ca719854742b4b',
+      repo: { full_name: liveRepository }
+    }
+  };
+  const liveBootstrap = {
+    schemaVersion: 1,
+    repository: liveRepository,
+    issueNumber: 620,
+    baseBranch: 'main',
+    provider: 'codex',
+    model: 'gpt-5.6-sol',
+    requestedRisk: 'auto',
+    effectiveRisk: 'critical',
+    implementationAttempts: 2,
+    status: 'escalated-initial-nonrecoverable',
+    controllerRunId: 36361552815,
+    workerRunId: 36406891567,
+    workerWorkflow: 'delivery-v2-worker-codex-critical.lock.yml',
+    dispatchNonce: '8a1c033b-911d-4286-8d96-5db2b0b04063',
+    commentId: 5861156471,
+    controllerHeadSha: 'a52de84c28e34c9212dba546030d055a93b81e9b',
+    lastFailure: {
+      schemaVersion: 1,
+      attempt: 2,
+      workerRunId: 36406891567,
+      workerConclusion: 'failure',
+      classification: 'ambiguous-agent-output',
+      reason: 'structured agent output is ambiguous or contains framework errors',
+      failureStage: 'pre-material',
+      failureClass: 'unknown',
+      recoverable: false,
+      hasPatch: false,
+      evidenceRef: 'https://api.github.com/repos/crgasparoto-br/delivery-orchestrator/actions/artifacts/10962603220/zip'
+    }
+  };
+
+  const decision = evaluateReentry({
+    pullRequest: livePr,
+    bootstrapLease: liveBootstrap,
+    targetRepository: liveRepository,
+    issueNumber: 620,
+    baseBranch: 'main',
+    provider: 'codex',
+    model: 'gpt-5.6-sol'
+  });
+
+  assert.equal(decision.status, 'legacy-adopted');
+  assert.equal(decision.resumePr, 681);
+  assert.equal(decision.materialHeadSha, livePr.head.sha);
+  assert.equal(decision.nextAction, 'post-write-refreeze');
+  assert.deepEqual(decision.attempts, { implementation: 2, audit: null, auditRemediation: null });
+  assert.equal(decision.dispatchNonce, undefined);
+  assert.equal(decision.recoverWorkerRunId, undefined);
+  assert.equal(decision.adoption.adoption.bootstrapProvenance.status, 'escalated-initial-nonrecoverable');
+  assert.equal(decision.adoption.adoption.bootstrapProvenance.classification, 'historical-adoptable');
+  assert.equal(decision.adoption.adoption.bootstrapProvenance.workerRunId, 36406891567);
+
+  const mutations = [];
+  const persisted = await persistReentryMutation({
+    decision,
+    repository: liveRepository,
+    controller,
+    getWriteToken: () => 'fake-write-token',
+    mutate: async (url, token, options) => { mutations.push({ url, token, ...options }); }
+  });
+  assert.equal(persisted, true);
+  assert.equal(mutations.length, 1);
+  assert.equal(mutations[0].method, 'POST');
+  assert.equal(mutations[0].url, 'https://api.github.com/repos/crgasparoto-br/SolverFin/issues/681/comments');
+  assert.match(JSON.parse(mutations[0].body).body, /"status": "legacy-adopted"/);
+  assert.match(JSON.parse(mutations[0].body).body, /"implementation": 2/);
+  assert.doesNotMatch(JSON.parse(mutations[0].body).body, /"dispatchNonce"/);
 });
 
 test('issue 283: supported historical exhaustion keeps its existing adoption semantics and active lease stays active', () => {
