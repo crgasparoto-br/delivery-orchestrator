@@ -7,7 +7,7 @@ import { loadV2Config } from '../src/v2/config.mjs';
 import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
 import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { resolveProviderSelectionForRisk } from '../src/v2/provider-policy.mjs';
-import { expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
+import { createDispatchNonce, expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { parseTrustedJsonEnvelope, selectExistingPullRequest, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 import { createLegacyAdoption, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { withTransientFetchRetry } from '../src/v2/github-api-retry.mjs';
@@ -79,6 +79,47 @@ export function recoveryContextForExhaustedBootstrap({
   });
 }
 
+
+export function recoveryContextForLegacyNonrecoverableBootstrap({
+  bootstrapLease,
+  currentControllerHeadSha,
+  bootstrapControllerHeadSha = null,
+  authorizationFailure = null
+} = {}) {
+  const previousControllerHeadSha = normalizedSha(
+    bootstrapLease?.recovery?.currentControllerHeadSha
+      ?? bootstrapLease?.controllerHeadSha
+      ?? bootstrapControllerHeadSha
+  );
+  const currentControlPlaneHeadSha = normalizedSha(currentControllerHeadSha);
+  const previousImplementationAttempts = Number(bootstrapLease?.implementationAttempts);
+  const lastFailure = bootstrapLease?.lastFailure;
+
+  const eligible =
+    bootstrapLease?.status === 'escalated-initial-nonrecoverable'
+    && lastFailure?.failureStage === 'pre-material'
+    && lastFailure?.hasPatch === false
+    && Number.isInteger(previousImplementationAttempts)
+    && previousImplementationAttempts >= 1
+    && previousControllerHeadSha
+    && currentControlPlaneHeadSha
+    && previousControllerHeadSha !== currentControlPlaneHeadSha
+    && authorizationFailure?.classification === 'bootstrap-controller-run-mismatch'
+    && Number(authorizationFailure.workerRunId) === Number(lastFailure.workerRunId);
+
+  if (!eligible) return null;
+
+  return Object.freeze({
+    reason: 'control-plane-changed-after-legacy-authorization-failure',
+    previousImplementationAttempts,
+    previousControllerHeadSha,
+    currentControllerHeadSha: currentControlPlaneHeadSha,
+    grantedImplementationAttempts: 0,
+    retryMode: 'reuse-current-attempt',
+    previousWorkerRunId: Number(lastFailure.workerRunId),
+    persistedClassification: String(lastFailure.classification ?? '')
+  });
+}
 
 export function recoveryContextForSuccessfulBootstrapWithoutPr({
   bootstrapLease,
@@ -378,7 +419,7 @@ function bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease,
   });
 }
 
-export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope = null, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null, bootstrapControllerHeadSha = null, currentControllerHeadSha = null } = {}) {
+export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope = null, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null, bootstrapControllerHeadSha = null, currentControllerHeadSha = null, legacyAuthorizationFailure = null, rearmDispatchNonce = null } = {}) {
   const resolvedIssue = positiveInteger(issueNumber, 'issueNumber');
   const resolvedProvider = String(provider ?? '').toLowerCase();
 
@@ -493,6 +534,35 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
       });
     }
     if (bootstrapLease.status === 'escalated-initial-nonrecoverable') {
+      const recovery = recoveryContextForLegacyNonrecoverableBootstrap({
+        bootstrapLease,
+        currentControllerHeadSha,
+        bootstrapControllerHeadSha,
+        authorizationFailure: legacyAuthorizationFailure
+      });
+
+      if (recovery) {
+        const dispatchNonce = String(rearmDispatchNonce ?? '').trim();
+        if (!dispatchNonce) {
+          throw new Error('legacy nonrecoverable bootstrap recovery requires a fresh dispatch nonce');
+        }
+        return Object.freeze({
+          runController: true,
+          resumePr: null,
+          recoverWorkerRunId: null,
+          reuseReservedAttempt: true,
+          status: 'retry-initial-delivery',
+          pullRequestNumber: null,
+          materialHeadSha: null,
+          staleStateDetected: false,
+          nextAction: 'dispatch-reserved-initial-attempt',
+          priorInitialAttempts: bootstrapLease.implementationAttempts,
+          dispatchNonce,
+          attempts: { implementation: bootstrapLease.implementationAttempts },
+          recovery
+        });
+      }
+
       return Object.freeze({
         runController: false,
         resumePr: null,
@@ -681,6 +751,129 @@ export async function recoverBootstrapWorkerRun(lease, orchestratorRepository, o
   return run ? assertRecoveredWorkerIdentity(run, lease, orchestratorRef) : null;
 }
 
+export async function detectLegacyBootstrapControllerRunMismatch({
+  bootstrapLease,
+  recoveredWorkerRun,
+  orchestratorRepository,
+  actionsToken,
+  listJobs = async ({ repository, runId, token }) => {
+    const payload = await api(
+      `https://api.github.com/repos/${repository}/actions/runs/${runId}/jobs?per_page=100`,
+      token
+    );
+    return payload.jobs ?? [];
+  },
+  readJobLog = async ({ repository, jobId, token }) => {
+    const url = `https://api.github.com/repos/${repository}/actions/jobs/${jobId}/logs`;
+    const response = await withTransientFetchRetry(
+      () => fetch(url, { headers: headers(token) }),
+      { label: `legacy bootstrap authorization log ${jobId}` }
+    );
+    if (!response.ok) throw new Error(`GitHub API ${response.status} GET ${url}: ${await response.text()}`);
+    return response.text();
+  }
+} = {}) {
+  if (
+    bootstrapLease?.status !== 'escalated-initial-nonrecoverable'
+    || bootstrapLease?.lastFailure?.failureStage !== 'pre-material'
+    || bootstrapLease?.lastFailure?.hasPatch !== false
+    || recoveredWorkerRun?.status !== 'completed'
+    || recoveredWorkerRun?.conclusion !== 'failure'
+    || Number(recoveredWorkerRun.id) !== Number(bootstrapLease?.lastFailure?.workerRunId)
+  ) {
+    return null;
+  }
+
+  const jobs = await listJobs({
+    repository: orchestratorRepository,
+    runId: recoveredWorkerRun.id,
+    token: actionsToken
+  });
+
+  for (const job of jobs) {
+    const authStep = (job.steps ?? []).find(
+      (step) =>
+        String(step?.name ?? '') === 'Validate controller-selected worker authorization'
+        && String(step?.conclusion ?? '') === 'failure'
+    );
+    if (!authStep) continue;
+
+    const agentExecution = (job.steps ?? []).find(
+      (step) => String(step?.name ?? '') === 'Execute Codex CLI'
+    );
+    if (agentExecution && String(agentExecution.conclusion ?? '') !== 'skipped') continue;
+
+    const log = await readJobLog({
+      repository: orchestratorRepository,
+      jobId: job.id,
+      token: actionsToken
+    });
+    if (!log.includes('bootstrap controller run mismatch')) continue;
+
+    return Object.freeze({
+      classification: 'bootstrap-controller-run-mismatch',
+      workerRunId: Number(recoveredWorkerRun.id),
+      evidenceRef: job.html_url ?? recoveredWorkerRun.html_url ?? null
+    });
+  }
+
+  return null;
+}
+
+export function rearmLegacyNonrecoverableBootstrapLease(
+  lease,
+  decision,
+  { currentControllerRunId, currentControllerHeadSha } = {}
+) {
+  if (decision?.recovery?.reason !== 'control-plane-changed-after-legacy-authorization-failure') return null;
+  if (lease?.status !== 'escalated-initial-nonrecoverable') {
+    throw new Error('legacy nonrecoverable recovery requires escalated-initial-nonrecoverable state');
+  }
+
+  const activeControllerRunId = positiveInteger(currentControllerRunId, 'currentControllerRunId');
+  const currentHeadSha = normalizedSha(currentControllerHeadSha);
+  if (!currentHeadSha) throw new Error('currentControllerHeadSha must be an exact Git commit SHA');
+  const dispatchNonce = String(decision.dispatchNonce ?? '').trim();
+  if (!dispatchNonce) throw new Error('legacy nonrecoverable recovery requires dispatch nonce');
+
+  const { commentId, lastFailure, ...value } = lease;
+  const previousControllerRunId = positiveInteger(value.controllerRunId, 'bootstrap controllerRunId');
+  const controllerRunHistory = [...new Set([
+    ...(Array.isArray(value.controllerRunHistory) ? value.controllerRunHistory : []),
+    previousControllerRunId
+  ].map(Number).filter((item) => Number.isInteger(item) && item > 0 && item !== activeControllerRunId))];
+
+  const previousHeadSha = normalizedSha(value.controllerHeadSha);
+  const controllerProvenanceHistory = [
+    ...(Array.isArray(value.controllerProvenanceHistory) ? value.controllerProvenanceHistory : []),
+    ...(previousControllerRunId !== activeControllerRunId
+      ? [{ controllerRunId: previousControllerRunId, controllerHeadSha: previousHeadSha }]
+      : [])
+  ].filter(
+    (entry, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          Number(candidate?.controllerRunId) === Number(entry?.controllerRunId)
+          && String(candidate?.controllerHeadSha ?? '') === String(entry?.controllerHeadSha ?? '')
+      ) === index
+  );
+
+  return Object.freeze({
+    ...value,
+    status: 'reserved-initial-attempt',
+    controllerRunId: activeControllerRunId,
+    controllerRunHistory,
+    controllerProvenanceHistory,
+    controllerHeadSha: currentHeadSha,
+    workerRunId: null,
+    dispatchNonce,
+    recovery: Object.freeze({
+      ...decision.recovery,
+      previousFailure: lastFailure ?? null
+    })
+  });
+}
+
 async function writeGithubOutput(decision) {
   const outputPath = String(process.env.GITHUB_OUTPUT ?? '').trim();
   if (!outputPath) return;
@@ -735,7 +928,7 @@ export function terminalBootstrapLease(
 
 // Resolve write capability only after a concrete mutation has been selected.
 export async function persistReentryMutation({ decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository, controller,
-  currentControllerHeadSha = null, getWriteToken = () => requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'), mutate = api }) {
+  currentControllerRunId = null, currentControllerHeadSha = null, getWriteToken = () => requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN'), mutate = api }) {
   let url;
   let method;
   let body;
@@ -746,13 +939,18 @@ export async function persistReentryMutation({ decision, adoptionEnvelope, boots
     method = adoptionEnvelope ? 'PATCH' : 'POST';
     body = legacyAdoptionComment(decision.adoption, controller);
   } else {
-    const terminal = bootstrapLease && terminalBootstrapLease(
+    const rearmed = bootstrapLease && rearmLegacyNonrecoverableBootstrapLease(
+      bootstrapLease,
+      decision,
+      { currentControllerRunId, currentControllerHeadSha }
+    );
+    const terminal = rearmed ?? (bootstrapLease && terminalBootstrapLease(
       bootstrapLease,
       decision,
       recoveredWorkerRun,
       currentControllerHeadSha
-    );
-    if (!terminal || bootstrapLease.status === terminal.status) return false;
+    ));
+    if (!terminal || (!rearmed && bootstrapLease.status === terminal.status)) return false;
     if (bootstrapLease.repository !== repository) throw new Error('bootstrap mutation repository mismatch');
     url = `https://api.github.com/repos/${repository}/issues/comments/${positiveInteger(bootstrapLease.commentId, 'bootstrap commentId')}`;
     method = 'PATCH';
@@ -791,6 +989,7 @@ async function main() {
   const orchestratorRef = requiredEnv('ORCHESTRATOR_WORKER_REF');
   const resultPath = String(process.env.CONTROLLER_RESULT_PATH ?? '').trim();
   const currentControllerHeadSha = resolveCheckedOutControlPlaneHeadSha();
+  const currentControllerRunId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
 
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
   const pulls = await listOpenPullRequests(targetRepository, readToken);
@@ -826,6 +1025,14 @@ async function main() {
       : null;
 
   const recoveredWorkerRun = bootstrapLease ? await recoverBootstrapWorkerRun(bootstrapLease, orchestratorRepository, orchestratorRef, actionsToken) : null;
+  const legacyAuthorizationFailure = bootstrapLease
+    ? await detectLegacyBootstrapControllerRunMismatch({
+        bootstrapLease,
+        recoveredWorkerRun,
+        orchestratorRepository,
+        actionsToken
+      })
+    : null;
   const effectiveRisk = stateEnvelope?.persistent?.effectiveRisk ?? bootstrapLease?.effectiveRisk ?? 'critical';
   const aiPolicy = loadV2Config({}, process.env).aiPolicy;
   const expectedImplementer = resolveProviderSelectionForRisk(aiPolicy, effectiveRisk).implementer;
@@ -841,13 +1048,16 @@ async function main() {
     model: expectedImplementer.model,
     recoveredWorkerRun,
     bootstrapControllerHeadSha,
-    currentControllerHeadSha
+    currentControllerHeadSha,
+    legacyAuthorizationFailure,
+    rearmDispatchNonce: legacyAuthorizationFailure ? createDispatchNonce() : null
   });
   await persistReentryMutation({
     decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository: targetRepository,
+    currentControllerRunId,
     currentControllerHeadSha,
     controller: decision.adoption ? {
-      controllerRunId: positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID'),
+      controllerRunId: currentControllerRunId,
       controllerRepository: orchestratorRepository, controllerRef: orchestratorRef,
       controllerWorkflowPath: '.github/workflows/delivery-v2-dispatch.yml'
     } : null
