@@ -917,15 +917,17 @@ export function buildReentryGuardFailure(error, {
   });
 }
 
-export async function recordReentryGuardFailure(error) {
+export async function recordReentryGuardFailure(error, context = error?.reentryGuardContext ?? {}) {
   const resultPath = String(process.env.CONTROLLER_RESULT_PATH ?? '').trim();
   const errorPath = String(process.env.CONTROLLER_ERROR_PATH ?? '').trim();
   if (!resultPath && !errorPath) return;
-  const repository = String(process.env.TARGET_REPOSITORY ?? '').trim() || null;
-  const rawIssue = Number(process.env.TARGET_ISSUE);
+  const repository = String(context.repository ?? process.env.TARGET_REPOSITORY ?? '').trim() || null;
+  const rawIssue = Number(context.issueNumber ?? process.env.TARGET_ISSUE);
   const payload = buildReentryGuardFailure(error, {
     repository,
-    issueNumber: Number.isInteger(rawIssue) && rawIssue > 0 ? rawIssue : null
+    issueNumber: Number.isInteger(rawIssue) && rawIssue > 0 ? rawIssue : null,
+    pullRequest: context.pullRequest ?? null,
+    bootstrapLease: context.bootstrapLease ?? null
   });
   if (resultPath) await writeFile(resultPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
   if (errorPath) await appendFile(errorPath, `${JSON.stringify(payload)}\n`, 'utf8');
@@ -1093,22 +1095,33 @@ async function main() {
   const effectiveRisk = stateEnvelope?.persistent?.effectiveRisk ?? bootstrapLease?.effectiveRisk ?? 'critical';
   const aiPolicy = loadV2Config({}, process.env).aiPolicy;
   const expectedImplementer = resolveProviderSelectionForRisk(aiPolicy, effectiveRisk).implementer;
-  const decision = evaluateReentry({
-    pullRequest,
-    stateEnvelope,
-    adoptionEnvelope,
-    bootstrapLease,
-    targetRepository,
-    issueNumber,
-    baseBranch,
-    provider: expectedImplementer.provider,
-    model: expectedImplementer.model,
-    recoveredWorkerRun,
-    bootstrapControllerHeadSha,
-    currentControllerHeadSha,
-    legacyAuthorizationFailure,
-    rearmDispatchNonce: legacyAuthorizationFailure ? createDispatchNonce() : null
-  });
+  let decision;
+  try {
+    decision = evaluateReentry({
+      pullRequest,
+      stateEnvelope,
+      adoptionEnvelope,
+      bootstrapLease,
+      targetRepository,
+      issueNumber,
+      baseBranch,
+      provider: expectedImplementer.provider,
+      model: expectedImplementer.model,
+      recoveredWorkerRun,
+      bootstrapControllerHeadSha,
+      currentControllerHeadSha,
+      legacyAuthorizationFailure,
+      rearmDispatchNonce: legacyAuthorizationFailure ? createDispatchNonce() : null
+    });
+  } catch (error) {
+    error.reentryGuardContext = {
+      repository: targetRepository,
+      issueNumber,
+      pullRequest,
+      bootstrapLease
+    };
+    throw error;
+  }
   await persistReentryMutation({
     decision, adoptionEnvelope, bootstrapLease, recoveredWorkerRun, repository: targetRepository,
     currentControllerRunId,
