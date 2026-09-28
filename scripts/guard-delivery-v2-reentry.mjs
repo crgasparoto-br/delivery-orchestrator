@@ -790,6 +790,13 @@ export async function detectLegacyBootstrapControllerRunMismatch({
     token: actionsToken
   });
 
+  const expectedAgentExecutionStep = ({
+    codex: 'Execute Codex CLI',
+    claude: 'Execute Claude Code CLI',
+    copilot: 'Execute GitHub Copilot CLI'
+  })[String(bootstrapLease?.provider ?? '').trim().toLowerCase()];
+  if (!expectedAgentExecutionStep) return null;
+
   for (const job of jobs) {
     const authStep = (job.steps ?? []).find(
       (step) =>
@@ -798,10 +805,11 @@ export async function detectLegacyBootstrapControllerRunMismatch({
     );
     if (!authStep) continue;
 
-    const agentExecution = (job.steps ?? []).find(
-      (step) => String(step?.name ?? '') === 'Execute Codex CLI'
+    const agentExecutionSteps = (job.steps ?? []).filter(
+      (step) => String(step?.name ?? '') === expectedAgentExecutionStep
     );
-    if (agentExecution && String(agentExecution.conclusion ?? '') !== 'skipped') continue;
+    if (agentExecutionSteps.length !== 1) continue;
+    if (String(agentExecutionSteps[0].conclusion ?? '') !== 'skipped') continue;
 
     const log = await readJobLog({
       repository: orchestratorRepository,

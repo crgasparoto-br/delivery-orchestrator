@@ -514,25 +514,111 @@ test('legacy nonrecoverable bootstrap remains fail-closed without exact authoriz
   assert.equal(sameEpoch.nextAction, 'human-escalation');
 });
 
-test('legacy authorization recovery requires failed guard evidence before agent execution', async () => {
-  const lease = {
-    status: 'escalated-initial-nonrecoverable',
-    lastFailure: {
-      workerRunId: 88,
-      failureStage: 'pre-material',
-      hasPatch: false
-    }
+test('legacy authorization recovery proves provider-specific agent execution was skipped', async () => {
+  const executionStepByProvider = {
+    codex: 'Execute Codex CLI',
+    claude: 'Execute Claude Code CLI',
+    copilot: 'Execute GitHub Copilot CLI'
   };
   const worker = { id: 88, status: 'completed', conclusion: 'failure', html_url: 'github:run/88' };
 
-  const detected = await detectLegacyBootstrapControllerRunMismatch({
-    bootstrapLease: lease,
+  for (const [provider, executionStep] of Object.entries(executionStepByProvider)) {
+    const lease = {
+      provider,
+      status: 'escalated-initial-nonrecoverable',
+      lastFailure: {
+        workerRunId: 88,
+        failureStage: 'pre-material',
+        hasPatch: false
+      }
+    };
+
+    const detected = await detectLegacyBootstrapControllerRunMismatch({
+      bootstrapLease: lease,
+      recoveredWorkerRun: worker,
+      orchestratorRepository: 'owner/orchestrator',
+      actionsToken: 'token',
+      listJobs: async () => [{
+        id: 99,
+        html_url: 'github:job/99',
+        steps: [
+          { name: 'Validate controller-selected worker authorization', conclusion: 'failure' },
+          { name: executionStep, conclusion: 'skipped' }
+        ]
+      }],
+      readJobLog: async () => 'Error: bootstrap controller run mismatch'
+    });
+
+    assert.deepEqual(detected, {
+      classification: 'bootstrap-controller-run-mismatch',
+      workerRunId: 88,
+      evidenceRef: 'github:job/99'
+    });
+
+    const executed = await detectLegacyBootstrapControllerRunMismatch({
+      bootstrapLease: lease,
+      recoveredWorkerRun: worker,
+      orchestratorRepository: 'owner/orchestrator',
+      actionsToken: 'token',
+      listJobs: async () => [{
+        id: 100,
+        steps: [
+          { name: 'Validate controller-selected worker authorization', conclusion: 'failure' },
+          { name: executionStep, conclusion: 'success' }
+        ]
+      }],
+      readJobLog: async () => 'Error: bootstrap controller run mismatch'
+    });
+    assert.equal(executed, null);
+
+    const missingExpectedStep = await detectLegacyBootstrapControllerRunMismatch({
+      bootstrapLease: lease,
+      recoveredWorkerRun: worker,
+      orchestratorRepository: 'owner/orchestrator',
+      actionsToken: 'token',
+      listJobs: async () => [{
+        id: 101,
+        steps: [
+          { name: 'Validate controller-selected worker authorization', conclusion: 'failure' }
+        ]
+      }],
+      readJobLog: async () => 'Error: bootstrap controller run mismatch'
+    });
+    assert.equal(missingExpectedStep, null);
+
+    const duplicateExpectedStep = await detectLegacyBootstrapControllerRunMismatch({
+      bootstrapLease: lease,
+      recoveredWorkerRun: worker,
+      orchestratorRepository: 'owner/orchestrator',
+      actionsToken: 'token',
+      listJobs: async () => [{
+        id: 102,
+        steps: [
+          { name: 'Validate controller-selected worker authorization', conclusion: 'failure' },
+          { name: executionStep, conclusion: 'skipped' },
+          { name: executionStep, conclusion: 'skipped' }
+        ]
+      }],
+      readJobLog: async () => 'Error: bootstrap controller run mismatch'
+    });
+    assert.equal(duplicateExpectedStep, null);
+  }
+
+  const unknownProvider = await detectLegacyBootstrapControllerRunMismatch({
+    bootstrapLease: {
+      provider: 'unknown',
+      status: 'escalated-initial-nonrecoverable',
+      lastFailure: {
+        workerRunId: 88,
+        failureStage: 'pre-material',
+        hasPatch: false
+      }
+    },
     recoveredWorkerRun: worker,
     orchestratorRepository: 'owner/orchestrator',
     actionsToken: 'token',
     listJobs: async () => [{
-      id: 99,
-      html_url: 'github:job/99',
+      id: 103,
       steps: [
         { name: 'Validate controller-selected worker authorization', conclusion: 'failure' },
         { name: 'Execute Codex CLI', conclusion: 'skipped' }
@@ -540,28 +626,7 @@ test('legacy authorization recovery requires failed guard evidence before agent 
     }],
     readJobLog: async () => 'Error: bootstrap controller run mismatch'
   });
-
-  assert.deepEqual(detected, {
-    classification: 'bootstrap-controller-run-mismatch',
-    workerRunId: 88,
-    evidenceRef: 'github:job/99'
-  });
-
-  const rejected = await detectLegacyBootstrapControllerRunMismatch({
-    bootstrapLease: lease,
-    recoveredWorkerRun: worker,
-    orchestratorRepository: 'owner/orchestrator',
-    actionsToken: 'token',
-    listJobs: async () => [{
-      id: 100,
-      steps: [
-        { name: 'Validate controller-selected worker authorization', conclusion: 'failure' },
-        { name: 'Execute Codex CLI', conclusion: 'success' }
-      ]
-    }],
-    readJobLog: async () => 'Error: bootstrap controller run mismatch'
-  });
-  assert.equal(rejected, null);
+  assert.equal(unknownProvider, null);
 });
 
 test('duplicate managed PRs fail closed rather than selecting one nondeterministically', () => {
