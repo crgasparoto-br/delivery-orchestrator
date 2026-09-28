@@ -1454,31 +1454,49 @@ export async function main() {
           await persist({ nextAction: 'human-escalation' });
           break;
         }
-        const workerDispatchNonce = createDispatchNonce();
-        await persist({ nextAction: 'dispatch-audit-remediation', workerRunId: null, workerDispatchNonce });
         const beforeSha = materialHeadSha;
-        worker = await dispatchWorker({
-          orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch,
-          targetRef: beforeSha,
+        const remediationStage = await runWorkflowStageWithInfrastructureRecovery({
+          stage: 'audit-remediation',
+          orchestratorRepository,
+          actionsToken,
+          targetRepository,
           targetPr: pullRequest.number,
-          remediationContext: JSON.stringify(remediation),
-          token: actionsToken,
-          dispatchNonce: workerDispatchNonce
+          expectedHeadSha: beforeSha,
+          targetReadToken,
+          onDispatch: async ({ dispatchNonce }) => {
+            await persist({ nextAction: 'dispatch-audit-remediation', workerRunId: null, workerDispatchNonce: dispatchNonce });
+          },
+          onObserve: async ({ dispatchNonce, run }) => {
+            await persist({ nextAction: 'observe-remediation', workerRunId: run.id, workerDispatchNonce: dispatchNonce });
+          },
+          dispatch: (dispatchNonce) => dispatchWorker({
+            orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch,
+            targetRef: beforeSha,
+            targetPr: pullRequest.number,
+            remediationContext: JSON.stringify(remediation),
+            token: actionsToken,
+            dispatchNonce
+          })
         });
-        await persist({ nextAction: 'observe-remediation', workerRunId: worker.id, workerDispatchNonce });
-        worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
-        workerRuns.push(worker);
-        const usage = await downloadWorkerUsage(orchestratorRepository, worker.id, actionsToken);
-        observability = recordControllerProviderObservation(observability, {
-          runId: worker.id,
-          stage: 'implementation',
-          usage: usage.usage,
-          rawUsagePayload: usage.rawUsagePayload,
-          ...attribution({ run: worker, phase: 'remediation', role: 'remediation-worker' }),
-          evidenceRef: usage.evidenceRef ?? worker.html_url
-        });
-        if (usage.evidenceRef) evidenceRefs.push(usage.evidenceRef);
-        if (worker.conclusion !== 'success') throw new Error(`audit remediation worker failed: ${worker.html_url}`);
+        worker = remediationStage.run;
+        for (const remediationRun of remediationStage.runs) {
+          workerRuns.push(remediationRun);
+          const usage = await downloadWorkerUsage(orchestratorRepository, remediationRun.id, actionsToken);
+          observability = recordControllerProviderObservation(observability, {
+            runId: remediationRun.id,
+            stage: 'implementation',
+            usage: usage.usage,
+            rawUsagePayload: usage.rawUsagePayload,
+            ...attribution({ run: remediationRun, phase: 'remediation', role: 'remediation-worker' }),
+            evidenceRef: usage.evidenceRef ?? remediationRun.html_url
+          });
+          if (usage.evidenceRef) evidenceRefs.push(usage.evidenceRef);
+        }
+        if (worker.conclusion !== 'success') {
+          throw new Error(
+            `audit remediation worker failed: ${worker.html_url}; classification=${remediationStage.failure?.classification ?? 'unknown'}`
+          );
+        }
         pullRequest = await waitHeadChange(targetRepository, pullRequest.number, beforeSha, targetReadToken);
         materialHeadSha = String(pullRequest.head.sha).toLowerCase();
         const nextPaths = await fetchChangedPaths(targetRepository, pullRequest.number, targetReadToken);
