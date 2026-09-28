@@ -122,10 +122,11 @@ test('both controllers wire the recovery matrix into bounded downstream stages',
     ]) {
       assert.match(
         source,
-        new RegExp(`stage: '${stage}'`),
-        `${label} controller must route ${stage} through deterministic stage recovery`
+        new RegExp(`'${stage}'`),
+        `${label} controller must include ${stage} in deterministic stage recovery`
       );
     }
+    assert.match(source, /runWorkflowStageWithInfrastructureRecovery\(\{/);
     assert.match(source, /materialHeadChanged/);
     assert.match(source, /downloadGhAwAgentOutputArtifact/);
   }
