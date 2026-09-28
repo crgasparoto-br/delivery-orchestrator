@@ -21,6 +21,7 @@ import { loadAiPricingCatalog, DEFAULT_AI_PRICING_FILE } from '../src/v2/ai-pric
 import { persistOperationalDeliveryMetrics } from '../src/v2/metrics-store.mjs';
 import { summarizeDeliveryAiUsage, renderDeliveryAiUsageSummary } from '../src/v2/ai-usage-summary.mjs';
 import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
+import { downloadGhAwAgentOutputArtifact } from '../src/v2/gh-aw-agent-output-artifact.mjs';
 import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, markPullRequestReadyForReview, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
 import { parseTrustedJsonEnvelope, selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
@@ -558,59 +559,6 @@ async function downloadWorkerUsage(orchestratorRepository, runId, token) {
   }
 }
 
-async function downloadInitialWorkerEvidence(orchestratorRepository, runId, token) {
-  try {
-    const payload = await api(`https://api.github.com/repos/${orchestratorRepository}/actions/runs/${runId}/artifacts?per_page=100`, token);
-    const artifacts = payload.artifacts ?? [];
-    const artifact = artifacts.find((item) => item.name === 'agent')
-      ?? artifacts.find((item) => item.name === 'agent-output-fallback');
-    if (!artifact) return { hasPatch: null, agentOutput: null, evidenceRef: null, error: 'agent output artifact is unavailable' };
-
-    const response = await fetch(
-      `https://api.github.com/repos/${orchestratorRepository}/actions/artifacts/${artifact.id}/zip`,
-      { headers: headers(token) }
-    );
-    if (!response.ok) throw new Error(`agent output artifact download failed: ${response.status}`);
-
-    const root = await mkdtemp(path.join(tmpdir(), 'dv2-initial-evidence-'));
-    try {
-      const zip = path.join(root, 'agent.zip');
-      await writeFile(zip, Buffer.from(await response.arrayBuffer()));
-      execFileSync('unzip', ['-q', zip, '-d', root]);
-
-      const stack = [root];
-      let agentOutputPath = null;
-      const patchPaths = [];
-      while (stack.length) {
-        const current = stack.pop();
-        for (const entry of await readdir(current, { withFileTypes: true })) {
-          const full = path.join(current, entry.name);
-          if (entry.isDirectory()) stack.push(full);
-          else if (entry.name === 'agent_output.json') agentOutputPath = full;
-          else if (/^aw-.*\.patch$/.test(entry.name)) patchPaths.push(full);
-        }
-      }
-
-      if (!agentOutputPath) {
-        return { hasPatch: null, agentOutput: null, evidenceRef: artifact.archive_download_url, artifactId: artifact.id, error: 'agent_output.json is unavailable' };
-      }
-      return {
-        // Only the full agent artifact carries the same aw-*.patch envelope
-        // used by gh-aw to publish has_patch. The fallback artifact deliberately
-        // omits patches, so its absence is not authoritative no-patch evidence.
-        hasPatch: artifact.name === 'agent' ? patchPaths.length > 0 : null,
-        agentOutput: JSON.parse(await readFile(agentOutputPath, 'utf8')),
-        evidenceRef: artifact.archive_download_url,
-        artifactId: artifact.id
-      };
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  } catch (error) {
-    return { hasPatch: null, agentOutput: null, evidenceRef: null, error: error.message };
-  }
-}
-
 async function loadBootstrapLeaseForController({ repository, issueNumber, token }) {
   const comments = [];
   for (let page = 1; ; page += 1) {
@@ -741,11 +689,11 @@ async function runWorkflowStageWithInfrastructureRecovery({
 
     let workerEvidence = { hasPatch: null, agentOutput: null };
     if (stage !== 'independent-audit' && run.conclusion === 'failure') {
-      workerEvidence = await downloadInitialWorkerEvidence(
-        orchestratorRepository,
-        run.id,
-        actionsToken
-      );
+      workerEvidence = await downloadGhAwAgentOutputArtifact({
+        repository: orchestratorRepository,
+        runId: run.id,
+        token: actionsToken
+      });
     }
 
     const failure = classifyWorkflowStageFailure({
@@ -1072,7 +1020,11 @@ export async function main() {
     if (workerUsage.evidenceRef) evidenceRefs.push(workerUsage.evidenceRef);
     if (worker.conclusion === 'success') break;
 
-    const materialEvidence = await downloadInitialWorkerEvidence(orchestratorRepository, worker.id, actionsToken);
+    const materialEvidence = await downloadGhAwAgentOutputArtifact({
+      repository: orchestratorRepository,
+      runId: worker.id,
+      token: actionsToken
+    });
     if (materialEvidence.evidenceRef) evidenceRefs.push(materialEvidence.evidenceRef);
     const authorizationFailure = await detectBootstrapControllerRunMismatch({
       repository: targetRepository,
