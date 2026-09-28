@@ -11,40 +11,11 @@ function failClosed(classification, reason, extra = {}) {
   });
 }
 
-export function classifyPreMaterialWorkerFailure({
+export function classifyStructuredContextRebuildFailure({
   workerConclusion,
   hasPatch,
-  agentOutput,
-  authorizationFailure = null
+  agentOutput
 } = {}) {
-  if (authorizationFailure?.classification === 'bootstrap-controller-run-mismatch') {
-    if (String(workerConclusion ?? '').trim().toLowerCase() !== 'failure') {
-      return failClosed(
-        'unsupported-worker-conclusion',
-        'bootstrap authorization recovery requires terminal worker failure'
-      );
-    }
-    if (hasPatch === true) {
-      return failClosed(
-        'material-status-not-trusted-no-patch',
-        'worker produced material patch before bootstrap authorization recovery'
-      );
-    }
-    return Object.freeze({
-      recoverable: true,
-      classification: 'bootstrap-controller-run-mismatch',
-      reason: 'control-plane-authorization-envelope-mismatch',
-      failureStage: 'pre-material',
-      failureClass: 'control-plane-authorization',
-      retryMode: 'reuse-current-attempt',
-      evidence: Object.freeze({
-        evidenceRef: String(authorizationFailure.evidenceRef ?? ''),
-        activeControllerRunId: Number(authorizationFailure.activeControllerRunId),
-        persistedControllerRunId: Number(authorizationFailure.persistedControllerRunId)
-      })
-    });
-  }
-
   if (hasPatch !== false) {
     return failClosed(
       'material-status-not-trusted-no-patch',
@@ -107,6 +78,47 @@ export function classifyPreMaterialWorkerFailure({
       maxRebuildFactor: Number(match[3]),
       rebuildMinCumulativeInputTokens: Number(match[4])
     })
+  });
+}
+
+export function classifyPreMaterialWorkerFailure({
+  workerConclusion,
+  hasPatch,
+  agentOutput,
+  authorizationFailure = null
+} = {}) {
+  if (authorizationFailure?.classification === 'bootstrap-controller-run-mismatch') {
+    if (String(workerConclusion ?? '').trim().toLowerCase() !== 'failure') {
+      return failClosed(
+        'unsupported-worker-conclusion',
+        'bootstrap authorization recovery requires terminal worker failure'
+      );
+    }
+    if (hasPatch === true) {
+      return failClosed(
+        'material-status-not-trusted-no-patch',
+        'worker produced material patch before bootstrap authorization recovery'
+      );
+    }
+    return Object.freeze({
+      recoverable: true,
+      classification: 'bootstrap-controller-run-mismatch',
+      reason: 'control-plane-authorization-envelope-mismatch',
+      failureStage: 'pre-material',
+      failureClass: 'control-plane-authorization',
+      retryMode: 'reuse-current-attempt',
+      evidence: Object.freeze({
+        evidenceRef: String(authorizationFailure.evidenceRef ?? ''),
+        activeControllerRunId: Number(authorizationFailure.activeControllerRunId),
+        persistedControllerRunId: Number(authorizationFailure.persistedControllerRunId)
+      })
+    });
+  }
+
+  return classifyStructuredContextRebuildFailure({
+    workerConclusion,
+    hasPatch,
+    agentOutput
   });
 }
 
