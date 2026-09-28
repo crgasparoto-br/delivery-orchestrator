@@ -1177,10 +1177,12 @@ export async function main() {
     state = initialPromotion.state;
     plan = initialPromotion.plan;
     initialTechnicalHygiene = initialPromotion.hygiene;
-    workerRuns.push(initialPromotion.promotionRun);
-    const promotionUsage = await downloadWorkerUsage(orchestratorRepository, initialPromotion.promotionRun.id, actionsToken);
-    observability = recordControllerProviderObservation(observability, { runId: initialPromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, rawUsagePayload: promotionUsage.rawUsagePayload, ...attribution({ run: initialPromotion.promotionRun, phase: 'technical-hygiene', role: 'technical-hygiene-worker' }), evidenceRef: promotionUsage.evidenceRef ?? initialPromotion.promotionRun.html_url });
-    if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);
+    for (const promotionRun of initialPromotion.promotionRuns ?? [initialPromotion.promotionRun]) {
+      workerRuns.push(promotionRun);
+      const promotionUsage = await downloadWorkerUsage(orchestratorRepository, promotionRun.id, actionsToken);
+      observability = recordControllerProviderObservation(observability, { runId: promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, rawUsagePayload: promotionUsage.rawUsagePayload, ...attribution({ run: promotionRun, phase: 'technical-hygiene', role: 'technical-hygiene-worker' }), evidenceRef: promotionUsage.evidenceRef ?? promotionRun.html_url });
+      if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);
+    }
     evidenceRefs.push(initialTechnicalHygiene.evidenceRef);
   }
 
@@ -1316,10 +1318,12 @@ export async function main() {
         state = hygienePromotion.state;
         plan = hygienePromotion.plan;
         remediationTechnicalHygiene = hygienePromotion.hygiene;
-        workerRuns.push(hygienePromotion.promotionRun);
-        const promotionUsage = await downloadWorkerUsage(orchestratorRepository, hygienePromotion.promotionRun.id, actionsToken);
-        observability = recordControllerProviderObservation(observability, { runId: hygienePromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, rawUsagePayload: promotionUsage.rawUsagePayload, ...attribution({ run: hygienePromotion.promotionRun, phase: 'technical-hygiene', role: 'technical-hygiene-worker' }), evidenceRef: promotionUsage.evidenceRef ?? hygienePromotion.promotionRun.html_url });
-        if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);
+        for (const promotionRun of hygienePromotion.promotionRuns ?? [hygienePromotion.promotionRun]) {
+          workerRuns.push(promotionRun);
+          const promotionUsage = await downloadWorkerUsage(orchestratorRepository, promotionRun.id, actionsToken);
+          observability = recordControllerProviderObservation(observability, { runId: promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, rawUsagePayload: promotionUsage.rawUsagePayload, ...attribution({ run: promotionRun, phase: 'technical-hygiene', role: 'technical-hygiene-worker' }), evidenceRef: promotionUsage.evidenceRef ?? promotionRun.html_url });
+          if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);
+        }
         evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);
       }
       latestCheck = null;
@@ -1541,10 +1545,12 @@ export async function main() {
           state = hygienePromotion.state;
           plan = hygienePromotion.plan;
           remediationTechnicalHygiene = hygienePromotion.hygiene;
-          workerRuns.push(hygienePromotion.promotionRun);
-          const promotionUsage = await downloadWorkerUsage(orchestratorRepository, hygienePromotion.promotionRun.id, actionsToken);
-          observability = recordControllerProviderObservation(observability, { runId: hygienePromotion.promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, rawUsagePayload: promotionUsage.rawUsagePayload, ...attribution({ run: hygienePromotion.promotionRun, phase: 'technical-hygiene', role: 'technical-hygiene-worker' }), evidenceRef: promotionUsage.evidenceRef ?? hygienePromotion.promotionRun.html_url });
-          if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);
+          for (const promotionRun of hygienePromotion.promotionRuns ?? [hygienePromotion.promotionRun]) {
+            workerRuns.push(promotionRun);
+            const promotionUsage = await downloadWorkerUsage(orchestratorRepository, promotionRun.id, actionsToken);
+            observability = recordControllerProviderObservation(observability, { runId: promotionRun.id, stage: 'implementation', usage: promotionUsage.usage, rawUsagePayload: promotionUsage.rawUsagePayload, ...attribution({ run: promotionRun, phase: 'technical-hygiene', role: 'technical-hygiene-worker' }), evidenceRef: promotionUsage.evidenceRef ?? promotionRun.html_url });
+            if (promotionUsage.evidenceRef) evidenceRefs.push(promotionUsage.evidenceRef);
+          }
           evidenceRefs.push(remediationTechnicalHygiene.evidenceRef);
         }
         latestCheck = null;
