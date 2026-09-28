@@ -402,6 +402,38 @@ test('issue 283: early guard failure writes structured controller result and err
       adoptionPersisted: false,
       retryPersisted: false
     });
+
+    const mismatchedBootstrap = { ...bootstrap, repository: 'crgasparoto-br/other-repo' };
+    let identityFailure;
+    try {
+      createLegacyAdoption({ ...input, bootstrapLease: mismatchedBootstrap });
+      assert.fail('bootstrap identity mismatch must fail closed');
+    } catch (error) {
+      identityFailure = error;
+    }
+    identityFailure.reentryGuardContext = {
+      repository,
+      issueNumber: 613,
+      pullRequest: pr,
+      bootstrapLease: mismatchedBootstrap
+    };
+
+    await recordReentryGuardFailure(identityFailure);
+
+    const mismatchResult = JSON.parse(readFileSync(resultPath, 'utf8'));
+    const mismatchError = JSON.parse(readFileSync(errorPath, 'utf8').trim().split('\n').at(-1));
+    assert.deepEqual(mismatchError, mismatchResult);
+    assert.equal(mismatchResult.pullRequestNumber, pr.number);
+    assert.equal(mismatchResult.materialHeadSha, pr.head.sha);
+    assert.equal(mismatchResult.error.code, 'REENTRY_GUARD_ERROR');
+    assert.match(mismatchResult.error.message, /bootstrap identity mismatch/);
+    assert.deepEqual(mismatchResult.reentry, {
+      bootstrapStatus: 'reserved-initial-attempt',
+      bootstrapClassification: 'active',
+      reason: 'active-bootstrap-lease',
+      adoptionPersisted: false,
+      retryPersisted: false
+    });
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
