@@ -194,6 +194,27 @@ test('H/I: CI reuse requires exact SHA, trusted run/check correlation, latest ru
   assert.throws(() => refreezeLegacyAdoption({ ...data, checks: [...data.checks, data.checks[0]] }), /ambiguous required check/);
 });
 
+test('issue 286: terminal exact-head failure is classified instead of passively observed', () => {
+  const failed = evidence();
+  failed.runs[0].conclusion = 'failure';
+  failed.checks[0].conclusion = 'failure';
+  const classified = refreezeLegacyAdoption(failed);
+  assert.equal(classified.phase, 'blocked');
+  assert.deepEqual(classified.blockers, ['exact-head-ci-failed']);
+  assert.equal(classified.nextAction, 'classify-ci-failure');
+  assert.deepEqual(classified.workflowChecks, []);
+
+  const pending = evidence();
+  pending.runs[0].status = 'in_progress';
+  pending.runs[0].conclusion = null;
+  assert.equal(refreezeLegacyAdoption(pending).nextAction, 'observe-ci');
+
+  const absent = evidence();
+  absent.runs = [];
+  absent.checks = [];
+  assert.equal(refreezeLegacyAdoption(absent).nextAction, 'observe-ci');
+});
+
 test('issue 254: trusted controller dispatch can continue legacy adoption without a manual continuation comment', async () => {
   const data = evidence();
   data.comments = [];
