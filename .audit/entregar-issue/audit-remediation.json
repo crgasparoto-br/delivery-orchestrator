@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "contract_version": "2026-08-20.3",
+  "resolution_policy": "all-actionable-items",
+  "status": "closed",
+  "candidate_head_sha": "4f1929598a62e0c1ba49c6fadd5a7953de3983b8",
+  "remediation_mode": "targeted-remediation",
+  "source": {
+    "rejection_id": "audit-rejection:290-291-4f192959-handoff",
+    "audited_head_sha": "4f1929598a62e0c1ba49c6fadd5a7953de3983b8",
+    "audit_report_sha256": "e60ab8aae7d76d86bca59c76d077550b6b109e3d399910ad69d24c0a5fe40fa3"
+  },
+  "items": [
+    {
+      "source_kind": "finding",
+      "source_id": "A-001",
+      "remediation_mode": "targeted-remediation",
+      "status": "fixed",
+      "closure_kind": "handoff-readiness-recovery",
+      "evidence": "Current material head is unchanged, exact-head CI is green, and a fresh certified handoff package is being published as a result-only child.",
+      "validations": [
+        "Target binding is current PR 291 / issue 290.",
+        "Recovery floor is handoff-only with requires_refreeze=false.",
+        "No material files are changed by the remediation."
+      ]
+    }
+  ]
+}

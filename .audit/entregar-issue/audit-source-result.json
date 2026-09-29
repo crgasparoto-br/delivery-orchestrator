@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "contract_version": "2026-08-20.3",
+  "status": "rejected",
+  "rejection_id": "audit-rejection:290-291-4f192959-handoff",
+  "head_sha": "4f1929598a62e0c1ba49c6fadd5a7953de3983b8",
+  "identity": {
+    "repository": "crgasparoto-br/delivery-orchestrator",
+    "issue_number": 290,
+    "pull_request_number": 291,
+    "head_sha": "4f1929598a62e0c1ba49c6fadd5a7953de3983b8"
+  },
+  "findings": [
+    {
+      "id": "A-001",
+      "title": "Handoff certificado da entrega não foi produzido",
+      "disposition": "blocking",
+      "status": "open",
+      "actionable": true,
+      "remediation_mode": "targeted-remediation",
+      "category": "delivery-not-ready",
+      "reason": "handoff-not-produced",
+      "recovery_scope": "handoff-only",
+      "requires_refreeze": false
+    }
+  ],
+  "recommendations": []
+}

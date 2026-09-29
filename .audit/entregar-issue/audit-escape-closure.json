@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "escapes": [
+    {
+      "escape_id": "ESC-HANDOFF-READINESS-001",
+      "status": "passed",
+      "escape_class": "delivery-readiness-handoff-missing",
+      "plausible_wrong_implementation": "A delivery can stop after green material CI and omit the certified result-only handoff, leaving independent audit unable to prove readiness.",
+      "source_audit": {
+        "rejection_id": "audit-rejection:290-291-4f192959-handoff",
+        "finding_ids": [
+          "A-001"
+        ],
+        "audit_report_sha256": "e60ab8aae7d76d86bca59c76d077550b6b109e3d399910ad69d24c0a5fe40fa3"
+      },
+      "literal_case": {
+        "procedure": "Re-read PR 291 exact material head and check .audit/entregar-issue/handoff-ready.json before recovery.",
+        "expected": "Stable material head with green CI must receive a fresh certified result-only handoff before re-audit.",
+        "observed": "Material head remained unchanged and the missing handoff is remediated by this result-only publication.",
+        "status": "passed"
+      },
+      "sibling_cases": [
+        {
+          "id": "SIB-HANDOFF-MISSING",
+          "surface": "handoff-readiness",
+          "dimension": "missing-result-certificate",
+          "status": "passed"
+        },
+        {
+          "id": "SIB-HANDOFF-STABLE",
+          "surface": "handoff-readiness",
+          "dimension": "stable-material-no-refreeze",
+          "status": "passed"
+        }
+      ],
+      "prevention_change": {
+        "evidence": "Entregar recovery path requires terminal certified handoff after green material CI before returning audit-ready."
+      },
+      "detection_change": {
+        "evidence": "Terminal handoff validator checks direct-child parent, allowlisted result paths, and handoff-ready.json presence."
+      },
+      "required_risk_families": [
+        "structural-contract"
+      ],
+      "required_attack_dimensions": [
+        {
+          "risk_family": "structural-contract",
+          "surface": "handoff-readiness",
+          "dimension": "missing-result-certificate"
+        },
+        {
+          "risk_family": "structural-contract",
+          "surface": "handoff-readiness",
+          "dimension": "stable-material-no-refreeze"
+        }
+      ],
+      "revalidated_head_sha": "4f1929598a62e0c1ba49c6fadd5a7953de3983b8"
+    }
+  ]
+}
