@@ -402,7 +402,7 @@ These paths exist for technically successful but non-material workers whose resu
 
 Changed-control-plane recovery reports `retry-initial-worker` and reduces `priorInitialAttempts` by one only as input to reservation; the reservation step independently re-derives that recovery and restores the same implementation-attempt number. Issue-contract recovery is re-armed directly by the re-entry guard as an existing reservation (`dispatch-reserved-initial-attempt`), so the reservation step is intentionally skipped and the attempt counter cannot advance.
 
-Recovery provenance records the prior implementation-attempt count and prior/current controller SHAs. Issue-contract recovery additionally records the prior/current issue fingerprints and prior worker/dispatch identity. The same control-plane SHA cannot grant a second control-plane recovery, and an unchanged issue-contract fingerprint cannot grant a second issue-contract recovery. Ambiguous provenance, an ineligible worker state or conclusion, or any material candidate already present fails closed into the ordinary deterministic continuation/escalation rules.
+Recovery provenance records the prior implementation-attempt count and prior/current controller SHAs. Issue-contract recovery additionally records the prior/current issue fingerprints and prior worker/dispatch identity. The same control-plane SHA cannot grant a second recovery through the control-plane path, and an unchanged issue-contract fingerprint cannot grant a second issue-contract recovery. Ambiguous provenance, an ineligible worker state or conclusion, or any material candidate already present fails closed into the ordinary deterministic continuation/escalation rules.
 
 ## 9. DV2-005 and DV2-006 — Adaptive CI and safe classification
 
