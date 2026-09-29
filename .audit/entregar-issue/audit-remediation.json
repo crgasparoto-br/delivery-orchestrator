@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "contract_version": "2026-08-20.3",
+  "resolution_policy": "all-actionable-items",
+  "status": "closed",
+  "candidate_head_sha": "9a34c199fa995246312fbc0ef8df7d7ac92597e4",
+  "remediation_mode": "targeted-remediation",
+  "source": {
+    "rejection_id": "audit-rejection:abc8b5dc-9f6c-48d4-909a-3f056c3fb660",
+    "audited_head_sha": "9a34c199fa995246312fbc0ef8df7d7ac92597e4",
+    "audit_report_sha256": "985cc7af888b1b680c4426e0e2a6077b92c184d3372f810dacf10c5c0a73560e"
+  },
+  "items": [
+    {
+      "source_kind": "finding",
+      "source_id": "A-001",
+      "remediation_mode": "targeted-remediation",
+      "status": "fixed",
+      "closure_kind": "artifact-recertification",
+      "evidence": [
+        "Current-target handoff package generated for the stable exact material head."
+      ],
+      "validations": [
+        "Specification coverage, critical readiness, rejection closure and terminal handoff validators must pass before publication."
+      ]
+    }
+  ]
+}

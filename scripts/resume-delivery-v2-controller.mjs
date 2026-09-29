@@ -825,6 +825,111 @@ async function waitHeadChange(repository, prNumber, previousSha, token) {
   );
 }
 
+const NO_MATERIAL_SAFE_OUTPUT_TYPES = new Set([
+  'missing_tool',
+  'missing_data',
+  'noop',
+  'report_incomplete'
+]);
+
+export function classifySuccessfulRemediationOutcome({
+  hasPatch,
+  agentOutput,
+  evidenceRef = null,
+  artifactError = null
+} = {}) {
+  if (hasPatch === true) {
+    return Object.freeze({
+      action: 'await-material-head',
+      classification: 'patch-produced',
+      reason: 'remediation artifact contains a material patch',
+      evidenceRef
+    });
+  }
+
+  if (hasPatch !== false) {
+    return Object.freeze({
+      action: 'fail-closed',
+      classification: 'material-evidence-ambiguous',
+      reason: String(artifactError ?? 'successful remediation did not provide deterministic patch evidence'),
+      evidenceRef
+    });
+  }
+
+  const errors = Array.isArray(agentOutput?.errors) ? agentOutput.errors.filter(Boolean) : null;
+  const items = Array.isArray(agentOutput?.items) ? agentOutput.items : null;
+  if (!errors || !items || errors.length > 0 || items.length === 0) {
+    return Object.freeze({
+      action: 'fail-closed',
+      classification: 'no-patch-output-ambiguous',
+      reason: errors?.length
+        ? 'successful remediation reported framework errors without a material patch'
+        : 'successful remediation produced no material patch and no trusted semantic safe-output item',
+      evidenceRef
+    });
+  }
+
+  const itemTypes = [...new Set(
+    items.map((item) => String(item?.type ?? '').trim()).filter(Boolean)
+  )];
+  if (
+    itemTypes.length === 0 ||
+    itemTypes.some((type) => !NO_MATERIAL_SAFE_OUTPUT_TYPES.has(type))
+  ) {
+    return Object.freeze({
+      action: 'fail-closed',
+      classification: 'no-patch-output-unsupported',
+      reason: 'successful remediation produced no material patch with unsupported semantic output',
+      evidenceRef
+    });
+  }
+
+  const primary = items[0] ?? {};
+  return Object.freeze({
+    action: 'blocked-no-material',
+    classification: `no-material-${itemTypes.join('+')}`,
+    reason: String(
+      primary.reason ??
+      primary.message ??
+      'remediation completed without a material patch'
+    ),
+    ...(primary.tool ? { tool: String(primary.tool) } : {}),
+    evidenceRef
+  });
+}
+
+export async function continueAfterSuccessfulRemediation({
+  evidence,
+  waitForMaterialHead
+} = {}) {
+  const remediationEvidence = evidence ?? {};
+  const remediationOutcome = classifySuccessfulRemediationOutcome({
+    ...remediationEvidence,
+    artifactError:
+      remediationEvidence.artifactError ??
+      remediationEvidence.error ??
+      null
+  });
+
+  if (remediationOutcome.action !== 'await-material-head') {
+    return Object.freeze({
+      remediationOutcome,
+      pullRequest: null
+    });
+  }
+
+  if (typeof waitForMaterialHead !== 'function') {
+    throw new Error(
+      'successful remediation with a material patch requires a head-change waiter'
+    );
+  }
+
+  return Object.freeze({
+    remediationOutcome,
+    pullRequest: await waitForMaterialHead()
+  });
+}
+
 async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch, targetRef, targetPr, remediationContext, token, dispatchNonce = createDispatchNonce() }) {
   return dispatchWorkflowAndResolveRun({
     repository: orchestratorRepository,
@@ -1944,7 +2049,57 @@ export async function main() {
       }
 
       const beforeSha = materialHeadSha;
-      pullRequest = await waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken);
+      const remediationEvidence = await downloadGhAwAgentOutputArtifact({
+        repository: orchestratorRepository,
+        runId: run.id,
+        token: actionsToken
+      });
+      const remediationContinuation = await continueAfterSuccessfulRemediation({
+        evidence: remediationEvidence,
+        waitForMaterialHead: () =>
+          waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken)
+      });
+      const { remediationOutcome } = remediationContinuation;
+
+      if (remediationOutcome.action !== 'await-material-head') {
+        const escalationReason = remediationOutcome.action === 'blocked-no-material'
+          ? 'remediation-produced-no-material'
+          : 'remediation-success-evidence-ambiguous';
+        const remediationContext = recoverPersistedRemediationContext({
+          state,
+          controller
+        });
+        state = applyOperationalEvent(state, {
+          type: 'escalate',
+          reason: escalationReason,
+          evidenceRef: remediationOutcome.evidenceRef ?? run.html_url
+        });
+        await persist({
+          nextAction: 'human-escalation',
+          workerRunId: run.id,
+          workerDispatchNonce: controller.workerDispatchNonce ?? null,
+          workerInfrastructureRetriesUsed:
+            controller.workerInfrastructureRetriesUsed ?? 0,
+          remediationContext,
+          remediationOutcome
+        });
+        await publishReleaseStatus({
+          repository: targetRepository,
+          sha: materialHeadSha,
+          context: targetPolicy.finalStatusName,
+          state: 'failure',
+          description: remediationOutcome.action === 'blocked-no-material'
+            ? 'Delivery V2 remediation completed without a material patch'
+            : 'Delivery V2 remediation result was ambiguous',
+          token: targetWriteToken,
+          targetUrl: remediationOutcome.evidenceRef ?? run.html_url
+        });
+        throw new Error(
+          `remediation did not publish material: ${remediationOutcome.classification}: ${remediationOutcome.reason}`
+        );
+      }
+
+      pullRequest = remediationContinuation.pullRequest;
       materialHeadSha = String(pullRequest.head.sha).toLowerCase();
       changedPaths = await fetchChangedPaths(targetRepository, resumePr, targetReadToken);
       const nextPlan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk, changedPaths, repositoryPolicy });
@@ -2126,7 +2281,53 @@ export async function main() {
           `remediation worker failed: ${worker.html_url}; classification=${remediationStage.failure?.classification ?? 'unknown'}`
         );
       }
-      pullRequest = await waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken);
+
+      const remediationEvidence = await downloadGhAwAgentOutputArtifact({
+        repository: orchestratorRepository,
+        runId: worker.id,
+        token: actionsToken
+      });
+      const remediationContinuation = await continueAfterSuccessfulRemediation({
+        evidence: remediationEvidence,
+        waitForMaterialHead: () =>
+          waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken)
+      });
+      const { remediationOutcome } = remediationContinuation;
+
+      if (remediationOutcome.action !== 'await-material-head') {
+        const escalationReason = remediationOutcome.action === 'blocked-no-material'
+          ? 'remediation-produced-no-material'
+          : 'remediation-success-evidence-ambiguous';
+        state = applyOperationalEvent(state, {
+          type: 'escalate',
+          reason: escalationReason,
+          evidenceRef: remediationOutcome.evidenceRef ?? worker.html_url
+        });
+        await persist({
+          nextAction: 'human-escalation',
+          workerRunId: worker.id,
+          workerDispatchNonce: remediationStage.dispatchNonce,
+          workerInfrastructureRetriesUsed: remediationStage.retriesUsed,
+          remediationContext: remediation,
+          remediationOutcome
+        });
+        await publishReleaseStatus({
+          repository: targetRepository,
+          sha: materialHeadSha,
+          context: targetPolicy.finalStatusName,
+          state: 'failure',
+          description: remediationOutcome.action === 'blocked-no-material'
+            ? 'Delivery V2 remediation completed without a material patch'
+            : 'Delivery V2 remediation result was ambiguous',
+          token: targetWriteToken,
+          targetUrl: remediationOutcome.evidenceRef ?? worker.html_url
+        });
+        throw new Error(
+          `remediation did not publish material: ${remediationOutcome.classification}: ${remediationOutcome.reason}`
+        );
+      }
+
+      pullRequest = remediationContinuation.pullRequest;
       materialHeadSha = String(pullRequest.head.sha).toLowerCase();
       changedPaths = await fetchChangedPaths(targetRepository, resumePr, targetReadToken);
       const nextPlan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk, changedPaths, repositoryPolicy });
