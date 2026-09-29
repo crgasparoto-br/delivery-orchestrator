@@ -1,60 +1,25 @@
 ## Problema
 
-Após a implementação da #286 / PR #287, a legacy adoption passou corretamente a detectar CI exact-head falhada e despachar remediation automática. No cenário real da SolverFin #620 / PR #681, o remediation worker terminou com `success`, porém sem publicar patch/material novo.
+Uma execução Delivery V2 pode terminar pre-material com worker `completed/success` e sem PR gerenciada porque o worker concluiu `noop` a partir de uma versão anterior do contrato da issue.
+Quando a issue alvo é materialmente atualizada depois disso, o bootstrap `reserved-initial-attempt` continua preso ao `scopeBinding.issueContractSha256` antigo. A reentrada atual só rearma esse caminho quando muda o SHA do control plane, portanto um novo dispatch no mesmo control plane recupera a tentativa antiga em vez de executar contra o contrato novo.
 
-O controller então assumiu que todo worker `success` deveria produzir mudança de HEAD e aguardou ~15 minutos até falhar com:
+Caso observado: SolverFin #621, controller run 36569020189, worker 36569056972.
 
-```text
-Error: in-flight remediation completed without publishing a new material head after 908s
-```
+## Esperado
 
-Controller:
-https://github.com/crgasparoto-br/delivery-orchestrator/actions/runs/36484099354
-
-Remediation worker:
-https://github.com/crgasparoto-br/delivery-orchestrator/actions/runs/36484147713
-
-O worker concluiu semanticamente que não conseguiu remediar com segurança (missing tool / impossibilidade de diagnosticar sem adivinhar) e não produziu patch.
-
-## Causa
-
-Em `scripts/resume-delivery-v2-controller.mjs`, depois de `worker.conclusion === 'success'`, o fluxo chama incondicionalmente:
-
-```js
-pullRequest = await waitHeadChange(...)
-```
-
-Não há consumo do agent output estruturado antes de exigir mudança material.
-
-## Objetivo
-
-Distinguir remediation worker `success` em pelo menos:
-
-1. `hasPatch=true` / novo material esperado: aguardar mudança de HEAD e continuar;
-2. `hasPatch=false` com resultado semântico de bloqueio/missing tool/incomplete: classificar e persistir sem esperar HEAD;
-3. saída ambígua: fail-closed;
-4. falha de infraestrutura recuperável: continuar usando a recovery matrix bounded existente.
-
-## Invariantes
-
-- não esperar mudança de HEAD quando o worker declara `hasPatch=false`;
-- não tratar workflow `success` como sinônimo de remediation material aplicada;
-- consumir o mesmo artefato/agent output canônico já usado pela recovery matrix;
-- não duplicar dispatch/budget;
-- preservar idempotência de reentrada;
-- não criar retry infinito;
-- não inventar patch quando o worker explicitamente recusou alteração;
-- se `hasPatch=true`, continuar exigindo material head novo;
-- se `hasPatch=false` e houver bloqueio estruturado, publicar estado terminal/blocked com evidência machine-readable;
-- sem merge automático.
+- detectar mudança do fingerprint canônico `repository + issueNumber + title + body` entre o bootstrap persistido e a issue corrente;
+- para worker `completed/success` sem PR material, permitir rearmar a mesma tentativa quando o contrato da issue mudou, mesmo com o mesmo SHA do control plane;
+- gerar nonce novo e persistir `scopeBinding` atualizado antes do novo worker;
+- não consumir tentativa adicional;
+- mesma issue fingerprint + mesmo control plane continua recuperando a execução anterior, sem retry cego;
+- preservar fail-closed para bootstrap sem fingerprint/proveniência suficiente;
+- adicionar testes discriminantes e atualizar o contrato documental.
 
 ## Critérios de aceite
 
-- [ ] Reproduzir o shape real do worker 36484147713.
-- [ ] `success + hasPatch=false + missing_tool/incomplete` não chama `waitHeadChange`.
-- [ ] O controller termina rapidamente em estado estruturado e não após timeout de 15 minutos.
-- [ ] `success + hasPatch=true` continua exigindo mudança de HEAD.
-- [ ] `success + saída ambígua` permanece fail-closed.
-- [ ] Reentrada não duplica remediation.
-- [ ] A evidência do worker é persistida antes do terminal.
-- [ ] Testes cobrem no-patch, patch, ambíguo e idempotência.
+- [ ] mudança apenas do contrato da issue rearma o bootstrap pre-material bem-sucedido sem PR;
+- [ ] o rearm atualiza o `issueContractSha256` persistido;
+- [ ] o número da tentativa é preservado;
+- [ ] um novo `dispatchNonce` é usado;
+- [ ] reentrada sem mudança de contrato nem control plane não cria nova tentativa;
+- [ ] os testes de reentry/bootstrap existentes continuam verdes.

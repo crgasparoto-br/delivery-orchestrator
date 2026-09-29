@@ -385,21 +385,25 @@ A bootstrap that exhausted its initial reservation budget before producing a usa
 
 #### Successful worker without a material PR
 
-A `reserved-initial-attempt` may be re-armed without charging another implementation attempt only when all of the following are true:
+A `reserved-initial-attempt` whose correlated worker completed `success` but produced no managed PR may be re-armed without charging another implementation attempt when either the control plane changed or the canonical issue contract changed.
+
+Common prerequisites:
 
 - no managed PR exists for the requested target when the re-entry guard performs fresh GitHub discovery;
 - the persisted bootstrap status is `reserved-initial-attempt`;
 - the correlated worker run is provenance-valid and is terminal `completed/success`;
-- the prior checked-out control-plane SHA is present in trusted persisted bootstrap provenance;
-- the currently checked-out control-plane `HEAD` is an exact Git SHA and differs from that prior SHA.
+- the prior implementation-attempt count is trusted and remains unchanged by the rearm.
 
-This path exists for a worker that was technically successful but produced no material PR because of a defect in the prior control plane. A successful worker on the same control-plane SHA continues to be recovered instead of being re-dispatched.
+For **control-plane recovery**, the prior checked-out control-plane SHA must be present in trusted bootstrap provenance and the currently checked-out control-plane `HEAD` must be an exact Git SHA that differs from it.
 
-The re-entry guard clears `recoverWorkerRunId` only for an eligible changed-SHA recovery and reports `retry-initial-worker`. It reduces `priorInitialAttempts` by one only as input to reservation. The new reservation then restores the same implementation-attempt number, so the lost pre-material execution does not consume an additional budget slot.
+For **issue-contract recovery**, the persisted `scopeBinding` must be schema-valid and bound to the same repository/issue, its `issueContractSha256` must be a valid fingerprint of the prior canonical contract, and a fresh GitHub read of the current issue must produce a different canonical fingerprint over `repository + issueNumber + title + body`. The re-entry guard then generates a fresh dispatch nonce, clears the prior worker binding, updates the persisted `scopeBinding.issueContractSha256`, transfers controller authority to the current run, and re-dispatches the same implementation-attempt number. A missing, malformed, target-mismatched or unchanged fingerprint does not authorize issue-contract recovery.
 
-The reservation step independently re-derives recovery eligibility from the trusted persisted bootstrap lease plus the actually checked-out control-plane SHA, and for the successful-worker path it independently re-fetches and validates the correlated worker. Workflow-provided recovery fields are compatibility cross-checks, not sole authority. For exhausted legacy leases, historical checkout-log reconstruction remains allowed as described above; a successful `reserved-initial-attempt` without trusted prior control-plane SHA fails closed.
+These paths exist for technically successful but non-material workers whose result is stale because either the control plane or the issue contract changed after their execution. Same-control-plane re-entry with the same issue-contract fingerprint continues to recover the existing worker instead of blindly re-dispatching it.
 
-For the two changed-control-plane recovery paths, provenance records the prior implementation-attempt count, prior/current controller SHAs, recovery reason and `grantedImplementationAttempts=1`. The same control-plane SHA cannot grant a second recovery in either changed-SHA path. If such a recovery dispatch also fails before material output, subsequent changed-SHA recovery requires another verified control-plane SHA change. This rule is independent of the ordinary same-cycle context-rebuild retries above, which consume normal implementation slots. Ambiguous provenance, an ineligible worker state or conclusion, or any material candidate already present fails closed into the ordinary deterministic continuation/escalation rules.
+Changed-control-plane recovery reports `retry-initial-worker` and reduces `priorInitialAttempts` by one only as input to reservation; the reservation step independently re-derives recovery eligibility from trusted bootstrap provenance and restores the same implementation-attempt number. Issue-contract recovery is re-armed directly by the re-entry guard as an existing reservation (`dispatch-reserved-initial-attempt`), so the reservation step is intentionally skipped and the attempt counter cannot advance.
+
+Recovery provenance records the prior implementation-attempt count and prior/current controller SHAs. Issue-contract recovery additionally records the prior/current issue fingerprints and prior worker/dispatch identity. The same control-plane SHA cannot grant a second recovery through the control-plane path, and an unchanged issue-contract fingerprint cannot grant a second issue-contract recovery. Ambiguous provenance, an ineligible worker state or conclusion, or any material candidate already present fails closed into the ordinary deterministic continuation/escalation rules.
+
 ## 9. DV2-005 and DV2-006 — Adaptive CI and safe classification
 
 The classifier is deterministic. It decides **how much validation is required**, while each target repository owns the actual commands for build, test, lint, migrations, browser checks, and domain validation.
