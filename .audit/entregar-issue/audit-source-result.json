@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "contract_version": "2026-08-20.3",
+  "rejection_id": "audit-rejection:abc8b5dc-9f6c-48d4-909a-3f056c3fb660",
+  "head_sha": "9a34c199fa995246312fbc0ef8df7d7ac92597e4",
+  "findings": [
+    {
+      "id": "A-001",
+      "disposition": "blocking",
+      "status": "open",
+      "actionable": true,
+      "remediation_mode": "targeted-remediation",
+      "title": "Pacote certificado de entrega ausente",
+      "reason": "certified-handoff required but handoff-ready.json was not produced"
+    }
+  ],
+  "recommendations": []
+}
