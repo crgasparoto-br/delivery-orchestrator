@@ -12,16 +12,23 @@ import { parseTrustedJsonEnvelope, selectExistingPullRequest, trustedCommentAuth
 import { classifyLegacyAdoptionBootstrap, createLegacyAdoption, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { withTransientFetchRetry } from '../src/v2/github-api-retry.mjs';
 import { recordControllerTechnicalError } from '../src/v2/controller-summary.mjs';
+import { issueContractFingerprint } from '../.github/scripts/delivery-v2-worker-scope-contract.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
 const SHA_RE = /^[0-9a-f]{40}$/i;
+const SHA256_RE = /^[0-9a-f]{64}$/i;
 const RECOVERABLE_PRE_MATERIAL_FAILURE_CLASSES = new Set(['infrastructure', 'unknown']);
 const RECOVERABLE_PRE_MATERIAL_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_failure', 'cancelled']);
 
 function normalizedSha(value) {
   const sha = String(value ?? '').trim().toLowerCase();
   return SHA_RE.test(sha) ? sha : null;
+}
+
+function normalizedFingerprint(value) {
+  const fingerprint = String(value ?? '').trim().toLowerCase();
+  return SHA256_RE.test(fingerprint) ? fingerprint : null;
 }
 
 export function resolveCheckedOutControlPlaneHeadSha({
@@ -124,7 +131,8 @@ export function recoveryContextForLegacyNonrecoverableBootstrap({
 export function recoveryContextForSuccessfulBootstrapWithoutPr({
   bootstrapLease,
   currentControllerHeadSha,
-  bootstrapControllerHeadSha = null
+  bootstrapControllerHeadSha = null,
+  currentIssueContractSha256 = null
 } = {}) {
   const previousControllerHeadSha = normalizedSha(
     bootstrapLease?.recovery?.currentControllerHeadSha
@@ -137,6 +145,22 @@ export function recoveryContextForSuccessfulBootstrapWithoutPr({
   const previousImplementationAttempts = Number(
     bootstrapLease?.implementationAttempts
   );
+  const previousIssueContractSha256 = normalizedFingerprint(
+    bootstrapLease?.scopeBinding?.issueContractSha256
+  );
+  const currentIssueFingerprint = normalizedFingerprint(
+    currentIssueContractSha256
+  );
+  const controllerChanged = Boolean(
+    previousControllerHeadSha
+      && currentControlPlaneHeadSha
+      && previousControllerHeadSha !== currentControlPlaneHeadSha
+  );
+  const issueContractChanged = Boolean(
+    previousIssueContractSha256
+      && currentIssueFingerprint
+      && previousIssueContractSha256 !== currentIssueFingerprint
+  );
 
   const eligible =
     bootstrapLease?.status === 'reserved-initial-attempt'
@@ -144,16 +168,24 @@ export function recoveryContextForSuccessfulBootstrapWithoutPr({
     && previousImplementationAttempts >= 1
     && previousControllerHeadSha
     && currentControlPlaneHeadSha
-    && previousControllerHeadSha !== currentControlPlaneHeadSha;
+    && (controllerChanged || issueContractChanged);
 
   if (!eligible) return null;
 
   return Object.freeze({
-    reason: 'control-plane-changed-after-successful-pre-material-worker-without-pr',
+    reason: issueContractChanged
+      ? 'issue-contract-changed-after-successful-pre-material-worker-without-pr'
+      : 'control-plane-changed-after-successful-pre-material-worker-without-pr',
     previousImplementationAttempts,
     previousControllerHeadSha,
     currentControllerHeadSha: currentControlPlaneHeadSha,
-    grantedImplementationAttempts: 1
+    grantedImplementationAttempts: 1,
+    ...(issueContractChanged
+      ? {
+          previousIssueContractSha256,
+          currentIssueContractSha256: currentIssueFingerprint
+        }
+      : {})
   });
 }
 
@@ -419,7 +451,7 @@ function bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease,
   });
 }
 
-export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope = null, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null, bootstrapControllerHeadSha = null, currentControllerHeadSha = null, legacyAuthorizationFailure = null, rearmDispatchNonce = null } = {}) {
+export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope = null, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null, bootstrapControllerHeadSha = null, currentControllerHeadSha = null, currentIssueContractSha256 = null, legacyAuthorizationFailure = null, rearmDispatchNonce = null } = {}) {
   const resolvedIssue = positiveInteger(issueNumber, 'issueNumber');
   const resolvedProvider = String(provider ?? '').toLowerCase();
 
@@ -585,8 +617,33 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
       const recovery = recoveryContextForSuccessfulBootstrapWithoutPr({
         bootstrapLease,
         currentControllerHeadSha,
-        bootstrapControllerHeadSha
+        bootstrapControllerHeadSha,
+        currentIssueContractSha256
       });
+
+      if (recovery?.reason === 'issue-contract-changed-after-successful-pre-material-worker-without-pr') {
+        const dispatchNonce = String(rearmDispatchNonce ?? '').trim();
+        if (!dispatchNonce) {
+          throw new Error('issue-contract bootstrap recovery requires a fresh dispatch nonce');
+        }
+        return Object.freeze({
+          runController: true,
+          resumePr: null,
+          recoverWorkerRunId: null,
+          reuseReservedAttempt: true,
+          status: 'retry-initial-delivery',
+          pullRequestNumber: null,
+          materialHeadSha: null,
+          staleStateDetected: true,
+          nextAction: 'dispatch-reserved-initial-attempt',
+          priorInitialAttempts: bootstrapLease.implementationAttempts,
+          dispatchNonce,
+          attempts: {
+            implementation: recovery.previousImplementationAttempts
+          },
+          recovery
+        });
+      }
 
       if (recovery) {
         return Object.freeze({
@@ -882,6 +939,101 @@ export function rearmLegacyNonrecoverableBootstrapLease(
   });
 }
 
+export function rearmSuccessfulBootstrapAfterIssueContractChange(
+  lease,
+  decision,
+  { currentControllerRunId, currentControllerHeadSha } = {}
+) {
+  if (decision?.recovery?.reason !== 'issue-contract-changed-after-successful-pre-material-worker-without-pr') return null;
+  if (lease?.status !== 'reserved-initial-attempt') {
+    throw new Error('issue-contract recovery requires reserved-initial-attempt state');
+  }
+
+  const activeControllerRunId = positiveInteger(currentControllerRunId, 'currentControllerRunId');
+  const currentHeadSha = normalizedSha(currentControllerHeadSha);
+  if (!currentHeadSha) throw new Error('currentControllerHeadSha must be an exact Git commit SHA');
+
+  const dispatchNonce = String(decision.dispatchNonce ?? '').trim();
+  if (!dispatchNonce) throw new Error('issue-contract bootstrap recovery requires dispatch nonce');
+
+  const scopeBinding = lease.scopeBinding;
+  if (!scopeBinding || typeof scopeBinding !== 'object' || Array.isArray(scopeBinding)) {
+    throw new Error('issue-contract bootstrap recovery requires persisted scope binding');
+  }
+  if (Number(scopeBinding.schemaVersion) !== 1) {
+    throw new Error('issue-contract bootstrap recovery requires scope binding schemaVersion 1');
+  }
+  if (
+    String(scopeBinding.repository ?? '') !== String(lease.repository ?? '')
+    || Number(scopeBinding.issueNumber) !== Number(lease.issueNumber)
+  ) {
+    throw new Error('issue-contract bootstrap recovery scope binding target mismatch');
+  }
+
+  const previousIssueContractSha256 = normalizedFingerprint(
+    scopeBinding.issueContractSha256
+  );
+  const expectedPrevious = normalizedFingerprint(
+    decision.recovery.previousIssueContractSha256
+  );
+  const currentIssueContractSha256 = normalizedFingerprint(
+    decision.recovery.currentIssueContractSha256
+  );
+  if (
+    !previousIssueContractSha256
+    || previousIssueContractSha256 !== expectedPrevious
+    || !currentIssueContractSha256
+    || currentIssueContractSha256 === previousIssueContractSha256
+  ) {
+    throw new Error('issue-contract bootstrap recovery fingerprint provenance mismatch');
+  }
+
+  const { commentId, ...value } = lease;
+  const previousControllerRunId = positiveInteger(
+    value.controllerRunId,
+    'bootstrap controllerRunId'
+  );
+  const controllerRunHistory = [...new Set([
+    ...(Array.isArray(value.controllerRunHistory) ? value.controllerRunHistory : []),
+    previousControllerRunId
+  ].map(Number).filter((item) => Number.isInteger(item) && item > 0 && item !== activeControllerRunId))];
+
+  const previousHeadSha = normalizedSha(value.controllerHeadSha);
+  const controllerProvenanceHistory = [
+    ...(Array.isArray(value.controllerProvenanceHistory) ? value.controllerProvenanceHistory : []),
+    ...(previousControllerRunId !== activeControllerRunId
+      ? [{ controllerRunId: previousControllerRunId, controllerHeadSha: previousHeadSha }]
+      : [])
+  ].filter(
+    (entry, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          Number(candidate?.controllerRunId) === Number(entry?.controllerRunId)
+          && String(candidate?.controllerHeadSha ?? '') === String(entry?.controllerHeadSha ?? '')
+      ) === index
+  );
+
+  return Object.freeze({
+    ...value,
+    status: 'reserved-initial-attempt',
+    controllerRunId: activeControllerRunId,
+    controllerRunHistory,
+    controllerProvenanceHistory,
+    controllerHeadSha: currentHeadSha,
+    workerRunId: null,
+    dispatchNonce,
+    scopeBinding: Object.freeze({
+      ...scopeBinding,
+      issueContractSha256: currentIssueContractSha256
+    }),
+    recovery: Object.freeze({
+      ...decision.recovery,
+      previousWorkerRunId: value.workerRunId ?? null,
+      previousDispatchNonce: value.dispatchNonce ?? null
+    })
+  });
+}
+
 export function buildReentryGuardFailure(error, {
   repository = null,
   issueNumber = null,
@@ -998,11 +1150,17 @@ export async function persistReentryMutation({ decision, adoptionEnvelope, boots
     method = adoptionEnvelope ? 'PATCH' : 'POST';
     body = legacyAdoptionComment(decision.adoption, controller);
   } else {
-    const rearmed = bootstrapLease && rearmLegacyNonrecoverableBootstrapLease(
+    const rearmedIssueContract = bootstrapLease && rearmSuccessfulBootstrapAfterIssueContractChange(
       bootstrapLease,
       decision,
       { currentControllerRunId, currentControllerHeadSha }
     );
+    const rearmedLegacy = !rearmedIssueContract && bootstrapLease && rearmLegacyNonrecoverableBootstrapLease(
+      bootstrapLease,
+      decision,
+      { currentControllerRunId, currentControllerHeadSha }
+    );
+    const rearmed = rearmedIssueContract ?? rearmedLegacy;
     const terminal = rearmed ?? (bootstrapLease && terminalBootstrapLease(
       bootstrapLease,
       decision,
@@ -1083,6 +1241,17 @@ async function main() {
         })
       : null;
 
+  const currentIssue = bootstrapLease
+    ? await api(`https://api.github.com/repos/${targetRepository}/issues/${issueNumber}`, readToken)
+    : null;
+  const currentIssueContractSha256 = currentIssue
+    ? issueContractFingerprint({
+        repository: targetRepository,
+        issueNumber,
+        title: currentIssue.title,
+        body: currentIssue.body
+      })
+    : null;
   const recoveredWorkerRun = bootstrapLease ? await recoverBootstrapWorkerRun(bootstrapLease, orchestratorRepository, orchestratorRef, actionsToken) : null;
   const legacyAuthorizationFailure = bootstrapLease
     ? await detectLegacyBootstrapControllerRunMismatch({
@@ -1110,8 +1279,9 @@ async function main() {
       recoveredWorkerRun,
       bootstrapControllerHeadSha,
       currentControllerHeadSha,
+      currentIssueContractSha256,
       legacyAuthorizationFailure,
-      rearmDispatchNonce: legacyAuthorizationFailure ? createDispatchNonce() : null
+      rearmDispatchNonce: (legacyAuthorizationFailure || (bootstrapLease && recoveredWorkerRun?.status === 'completed' && recoveredWorkerRun?.conclusion === 'success')) ? createDispatchNonce() : null
     });
   } catch (error) {
     error.reentryGuardContext = {
