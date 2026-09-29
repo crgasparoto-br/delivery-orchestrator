@@ -1,22 +1,67 @@
 import assert from 'node:assert/strict';
-import { access, readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import test from 'node:test';
 
-async function exists(path) {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
+const LEGACY_SNAPSHOT_ROOTS = [
+  '.audit/entregar-issue',
+  'skills/catalog'
+];
+
+const ACTIVE_RUNTIME_ROOTS = [
+  'src',
+  'scripts',
+  'actions',
+  '.github/scripts',
+  '.github/workflows'
+];
+
+async function collectFiles(root) {
+  const files = [];
+
+  async function walk(dir) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(path);
+      } else if (entry.isFile()) {
+        files.push(path);
+      }
+    }
   }
+
+  await walk(root);
+  return files;
 }
 
-test('V1 traceability snapshots are physically absent from active tool-discovery roots', async () => {
-  assert.equal(await exists('.audit/entregar-issue'), false);
-  assert.equal(await exists('skills/catalog'), false);
+test('V1 traceability snapshots stay outside active runtime and worker roots', async () => {
+  const references = [];
+
+  for (const root of ACTIVE_RUNTIME_ROOTS) {
+    const files = await collectFiles(root);
+
+    for (const file of files) {
+      const source = await readFile(file, 'utf8');
+
+      for (const legacyRoot of LEGACY_SNAPSHOT_ROOTS) {
+        if (source.includes(legacyRoot)) {
+          references.push(`${file} -> ${legacyRoot}`);
+        }
+      }
+    }
+  }
+
+  assert.deepEqual(references, []);
 });
 
-test('removed V1 snapshot roots are ignored so generated/local tooling cannot accidentally reintroduce them', async () => {
+test('retired V1 snapshot roots stay ignored so generated/local tooling cannot reactivate them', async () => {
   const gitignore = await readFile('.gitignore', 'utf8');
   assert.match(gitignore, /^\.audit\/$/m);
   assert.match(gitignore, /^skills\/catalog\/$/m);

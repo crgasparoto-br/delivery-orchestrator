@@ -192,8 +192,11 @@ echo "9.0.0"
     const commandTargets = new Map([
       ['bash', resolveHostTool('bash')],
       ['cat', resolveHostTool('cat')],
+      ['gh', resolveHostTool('gh')],
       ['git', resolveHostTool('git')],
       ['sed', resolveHostTool('sed')],
+      ['sh', resolveHostTool('sh')],
+      ['sort', resolveHostTool('sort')],
       ['node', process.execPath],
       ['npm', resolveHostTool('npm')],
       ['pnpm', pnpm],

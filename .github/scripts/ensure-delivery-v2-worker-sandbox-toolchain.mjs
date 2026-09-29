@@ -126,8 +126,11 @@ export function resolveInBinDirs(tool, binDirs) {
 const CODEX_COMMAND_TOOLS = Object.freeze([
   'bash',
   'cat',
+  'gh',
   'git',
   'sed',
+  'sh',
+  'sort',
   'node',
   'npm',
   'pnpm'
@@ -339,7 +342,7 @@ function main() {
   }
 
   console.log(
-    'Delivery V2 sandbox toolchain preflight passed: git, node, npm and pnpm all resolve via the RUNNER_TOOL_CACHE bin-directory scan used inside the agent sandbox.'
+    'Delivery V2 sandbox toolchain preflight passed: git, node, npm and pnpm resolve via RUNNER_TOOL_CACHE, and the restricted Codex command PATH has all required host shims.'
   );
 }
 

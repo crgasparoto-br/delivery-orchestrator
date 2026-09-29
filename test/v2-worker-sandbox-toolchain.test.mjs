@@ -218,15 +218,29 @@ test('codex command environment receives the validated sandbox PATH', async () =
     /CODEX_COMMAND_TOOLS[\s\S]*'cat'/
   );
 
+  for (const tool of ['gh', 'sh', 'sort']) {
+    assert.match(
+      hostStager,
+      new RegExp(`CODEX_COMMAND_TOOLS[\\s\\S]*'${tool}'`)
+    );
+  }
+
   assert.match(
     wrapper,
-    /for tool in bash cat git sed node npm pnpm safeoutputs/
+    /for tool in bash cat gh git sed sh sort node npm pnpm safeoutputs/
   );
 
   assert.match(
     wrapper,
     /command -v cat/
   );
+
+  assert.match(wrapper, /command -v gh/);
+  assert.match(wrapper, /command -v sh/);
+  assert.match(wrapper, /command -v sort/);
+  assert.match(wrapper, /gh --version/);
+  assert.match(wrapper, /sh -c true/);
+  assert.match(wrapper, /sort --version/);
 
   assert.match(
     wrapper,
