@@ -64,6 +64,116 @@
     },
     {
       "schemaVersion": 1,
+      "deliveryId": "crgasparoto-br/SolverFin#681@b0204401d2dd52a636867d6352c10b52a34a9213",
+      "repository": "crgasparoto-br/SolverFin",
+      "issueNumber": 620,
+      "pullRequestNumber": 681,
+      "materialHeadSha": "b0204401d2dd52a636867d6352c10b52a34a9213",
+      "risk": "critical",
+      "provider": "codex",
+      "classifier": {
+        "version": "crgasparoto-br/delivery-orchestrator@00eb10545f2f7209ef649d2834300515e0b85106",
+        "fingerprint": "0c923371c284a71ac942cdc3b3edbde00cc578faa28c8be214c3291c89952efc"
+      },
+      "providerCalls": 1,
+      "attempts": {
+        "implementation": 1,
+        "audit": 0
+      },
+      "aiUsage": {
+        "turns": null,
+        "credits": 58.7828,
+        "inputTokens": 573064,
+        "outputTokens": 3679,
+        "totalTokens": 576743
+      },
+      "aiUsageByStage": {
+        "implementation": {
+          "turns": null,
+          "credits": 58.7828,
+          "inputTokens": 573064,
+          "outputTokens": 3679,
+          "totalTokens": 576743
+        },
+        "audit": {
+          "turns": null,
+          "credits": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "totalTokens": null
+        }
+      },
+      "technicalHygiene": null,
+      "providerCost": {
+        "available": false,
+        "amount": null,
+        "currency": null,
+        "reportedCost": null,
+        "estimatedCost": null,
+        "effectiveCost": null,
+        "accounting": "unknown"
+      },
+      "providerRunLedger": [
+        {
+          "runId": 36484147713,
+          "workflowRunId": 36484147713,
+          "materialHeadSha": "b0204401d2dd52a636867d6352c10b52a34a9213",
+          "phase": "implementation",
+          "provider": "codex",
+          "model": null,
+          "worker": null,
+          "role": "implementation-worker",
+          "implementationAttempt": 1,
+          "remediationAttempt": 0,
+          "auditAttempt": null,
+          "usage": {
+            "turns": null,
+            "credits": 58.7828,
+            "inputTokens": 573064,
+            "outputTokens": 3679,
+            "totalTokens": 576743
+          },
+          "usageAccounting": "complete",
+          "cache": {
+            "cacheReadInputTokens": 530636,
+            "cacheCreationInputTokens": 0
+          },
+          "reportedCost": null,
+          "estimatedCost": null,
+          "effectiveCost": null,
+          "pricingSnapshot": null,
+          "costProvenance": "unknown",
+          "accounting": "unknown",
+          "startedAtIso": "2026-09-28T21:09:06.000Z",
+          "endedAtIso": "2026-09-28T21:15:10.000Z",
+          "observedAtIso": null,
+          "terminalState": "success",
+          "evidenceRef": "https://api.github.com/repos/crgasparoto-br/delivery-orchestrator/actions/artifacts/10998660813/zip"
+        }
+      ],
+      "providerRunAccounting": "complete",
+      "observedAtIso": "2026-09-29T10:39:38.610Z",
+      "durationsMs": {
+        "ciQueue": 0,
+        "ciExecution": 98000,
+        "audit": 0,
+        "endToEnd": 48647180
+      },
+      "terminalReason": "remediation-produced-no-material",
+      "change": {
+        "files": 12,
+        "additions": 736,
+        "deletions": 11,
+        "linesChanged": 747
+      },
+      "escalated": true,
+      "evidenceRefs": [
+        "https://github.com/crgasparoto-br/SolverFin/actions/runs/36410208146",
+        "https://api.github.com/repos/crgasparoto-br/delivery-orchestrator/actions/artifacts/10998660813/zip"
+      ]
+    },
+    {
+      "schemaVersion": 1,
       "deliveryId": "crgasparoto-br/training-system#435@ae0fade7be03c6c66f00fbd605bd85d9259aa622",
       "repository": "crgasparoto-br/training-system",
       "issueNumber": 431,
