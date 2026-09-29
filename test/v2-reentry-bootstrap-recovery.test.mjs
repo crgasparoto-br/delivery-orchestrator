@@ -265,6 +265,34 @@ test('successful bootstrap worker without PR is still recovered when control pla
   );
 });
 
+test('issue-contract recovery fails closed when prior fingerprint provenance is missing', () => {
+  const controllerHeadSha = 'c'.repeat(40);
+  const decision = evaluateReentry({
+    pullRequest: null,
+    stateEnvelope: null,
+    bootstrapLease: bootstrapLease({
+      implementationAttempts: 1,
+      controllerHeadSha,
+      scopeBinding: null
+    }),
+    targetRepository: 'crgasparoto-br/delivery-orchestrator',
+    issueNumber: 105,
+    baseBranch: 'main',
+    provider: 'codex',
+    model: 'gpt-5.6-sol',
+    recoveredWorkerRun: successfulWorker(),
+    bootstrapControllerHeadSha: controllerHeadSha,
+    currentControllerHeadSha: controllerHeadSha,
+    currentIssueContractSha256: ISSUE_CONTRACT_V2,
+    rearmDispatchNonce: 'nonce-must-not-be-used'
+  });
+
+  assert.equal(decision.status, 'resume-initial-delivery');
+  assert.equal(decision.nextAction, 'recover-initial-attempt');
+  assert.equal(decision.recoverWorkerRunId, 35117775004);
+  assert.equal(decision.reuseReservedAttempt, undefined);
+});
+
 test('reservation does not trust recovery outputs when the correlated worker did not succeed', () => {
   const previousControllerHeadSha = 'c'.repeat(40);
   const currentControllerHeadSha = 'd'.repeat(40);
