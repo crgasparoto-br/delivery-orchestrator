@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { evaluateReentry, selectManagedPullRequest } from '../scripts/guard-delivery-v2-reentry.mjs';
+import {
+  evaluateReentry,
+  rearmSuccessfulBootstrapAfterIssueContractChange,
+  selectManagedPullRequest
+} from '../scripts/guard-delivery-v2-reentry.mjs';
 import {
   bootstrapLeaseForDecision,
   resolveRecoveryForReservation
@@ -9,6 +13,8 @@ import {
 
 const HEAD = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
+const ISSUE_CONTRACT_V1 = '1'.repeat(64);
+const ISSUE_CONTRACT_V2 = '2'.repeat(64);
 
 function managedPr(overrides = {}) {
   return {
@@ -39,6 +45,14 @@ function bootstrapLease(overrides = {}) {
     workerRunId: null,
     workerWorkflow: 'delivery-v2-worker-codex-critical.lock.yml',
     dispatchNonce: 'nonce-105',
+    scopeBinding: {
+      schemaVersion: 1,
+      repository: 'crgasparoto-br/delivery-orchestrator',
+      issueNumber: 105,
+      issueContractSha256: ISSUE_CONTRACT_V1,
+      enforcement: 'issue-contract-only',
+      authorizedPaths: []
+    },
     ...overrides
   };
 }
@@ -141,6 +155,75 @@ test('successful bootstrap worker without PR is rearmed after a verified control
   );
 });
 
+test('successful bootstrap worker without PR is rearmed on the same control plane when the issue contract changes', () => {
+  const controllerHeadSha = 'c'.repeat(40);
+  const lease = bootstrapLease({
+    implementationAttempts: 1,
+    controllerHeadSha
+  });
+
+  const decision = evaluateReentry({
+    pullRequest: null,
+    stateEnvelope: null,
+    bootstrapLease: lease,
+    targetRepository: 'crgasparoto-br/delivery-orchestrator',
+    issueNumber: 105,
+    baseBranch: 'main',
+    provider: 'codex',
+    model: 'gpt-5.6-sol',
+    recoveredWorkerRun: successfulWorker(),
+    bootstrapControllerHeadSha: controllerHeadSha,
+    currentControllerHeadSha: controllerHeadSha,
+    currentIssueContractSha256: ISSUE_CONTRACT_V2,
+    rearmDispatchNonce: 'nonce-contract-v2'
+  });
+
+  assert.equal(decision.runController, true);
+  assert.equal(decision.recoverWorkerRunId, null);
+  assert.equal(decision.reuseReservedAttempt, true);
+  assert.equal(decision.status, 'retry-initial-delivery');
+  assert.equal(decision.nextAction, 'dispatch-reserved-initial-attempt');
+  assert.equal(decision.priorInitialAttempts, 1);
+  assert.equal(decision.attempts.implementation, 1);
+  assert.equal(decision.dispatchNonce, 'nonce-contract-v2');
+  assert.equal(
+    decision.recovery.reason,
+    'issue-contract-changed-after-successful-pre-material-worker-without-pr'
+  );
+  assert.equal(
+    decision.recovery.previousIssueContractSha256,
+    ISSUE_CONTRACT_V1
+  );
+  assert.equal(
+    decision.recovery.currentIssueContractSha256,
+    ISSUE_CONTRACT_V2
+  );
+
+  const rearmed = rearmSuccessfulBootstrapAfterIssueContractChange(
+    lease,
+    decision,
+    {
+      currentControllerRunId: 35117753935,
+      currentControllerHeadSha: controllerHeadSha
+    }
+  );
+
+  assert.equal(rearmed.status, 'reserved-initial-attempt');
+  assert.equal(rearmed.implementationAttempts, 1);
+  assert.equal(rearmed.controllerRunId, 35117753935);
+  assert.equal(rearmed.workerRunId, null);
+  assert.equal(rearmed.dispatchNonce, 'nonce-contract-v2');
+  assert.equal(
+    rearmed.scopeBinding.issueContractSha256,
+    ISSUE_CONTRACT_V2
+  );
+  assert.equal(
+    rearmed.recovery.previousIssueContractSha256,
+    ISSUE_CONTRACT_V1
+  );
+  assert.equal(rearmed.recovery.previousDispatchNonce, 'nonce-105');
+});
+
 test('successful bootstrap worker without PR is still recovered when control plane did not change', () => {
   const controllerHeadSha = 'c'.repeat(40);
 
@@ -158,7 +241,8 @@ test('successful bootstrap worker without PR is still recovered when control pla
     model: 'gpt-5.6-sol',
     recoveredWorkerRun: successfulWorker(),
     bootstrapControllerHeadSha: controllerHeadSha,
-    currentControllerHeadSha: controllerHeadSha
+    currentControllerHeadSha: controllerHeadSha,
+    currentIssueContractSha256: ISSUE_CONTRACT_V1
   });
 
   assert.equal(decision.runController, true);
