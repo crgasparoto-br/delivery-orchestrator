@@ -99,6 +99,13 @@ export function classifyWorkflowStageFailure({
         stage: normalizedStage
       });
     }
+    if (structured.recognizedReport === true) {
+      return Object.freeze({
+        ...structured,
+        action: 'fail-closed',
+        stage: normalizedStage
+      });
+    }
   }
 
   return Object.freeze({
