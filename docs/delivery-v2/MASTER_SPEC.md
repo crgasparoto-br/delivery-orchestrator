@@ -952,6 +952,8 @@ The initial correlated `workerRunId` is persisted before terminal waiting, so id
 
 Any remediation that publishes a new material SHA invalidates prior candidate-bound CI, audit, Technical Hygiene and release evidence. The new exact HEAD must pass fresh CI and, when required, a new independent audit with a new run/request identity before release readiness.
 
+For certified handoff flows, a result-only handoff never remains authoritative after a later material write. The controller must preserve the published handoff SHA separately from a fresh remote HEAD observation, compare the complete delta between them, and fail closed when any post-handoff path is material. That condition sets `material_dirty_since_freeze`, requires `post-write-refreeze` on the current material HEAD, invalidates the older handoff, and requires a new direct result-only child of the refrozen material before independent audit or release may continue. `handoff-stale` alone must never downgrade this recovery to `handoff-only` when the delta contains material paths.
+
 
 ## 21. Security model
 
