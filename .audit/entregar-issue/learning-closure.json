@@ -3,13 +3,11 @@
   "classification": "implementation-only",
   "source_event": {
     "kind": "independent-rejection",
-    "rejection_id": "audit-rejection:abc8b5dc-9f6c-48d4-909a-3f056c3fb660",
-    "finding_ids": [
-      "A-001"
-    ]
+    "rejection_id": "audit-rejection:4b8e3fa1-7a21-4f4e-9f7d-300305a1c001",
+    "finding_ids": ["A-001"]
   },
   "generalized_learning": {
     "promotion_status": "not-required",
-    "reason": "The governing entregar-issue contract already requires certified handoff and terminal validation; the rejection was an execution/package omission, so no new global rule is necessary."
+    "reason": "The existing terminal handoff contract already requires fresh base and merge-preview reconciliation; this rejection is closed by recertifying the same material candidate."
   }
 }

@@ -3,12 +3,12 @@
   "contract_version": "2026-08-20.3",
   "resolution_policy": "all-actionable-items",
   "status": "closed",
-  "candidate_head_sha": "9a34c199fa995246312fbc0ef8df7d7ac92597e4",
+  "candidate_head_sha": "6cce4813cfe4dd1abd51e619f490597b33f2b17f",
   "remediation_mode": "targeted-remediation",
   "source": {
-    "rejection_id": "audit-rejection:abc8b5dc-9f6c-48d4-909a-3f056c3fb660",
-    "audited_head_sha": "9a34c199fa995246312fbc0ef8df7d7ac92597e4",
-    "audit_report_sha256": "985cc7af888b1b680c4426e0e2a6077b92c184d3372f810dacf10c5c0a73560e"
+    "rejection_id": "audit-rejection:4b8e3fa1-7a21-4f4e-9f7d-300305a1c001",
+    "audited_head_sha": "6cce4813cfe4dd1abd51e619f490597b33f2b17f",
+    "audit_report_sha256": "5f8ec92cd31db35947a46c9c09b2ca10d78c68d1b6807fbef49fe8db3abe1954"
   },
   "items": [
     {
@@ -18,10 +18,12 @@
       "status": "fixed",
       "closure_kind": "artifact-recertification",
       "evidence": [
-        "Current-target handoff package generated for the stable exact material head."
+        "Material head remained 6cce4813cfe4dd1abd51e619f490597b33f2b17f with exact-SHA CI green.",
+        "Current main cd7ab62bc47e2fc47ec913c2c6a5825864c58377 was reconciled into material merge preview 1167bcd905aa7f1843841766e1970eb587e8a0f9 without changing product material."
       ],
       "validations": [
-        "Specification coverage, critical readiness, rejection closure and terminal handoff validators must pass before publication."
+        "Replacement result-only child must remain a direct child of the same material head and touch only certificate allowlisted paths.",
+        "Terminal identity is reread after publication before independent re-audit."
       ]
     }
   ]
