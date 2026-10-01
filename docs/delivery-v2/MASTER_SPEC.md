@@ -928,6 +928,18 @@ When historical audit counters are unknown, they remain `null`. A refrozen adopt
 
 After the refreeze, a new operational epoch may be created for the adopted candidate with zero **new V2 implementation attempts** and imported exact-head green CI evidence. These counters describe only work performed after adoption and are not historical reconstruction. Audit rejection follows the normal bounded same-PR audit-remediation state machine. Audit approval still requires same-head Technical Hygiene and the standard exact-head release gate. Evidence-only hygiene collection must not mutate the PR head or become the claimed material producer. Head/base drift invalidates candidate-bound refreeze/audit/hygiene evidence; stale evidence cannot authorize release. The legacy adoption checkpoint remains separate provenance throughout.
 
+
+### 20.2 Canonical worker material outcome and autonomous remediation cycle
+
+Every implementation-capable worker is evaluated through one controller-owned material-outcome contract before repository polling. The authoritative order is exact target identity and expected HEAD, structured worker artifact (`hasPatch` plus a valid `agent_output` envelope), terminal workflow state, then observation of the repository effect. Workflow success alone never proves that material was published.
+
+Initial implementation, CI remediation, audit remediation and resume/re-entry use the same rule. `hasPatch=true` only authorizes waiting for the corresponding PR/HEAD effect. `hasPatch=false` with `noop`, `report_incomplete`, `missing_tool` or `missing_data` is explicitly non-material and stops without long polling. `noop` is valid for genuinely non-material work such as evidence-only Technical Hygiene; it must never stand for incomplete implementation or remediation. Missing, malformed or contradictory material evidence fails closed.
+
+The initial correlated `workerRunId` is persisted before terminal waiting, so idempotent re-entry reuses the same worker identity/nonce rather than consuming another slot. Controller progress is bounded by the existing policy-backed implementation and audit-remediation counters; there is no separate fixed iteration ceiling.
+
+Any remediation that publishes a new material SHA invalidates prior candidate-bound CI, audit, Technical Hygiene and release evidence. The new exact HEAD must pass fresh CI and, when required, a new independent audit with a new run/request identity before release readiness.
+
+
 ## 21. Security model
 
 The controller follows least privilege:
