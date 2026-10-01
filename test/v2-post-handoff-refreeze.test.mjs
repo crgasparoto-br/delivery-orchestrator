@@ -14,8 +14,8 @@ const BASE = 'c'.repeat(40);
 test('post-handoff material drift invalidates candidate-bound readiness and evidence', () => {
   const state = createPersistentDeliveryState({
     repository: 'acme/example',
-    issueNumber: 301,
-    pullRequestNumber: 302,
+    issueNumber: 41,
+    pullRequestNumber: 42,
     baseRef: 'main',
     baseSha: BASE,
     headRef: 'fix/example',
@@ -49,7 +49,7 @@ test('post-handoff material drift invalidates candidate-bound readiness and evid
 
   const result = reconcilePersistentState(state, {
     repository: 'acme/example',
-    pullRequestNumber: 302,
+    pullRequestNumber: 42,
     headRef: 'fix/example',
     baseSha: BASE,
     remoteHeadSha: POST_HANDOFF_MATERIAL
