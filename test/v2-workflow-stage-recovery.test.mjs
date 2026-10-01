@@ -54,6 +54,29 @@ test('recognized context rebuild without patch retries remediation and hygiene s
   }
 });
 
+test('recognized context rebuild retries downstream stages even when workflow technically succeeds', () => {
+  for (const stage of ['ci-remediation', 'audit-remediation', 'technical-hygiene']) {
+    const failure = classifyWorkflowStageFailure({
+      stage,
+      conclusion: 'success',
+      hasPatch: false,
+      agentOutput: breakerOutput()
+    });
+    assert.equal(failure.recoverable, true);
+    assert.equal(failure.action, 'retry-same-stage');
+    assert.equal(failure.classification, 'context-rebuild-circuit-breaker');
+  }
+
+  const independentAudit = classifyWorkflowStageFailure({
+    stage: 'independent-audit',
+    conclusion: 'success',
+    hasPatch: false,
+    agentOutput: breakerOutput()
+  });
+  assert.equal(independentAudit.recoverable, false);
+  assert.equal(independentAudit.action, 'none');
+});
+
 test('ambiguous failure and cancelled audit remain fail closed', () => {
   const ambiguous = classifyWorkflowStageFailure({
     stage: 'ci-remediation',
