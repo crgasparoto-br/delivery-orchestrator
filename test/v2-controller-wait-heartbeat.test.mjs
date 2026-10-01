@@ -222,3 +222,31 @@ test('terminal and drift paths remain immediate and do not depend on the heartbe
     );
   }
 });
+
+
+test('controller wait contract forbids semantically blocking watch primitives', async () => {
+  const [initial, resume] = await Promise.all([
+    readFile('scripts/run-delivery-v2-controller.mjs', 'utf8'),
+    readFile('scripts/resume-delivery-v2-controller.mjs', 'utf8')
+  ]);
+
+  for (const [name, body] of [
+    ['initial', initial],
+    ['resume', resume]
+  ]) {
+    assert.doesNotMatch(body, /--watch\b/, `${name}: controller must not use --watch waits`);
+    assert.doesNotMatch(body, /tail\s+-f\b/, `${name}: controller must not use tail -f waits`);
+    assert.doesNotMatch(body, /sleep\([^)]*(?:60_000|60000|[1-9][0-9]{5,})[^)]*\)/,
+      `${name}: controller must not introduce prolonged single sleeps`);
+  }
+});
+
+test('canonical spec separates workflow heartbeat from conversation-stream continuity', async () => {
+  const spec = await readFile('docs/delivery-v2/MASTER_SPEC.md', 'utf8');
+
+  assert.match(spec, /workflow\/controller heartbeat/i);
+  assert.match(spec, /conversation-stream continuity/i);
+  assert.match(spec, /workflow heartbeat is not evidence that the conversation stream is alive/i);
+  assert.match(spec, /bounded snapshots/i);
+  assert.match(spec, /resume from the persisted next phase/i);
+});
