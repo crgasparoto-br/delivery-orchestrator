@@ -33,6 +33,7 @@ require_tool sort
 require_tool node
 require_tool npm
 require_tool pnpm
+require_tool rm
 require_tool safeoutputs
 require_tool mktemp
 
@@ -53,15 +54,15 @@ require_child_tool() {
     fail "$tool is not available inside Codex child bash shells"
 }
 
-for tool in cat gh git sed sh sort node npm pnpm safeoutputs; do
+for tool in cat gh git sed sh sort node npm pnpm rm safeoutputs; do
   require_child_tool "$tool"
 done
 
 # npm itself uses /usr/bin/env node. Running npm here proves that node remains
 # resolvable through the compatibility login-shell probe. Actual Codex command
 # shells are forced to non-login mode below.
-/bin/bash -lc 'cat /dev/null >/dev/null && gh --version >/dev/null && git --version >/dev/null && sh -c true && sort --version >/dev/null && node --version >/dev/null && npm --version >/dev/null && pnpm --version >/dev/null' ||
-  fail "gh/git/sh/sort/node/npm/pnpm execution failed inside sandbox child-shell probe"
+/bin/bash -lc 'cat /dev/null >/dev/null && gh --version >/dev/null && git --version >/dev/null && sh -c true && sort --version >/dev/null && node --version >/dev/null && npm --version >/dev/null && pnpm --version >/dev/null && rm --version >/dev/null' ||
+  fail "gh/git/sh/sort/node/npm/pnpm/rm execution failed inside sandbox child-shell probe"
 
 echo "Delivery V2 Codex child-shell toolchain preflight: PASS"
 
@@ -122,7 +123,7 @@ CODEX_COMMAND_PATH="$(resolve_codex_command_path)"
 [ -d "$CODEX_COMMAND_PATH" ] ||
   fail "Codex restricted command path is not a directory: $CODEX_COMMAND_PATH"
 
-for tool in bash cat gh git sed sh sort node npm pnpm safeoutputs; do
+for tool in bash cat gh git sed sh sort node npm pnpm rm safeoutputs; do
   [ -x "$CODEX_COMMAND_PATH/$tool" ] ||
     fail "$tool was not staged into Codex restricted command PATH before AWF started"
 done
@@ -139,6 +140,7 @@ PATH="$CODEX_COMMAND_PATH" /bin/bash -c '
   command -v node >/dev/null
   command -v npm >/dev/null
   command -v pnpm >/dev/null
+  command -v rm >/dev/null
   command -v safeoutputs >/dev/null
   cat /dev/null >/dev/null
   gh --version >/dev/null
@@ -148,6 +150,7 @@ PATH="$CODEX_COMMAND_PATH" /bin/bash -c '
   node --version >/dev/null
   npm --version >/dev/null
   pnpm --version >/dev/null
+  rm --version >/dev/null
   safeoutputs noop --help >/dev/null
 ' || fail "host-staged tools are not executable from Codex restricted command PATH"
 
