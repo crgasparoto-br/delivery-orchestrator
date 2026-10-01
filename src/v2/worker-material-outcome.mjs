@@ -19,10 +19,19 @@ export function classifySuccessfulWorkerOutcome({
 } = {}) {
   const { errors, items } = normalizedAgentOutput(agentOutput);
 
-  if (!errors || !items || errors.length > 0) {
+  if (hasPatch !== true && hasPatch !== false) {
     return Object.freeze({
       action: 'fail-closed',
       classification: 'material-evidence-ambiguous',
+      reason: String(artifactError ?? 'successful worker did not provide deterministic patch evidence'),
+      evidenceRef
+    });
+  }
+
+  if (!errors || !items || errors.length > 0) {
+    return Object.freeze({
+      action: 'fail-closed',
+      classification: hasPatch === false ? 'no-patch-output-ambiguous' : 'material-evidence-ambiguous',
       reason: errors?.length
         ? 'successful worker reported framework errors; material completion is not trusted'
         : String(artifactError ?? 'successful worker did not provide a valid agent_output envelope'),
