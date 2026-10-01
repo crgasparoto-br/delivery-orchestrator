@@ -22,6 +22,7 @@ import { persistOperationalDeliveryMetrics } from '../src/v2/metrics-store.mjs';
 import { summarizeDeliveryAiUsage, renderDeliveryAiUsageSummary } from '../src/v2/ai-usage-summary.mjs';
 import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
 import { downloadGhAwAgentOutputArtifact } from '../src/v2/gh-aw-agent-output-artifact.mjs';
+import { classifySuccessfulWorkerOutcome, continueAfterSuccessfulWorkerOutcome } from '../src/v2/worker-material-outcome.mjs';
 import { ciFailureClassForEvidence, collectCiFailureEvidence, collectMergePreviewEvidence, createDispatchNonce, loadAuthoritativeAuditResult, markPullRequestReadyForReview, publishReleaseStatus, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
 import { selectAuthoritativeSourceWorkflowRun, selectCheckForWorkflowRun } from '../src/v2/ci-evidence-correlation.mjs';
 import { parseTrustedJsonEnvelope, selectTrustedMarkerComment, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
@@ -724,6 +725,47 @@ async function runWorkflowStageWithInfrastructureRecovery({
   }
 }
 
+async function recordInitialWorkerCorrelation({ repository, issueNumber, token, attempt, dispatchNonce, worker }) {
+  const lease = await loadBootstrapLeaseForController({ repository, issueNumber, token });
+  if (String(lease.status ?? '') !== 'reserved-initial-attempt') throw new Error('initial worker correlation requires reserved-initial-attempt bootstrap state');
+  if (Number(lease.implementationAttempts) !== Number(attempt)) throw new Error('bootstrap implementation attempt drift before recording worker correlation');
+  if (String(lease.dispatchNonce ?? '') !== String(dispatchNonce ?? '')) throw new Error('bootstrap dispatch nonce drift before recording worker correlation');
+  const workerRunId = positiveInteger(worker?.id, 'initial worker run id');
+  const existingRunId = Number(lease.workerRunId ?? 0);
+  if (Number.isInteger(existingRunId) && existingRunId > 0 && existingRunId !== workerRunId) throw new Error('bootstrap worker identity drift before terminal observation');
+  if (existingRunId === workerRunId) return lease;
+  return persistBootstrapLeaseForController({ repository, token, lease: { ...lease, workerRunId } });
+}
+
+async function recordInitialSuccessfulNoMaterial({ repository, issueNumber, token, attempt, dispatchNonce, worker, evidence, outcome }) {
+  const lease = await loadBootstrapLeaseForController({ repository, issueNumber, token });
+  if (String(lease.status ?? '') !== 'reserved-initial-attempt') throw new Error('initial no-material outcome requires reserved-initial-attempt bootstrap state');
+  if (Number(lease.implementationAttempts) !== Number(attempt)) throw new Error('bootstrap implementation attempt drift before recording no-material outcome');
+  if (String(lease.dispatchNonce ?? '') !== String(dispatchNonce ?? '')) throw new Error('bootstrap dispatch nonce drift before recording no-material outcome');
+  if (Number(lease.workerRunId) !== Number(worker.id)) throw new Error('bootstrap worker identity drift before recording no-material outcome');
+  return persistBootstrapLeaseForController({
+    repository,
+    token,
+    lease: {
+      ...lease,
+      status: 'escalated-initial-nonrecoverable',
+      lastFailure: {
+        schemaVersion: 1,
+        attempt: Number(attempt),
+        workerRunId: Number(worker.id),
+        workerConclusion: worker.conclusion ?? null,
+        classification: outcome.classification,
+        reason: outcome.reason,
+        failureStage: 'pre-material',
+        failureClass: outcome.action === 'blocked-no-material' ? 'semantic-no-material' : 'ambiguous-material-evidence',
+        recoverable: false,
+        hasPatch: evidence.hasPatch === false ? false : evidence.hasPatch === true ? true : null,
+        evidenceRef: outcome.evidenceRef ?? worker.html_url ?? null
+      }
+    }
+  });
+}
+
 async function recordInitialWorkerFailure({ repository, issueNumber, token, attempt, dispatchNonce, worker, failure, evidence }) {
   const lease = await loadBootstrapLeaseForController({ repository, issueNumber, token });
   if (Number(lease.implementationAttempts) !== Number(attempt)) throw new Error('bootstrap implementation attempt drift before recording worker failure');
@@ -996,6 +1038,14 @@ export async function main() {
         orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch,
         targetRef: baseBranch, remediationContext: currentRetryContext, token: actionsToken, dispatchNonce: currentDispatchNonce
       });
+      await recordInitialWorkerCorrelation({
+        repository: targetRepository,
+        issueNumber,
+        token: targetWriteToken,
+        attempt: currentInitialAttempt,
+        dispatchNonce: currentDispatchNonce,
+        worker
+      });
     }
 
     worker = await waitWorkflowRun(orchestratorRepository, worker.id, actionsToken);
@@ -1020,7 +1070,32 @@ export async function main() {
       evidenceRef: workerUsage.evidenceRef ?? worker.html_url
     });
     if (workerUsage.evidenceRef) evidenceRefs.push(workerUsage.evidenceRef);
-    if (worker.conclusion === 'success') break;
+    if (worker.conclusion === 'success') {
+      const materialEvidence = await downloadGhAwAgentOutputArtifact({
+        repository: orchestratorRepository,
+        runId: worker.id,
+        token: actionsToken
+      });
+      if (materialEvidence.evidenceRef) evidenceRefs.push(materialEvidence.evidenceRef);
+      const materialOutcome = classifySuccessfulWorkerOutcome({
+        ...materialEvidence,
+        artifactError: materialEvidence.error ?? null
+      });
+      if (materialOutcome.action !== 'await-material-head') {
+        await recordInitialSuccessfulNoMaterial({
+          repository: targetRepository,
+          issueNumber,
+          token: targetWriteToken,
+          attempt: currentInitialAttempt,
+          dispatchNonce: currentDispatchNonce,
+          worker,
+          evidence: materialEvidence,
+          outcome: materialOutcome
+        });
+        throw new Error(`initial implementation completed without publishable material: ${materialOutcome.classification}: ${materialOutcome.reason}`);
+      }
+      break;
+    }
 
     const materialEvidence = await downloadGhAwAgentOutputArtifact({
       repository: orchestratorRepository,
@@ -1147,7 +1222,7 @@ export async function main() {
   await publishReleaseStatus({ repository: targetRepository, sha: materialHeadSha, context: targetPolicy.finalStatusName, state: 'pending', description: 'Delivery V2 evaluation in progress', token: targetWriteToken, targetUrl: `https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}` });
   await persist({ nextAction: 'observe-ci', workerRunId: worker.id, workerDispatchNonce: initialDispatchNonce, materialWorkerRunId: worker.id, materialWorkerIdentity: initialWorkerIdentity, materialWorkerProvider: initialWorkerProvider, technicalHygiene: state.technicalHygiene });
 
-  for (let cycle = 0; cycle < 8; cycle += 1) {
+  while (!['ready-for-human-merge', 'escalated', 'terminal'].includes(state.status)) {
     const observed = await waitRequiredCheck({
       repository: targetRepository,
       prNumber: pullRequest.number,
@@ -1258,7 +1333,30 @@ export async function main() {
           `CI remediation worker failed: ${worker.html_url}; classification=${remediationStage.failure?.classification ?? 'unknown'}`
         );
       }
-      pullRequest = await waitHeadChange(targetRepository, pullRequest.number, beforeSha, targetReadToken);
+      const remediationEvidence = await downloadGhAwAgentOutputArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken });
+      if (remediationEvidence.evidenceRef) evidenceRefs.push(remediationEvidence.evidenceRef);
+      const remediationContinuation = await continueAfterSuccessfulWorkerOutcome({
+        evidence: remediationEvidence,
+        waitForMaterialHead: () => waitHeadChange(targetRepository, pullRequest.number, beforeSha, targetReadToken)
+      });
+      const { workerOutcome } = remediationContinuation;
+      if (workerOutcome.action !== 'await-material-head') {
+        state = applyOperationalEvent(state, {
+          type: 'escalate',
+          reason: workerOutcome.action === 'blocked-no-material' ? 'remediation-produced-no-material' : 'remediation-success-evidence-ambiguous',
+          evidenceRef: workerOutcome.evidenceRef ?? worker.html_url
+        });
+        await persist({
+          nextAction: 'human-escalation',
+          workerRunId: worker.id,
+          workerDispatchNonce: remediationStage.dispatchNonce,
+          workerInfrastructureRetriesUsed: remediationStage.retriesUsed,
+          remediationContext: remediation,
+          remediationOutcome: workerOutcome
+        });
+        throw new Error(`CI remediation completed without publishable material: ${workerOutcome.classification}: ${workerOutcome.reason}`);
+      }
+      pullRequest = remediationContinuation.pullRequest;
       materialHeadSha = String(pullRequest.head.sha).toLowerCase();
       const nextPaths = await fetchChangedPaths(targetRepository, pullRequest.number, targetReadToken);
       const nextPlan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk, changedPaths: nextPaths, repositoryPolicy });
@@ -1507,7 +1605,30 @@ export async function main() {
             `audit remediation worker failed: ${worker.html_url}; classification=${remediationStage.failure?.classification ?? 'unknown'}`
           );
         }
-        pullRequest = await waitHeadChange(targetRepository, pullRequest.number, beforeSha, targetReadToken);
+        const remediationEvidence = await downloadGhAwAgentOutputArtifact({ repository: orchestratorRepository, runId: worker.id, token: actionsToken });
+        if (remediationEvidence.evidenceRef) evidenceRefs.push(remediationEvidence.evidenceRef);
+        const remediationContinuation = await continueAfterSuccessfulWorkerOutcome({
+          evidence: remediationEvidence,
+          waitForMaterialHead: () => waitHeadChange(targetRepository, pullRequest.number, beforeSha, targetReadToken)
+        });
+        const { workerOutcome } = remediationContinuation;
+        if (workerOutcome.action !== 'await-material-head') {
+          state = applyOperationalEvent(state, {
+            type: 'escalate',
+            reason: workerOutcome.action === 'blocked-no-material' ? 'audit-remediation-produced-no-material' : 'audit-remediation-success-evidence-ambiguous',
+            evidenceRef: workerOutcome.evidenceRef ?? worker.html_url
+          });
+          await persist({
+            nextAction: 'human-escalation',
+            workerRunId: worker.id,
+            workerDispatchNonce: remediationStage.dispatchNonce,
+            workerInfrastructureRetriesUsed: remediationStage.retriesUsed,
+            remediationContext: remediation,
+            remediationOutcome: workerOutcome
+          });
+          throw new Error(`audit remediation completed without publishable material: ${workerOutcome.classification}: ${workerOutcome.reason}`);
+        }
+        pullRequest = remediationContinuation.pullRequest;
         materialHeadSha = String(pullRequest.head.sha).toLowerCase();
         const nextPaths = await fetchChangedPaths(targetRepository, pullRequest.number, targetReadToken);
         const nextPlan = makePlan({ repository: targetRepository, issueNumber, provider, requestedRisk, changedPaths: nextPaths, repositoryPolicy });
