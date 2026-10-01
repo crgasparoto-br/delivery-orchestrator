@@ -133,7 +133,8 @@ const CODEX_COMMAND_TOOLS = Object.freeze([
   'sort',
   'node',
   'npm',
-  'pnpm'
+  'pnpm',
+  'rm'
 ]);
 
 function shellDoubleQuote(value) {
