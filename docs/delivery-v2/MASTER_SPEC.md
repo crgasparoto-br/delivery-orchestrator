@@ -144,6 +144,19 @@ old SHA is stale and cannot authorize the new candidate.
 
 There are no open-ended AI-on-AI loops. Every implementation and review cycle consumes explicit attempt budgets. Exhaustion escalates to a human with structured findings/state.
 
+### 4.5.1 Workflow heartbeat versus conversation-stream continuity
+
+Delivery V2 distinguishes two independent liveness channels:
+
+1. **workflow/controller heartbeat** — progress emitted by the controller process (for example, `process.stdout.write`) so GitHub Actions remains observable;
+2. **conversation-stream continuity** — the ChatGPT-side execution must regain control between bounded work blocks so progress can be emitted to the user and a recoverable checkpoint can exist before the next potentially long operation.
+
+A workflow heartbeat is not evidence that the conversation stream is alive. Logs, runner stdout, comments, or partial command output cannot substitute for returning control to the ChatGPT execution loop.
+
+Controllers and direct delivery tooling therefore must not use an unbounded or semantically blocking wait such as `--watch`, `tail -f`, prolonged sleep, or an equivalent process whose purpose is to wait for future remote state. Remote state is observed through bounded snapshots with explicit deadlines. Before a material wait, the durable state must contain enough identity to resume without repeating completed discovery, planning, implementation, or exact-head validation.
+
+An interface/runtime disconnect does not invalidate already-persisted material evidence. Recovery revalidates fresh remote identity and resumes from the persisted next phase.
+
 ### 4.6 No implicit merge authority
 
 Workers do not receive a generic merge capability. Default policy is `noAutomaticMerge=true`. A repository may later opt into an explicit merge policy only through versioned configuration and only after the exact-head release gate. Absence of that explicit policy means human merge.
