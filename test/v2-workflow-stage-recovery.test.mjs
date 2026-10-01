@@ -45,6 +45,7 @@ test('recognized context rebuild without patch retries remediation and hygiene s
     const failure = classifyWorkflowStageFailure({
       stage,
       conclusion: 'failure',
+      materialHeadChanged: false,
       hasPatch: false,
       agentOutput: breakerOutput()
     });
@@ -59,6 +60,7 @@ test('recognized context rebuild retries downstream stages even when workflow te
     const failure = classifyWorkflowStageFailure({
       stage,
       conclusion: 'success',
+      materialHeadChanged: false,
       hasPatch: false,
       agentOutput: breakerOutput()
     });
@@ -75,6 +77,20 @@ test('recognized context rebuild retries downstream stages even when workflow te
   });
   assert.equal(independentAudit.recoverable, false);
   assert.equal(independentAudit.action, 'none');
+});
+
+test('recognized context rebuild fails closed when downstream material state was not observed', () => {
+  for (const conclusion of ['failure', 'success']) {
+    const failure = classifyWorkflowStageFailure({
+      stage: 'ci-remediation',
+      conclusion,
+      hasPatch: false,
+      agentOutput: breakerOutput()
+    });
+    assert.equal(failure.recoverable, false);
+    assert.equal(failure.action, 'fail-closed');
+    assert.equal(failure.classification, 'material-status-not-trusted-no-patch');
+  }
 });
 
 test('ambiguous failure and cancelled audit remain fail closed', () => {

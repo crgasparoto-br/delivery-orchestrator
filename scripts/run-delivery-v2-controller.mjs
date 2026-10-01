@@ -681,6 +681,13 @@ async function runWorkflowStageWithInfrastructureRecovery({
     run = await waitWorkflowRun(orchestratorRepository, run.id, actionsToken);
     runs.push(run);
 
+    let materialHeadChanged = null;
+    if (targetRepository && targetPr && expectedHeadSha && targetReadToken) {
+      const currentPr = await fetchPullRequest(targetRepository, targetPr, targetReadToken);
+      materialHeadChanged =
+        String(currentPr.head.sha).toLowerCase() !== String(expectedHeadSha).toLowerCase();
+    }
+
     if (run.conclusion === 'success') {
       if (stage !== 'independent-audit') {
         const workerEvidence = await downloadGhAwAgentOutputArtifact({
@@ -691,7 +698,7 @@ async function runWorkflowStageWithInfrastructureRecovery({
         const semanticOutcome = classifyWorkflowStageFailure({
           stage,
           conclusion: run.conclusion,
-          materialHeadChanged: false,
+          materialHeadChanged,
           hasPatch: workerEvidence.hasPatch,
           agentOutput: workerEvidence.agentOutput
         });
@@ -706,13 +713,6 @@ async function runWorkflowStageWithInfrastructureRecovery({
         }
       }
       return Object.freeze({ run, runs: Object.freeze([...runs]), retriesUsed, dispatchNonce: lastDispatchNonce });
-    }
-
-    let materialHeadChanged = false;
-    if (targetRepository && targetPr && expectedHeadSha && targetReadToken) {
-      const currentPr = await fetchPullRequest(targetRepository, targetPr, targetReadToken);
-      materialHeadChanged =
-        String(currentPr.head.sha).toLowerCase() !== String(expectedHeadSha).toLowerCase();
     }
 
     let workerEvidence = { hasPatch: null, agentOutput: null };
