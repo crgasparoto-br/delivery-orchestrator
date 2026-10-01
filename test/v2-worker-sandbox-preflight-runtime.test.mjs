@@ -164,12 +164,12 @@ restricted_path="\${DELIVERY_V2_TEST_CODEX_COMMAND_PATH:?}"
 
 env -i \
   PATH="$restricted_path" \
-  /bin/bash -c 'cat /dev/null >/dev/null; git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; pnpm --version >/dev/null; safeoutputs noop --help >/dev/null'
+  /bin/bash -c 'cat /dev/null >/dev/null; git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; pnpm --version >/dev/null; rm --version >/dev/null; safeoutputs noop --help >/dev/null'
 
 # Reconstroi um ambiente minimo, como o command environment do Codex.
 # O .bash_profile abaixo destrói PATH; BASH_ENV deve restaura-lo dentro
 # do bash -lc explicito.
-env -i HOME="\${DELIVERY_V2_TEST_LOGIN_HOME:?}" GH_AW_SAFE_OUTPUTS="\${GH_AW_SAFE_OUTPUTS:?}" PATH="$policy_path" BASH_ENV="$policy_bash_env" /bin/bash -lc 'cat /dev/null >/dev/null; git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; pnpm --version >/dev/null; safeoutputs noop'
+env -i HOME="\${DELIVERY_V2_TEST_LOGIN_HOME:?}" GH_AW_SAFE_OUTPUTS="\${GH_AW_SAFE_OUTPUTS:?}" PATH="$policy_path" BASH_ENV="$policy_bash_env" /bin/bash -lc 'cat /dev/null >/dev/null; git --version >/dev/null; node --version >/dev/null; npm --version >/dev/null; pnpm --version >/dev/null; rm --version >/dev/null; safeoutputs noop'
 `
     );
 
@@ -200,6 +200,7 @@ echo "9.0.0"
       ['node', process.execPath],
       ['npm', resolveHostTool('npm')],
       ['pnpm', pnpm],
+      ['rm', resolveHostTool('rm')],
       ['safeoutputs', safeoutputs]
     ]);
 
@@ -217,6 +218,7 @@ echo "9.0.0"
       'node --version >/dev/null && ' +
       'npm --version >/dev/null && ' +
       'pnpm --version >/dev/null && ' +
+      'rm --version >/dev/null && ' +
       'safeoutputs noop --help >/dev/null';
 
     const shellProbeEnv = {
