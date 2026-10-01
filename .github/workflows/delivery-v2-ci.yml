@@ -44,7 +44,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          # The worker-identity gate diffs against the immutable PR base SHA.
+          # Fetch full history so that SHA remains available even after a
+          # multi-commit remediation sequence on the PR branch.
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
