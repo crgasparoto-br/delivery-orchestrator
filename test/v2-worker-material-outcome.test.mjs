@@ -6,6 +6,13 @@ import {
   classifySuccessfulWorkerOutcome,
   continueAfterSuccessfulWorkerOutcome
 } from '../src/v2/worker-material-outcome.mjs';
+import {
+  classifyDelivery,
+  createDeliveryState,
+  publishMaterial,
+  recordCiResult,
+  startImplementation
+} from '../src/v2/remediation-state-machine.mjs';
 
 test('issue 301: non-material success never invokes a material-effect waiter', async () => {
   for (const type of ['noop', 'report_incomplete', 'missing_tool', 'missing_data']) {
@@ -56,6 +63,11 @@ test('issue 301: initial, CI remediation, audit remediation and resume share one
   assert.match(initial, /recordInitialWorkerCorrelation/);
   assert.ok(initial.indexOf('recordInitialWorkerCorrelation') < initial.indexOf('waitWorkflowRun'));
   assert.match(initial, /classifySuccessfulWorkerOutcome/);
+  assert.match(initial, /classifyPreMaterialWorkerFailure/);
+  assert.ok(
+    initial.indexOf('classifyPreMaterialWorkerFailure') <
+      initial.indexOf('recordInitialSuccessfulNoMaterial')
+  );
 
   const ciStart = run.indexOf("if (ciConclusion !== 'success')");
   const ciEnd = run.indexOf("if (!latestSourceRun)", ciStart);
@@ -78,6 +90,55 @@ test('issue 301: policy state counters bound progress without the old eight-cycl
     const source = await readFile(new URL(path, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /cycle\s*<\s*8/);
     assert.match(source, /while \(!\['ready-for-human-merge', 'escalated', 'terminal'\]\.includes\(state\.status\)\)/);
+  }
+});
+
+test('issue 301: configured implementation budget above eight is honored behaviorally', () => {
+  const previous = process.env.DELIVERY_CRITICAL_MAX_IMPLEMENTATION_ATTEMPTS;
+  process.env.DELIVERY_CRITICAL_MAX_IMPLEMENTATION_ATTEMPTS = '10';
+
+  try {
+    let state = createDeliveryState({
+      repository: 'example/repository',
+      workItem: 'issue:1',
+      riskProfile: 'critical'
+    });
+    state = classifyDelivery(state, { riskProfile: 'critical' });
+
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      state = startImplementation(state);
+      assert.equal(state.implementationAttempts, attempt);
+      assert.equal(state.status, 'implementing');
+
+      const sha = attempt.toString(16).padStart(40, '0');
+      state = publishMaterial(state, { materialHeadSha: sha });
+
+      if (attempt < 10) {
+        state = recordCiResult(state, {
+          candidateSha: sha,
+          conclusion: 'failure',
+          failureClass: 'actionable',
+          cause: 'synthetic-remediable-failure',
+          evidenceRef: `test:attempt-${attempt}`
+        });
+        assert.equal(state.status, 'ci-failed-remediable');
+      }
+    }
+
+    const finalSha = (10).toString(16).padStart(40, '0');
+    state = recordCiResult(state, {
+      candidateSha: finalSha,
+      conclusion: 'failure',
+      failureClass: 'actionable',
+      cause: 'synthetic-remediable-failure',
+      evidenceRef: 'test:attempt-10'
+    });
+    assert.equal(state.status, 'escalated');
+    assert.equal(state.terminalReason, 'implementation-budget-exhausted');
+    assert.equal(state.implementationAttempts, 10);
+  } finally {
+    if (previous == null) delete process.env.DELIVERY_CRITICAL_MAX_IMPLEMENTATION_ATTEMPTS;
+    else process.env.DELIVERY_CRITICAL_MAX_IMPLEMENTATION_ATTEMPTS = previous;
   }
 });
 
