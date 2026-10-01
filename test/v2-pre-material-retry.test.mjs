@@ -58,6 +58,7 @@ test('recognizes only the exact context-rebuild infrastructure report with trust
   const failure = classifyPreMaterialWorkerFailure({
     workerConclusion: 'failure',
     hasPatch: false,
+    materialPublished: false,
     agentOutput: breakerOutput()
   });
   assert.equal(failure.recoverable, true);
@@ -111,6 +112,7 @@ test('random infrastructure_error is not recoverable', () => {
   const failure = classifyPreMaterialWorkerFailure({
     workerConclusion: 'failure',
     hasPatch: false,
+    materialPublished: false,
     agentOutput: breakerOutput('network is flaky')
   });
   assert.equal(failure.recoverable, false);
@@ -118,14 +120,17 @@ test('random infrastructure_error is not recoverable', () => {
 });
 
 test('missing or ambiguous publication evidence stays fail closed without explicit remote proof', () => {
-  for (const hasPatch of [undefined, null, true, 'false']) {
-    const failure = classifyPreMaterialWorkerFailure({
-      workerConclusion: 'failure',
-      hasPatch,
-      agentOutput: breakerOutput()
-    });
-    assert.equal(failure.recoverable, false);
-    assert.equal(failure.classification, 'material-status-not-trusted-no-patch');
+  for (const materialPublished of [undefined, null, 'false']) {
+    for (const hasPatch of [undefined, null, false, true, 'false']) {
+      const failure = classifyPreMaterialWorkerFailure({
+        workerConclusion: 'failure',
+        hasPatch,
+        materialPublished,
+        agentOutput: breakerOutput()
+      });
+      assert.equal(failure.recoverable, false);
+      assert.equal(failure.classification, 'material-status-not-trusted-no-patch');
+    }
   }
 });
 
@@ -133,6 +138,7 @@ test('retry consumes the next implementation slot and exhausts exactly at the co
   const failure = classifyPreMaterialWorkerFailure({
     workerConclusion: 'failure',
     hasPatch: false,
+    materialPublished: false,
     agentOutput: breakerOutput()
   });
   assert.deepEqual(decidePreMaterialRetry({ failure, currentAttempt: 1, maxAttempts: 3 }), {
@@ -150,6 +156,7 @@ test('bounded retry context contains only durable retry identity, not transcript
   const failure = classifyPreMaterialWorkerFailure({
     workerConclusion: 'failure',
     hasPatch: false,
+    materialPublished: false,
     agentOutput: breakerOutput()
   });
   const context = boundedPreMaterialRetryContext({

@@ -80,12 +80,10 @@ export function classifyStructuredContextRebuildFailure({
     );
   }
 
-  if (materialPublished !== false && hasPatch !== false) {
+  if (materialPublished !== false) {
     return failClosed(
       'material-status-not-trusted-no-patch',
-      hasPatch === true
-        ? 'worker produced a local patch but authoritative remote publication evidence is unavailable'
-        : 'trusted no-published-material evidence is unavailable',
+      'authoritative remote no-publication evidence is unavailable or invalid',
       {
         recognizedReport: true,
         failureClass: 'infrastructure',
