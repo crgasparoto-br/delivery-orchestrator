@@ -6,27 +6,117 @@
       "status": "passed",
       "escape_class": "delivery-readiness-handoff-missing",
       "plausible_wrong_implementation": "A delivery can stop after green material CI and omit the certified result-only handoff, leaving independent audit unable to prove readiness.",
-      "source_audit": {"rejection_id": "audit-rejection:290-291-4f192959-handoff", "finding_ids": ["A-001"], "audit_report_sha256": "e60ab8aae7d76d86bca59c76d077550b6b109e3d399910ad69d24c0a5fe40fa3"},
-      "literal_case": {"procedure": "Re-read PR 291 exact material head and check .audit/entregar-issue/handoff-ready.json before recovery.", "expected": "Stable material head with green CI must receive a fresh certified result-only handoff before re-audit.", "observed": "On the current material head, recovery again verifies that certified handoff is mandatory before re-audit and preserves the inherited handoff-readiness controls.", "status": "passed"},
-      "sibling_cases": [{"id":"SIB-HANDOFF-MISSING","surface":"handoff-readiness","dimension":"missing-result-certificate","status":"passed"},{"id":"SIB-HANDOFF-STABLE","surface":"handoff-readiness","dimension":"stable-material-no-refreeze","status":"passed"}],
-      "prevention_change": {"evidence": "Entregar recovery path requires terminal certified handoff after green material CI before returning audit-ready."},
-      "detection_change": {"evidence": "Terminal handoff validator checks direct-child parent, allowlisted result paths, and handoff-ready.json presence."},
-      "required_risk_families": ["structural-contract"],
-      "required_attack_dimensions": [{"risk_family":"structural-contract","surface":"handoff-readiness","dimension":"missing-result-certificate"},{"risk_family":"structural-contract","surface":"handoff-readiness","dimension":"stable-material-no-refreeze"}],
+      "source_audit": {
+        "rejection_id": "audit-rejection:290-291-4f192959-handoff",
+        "finding_ids": [
+          "A-001"
+        ],
+        "audit_report_sha256": "e60ab8aae7d76d86bca59c76d077550b6b109e3d399910ad69d24c0a5fe40fa3"
+      },
+      "literal_case": {
+        "procedure": "Re-read PR 291 exact material head and check .audit/entregar-issue/handoff-ready.json before recovery.",
+        "expected": "Stable material head with green CI must receive a fresh certified result-only handoff before re-audit.",
+        "observed": "On the current material head, recovery again verifies that certified handoff is mandatory before re-audit and preserves the inherited handoff-readiness controls.",
+        "status": "passed"
+      },
+      "sibling_cases": [
+        {
+          "id": "SIB-HANDOFF-MISSING",
+          "surface": "handoff-readiness",
+          "dimension": "missing-result-certificate",
+          "status": "passed"
+        },
+        {
+          "id": "SIB-HANDOFF-STABLE",
+          "surface": "handoff-readiness",
+          "dimension": "stable-material-no-refreeze",
+          "status": "passed"
+        }
+      ],
+      "prevention_change": {
+        "evidence": "Entregar recovery path requires terminal certified handoff after green material CI before returning audit-ready."
+      },
+      "detection_change": {
+        "evidence": "Terminal handoff validator checks direct-child parent, allowlisted result paths, and handoff-ready.json presence."
+      },
+      "required_risk_families": [
+        "structural-contract"
+      ],
+      "required_attack_dimensions": [
+        {
+          "risk_family": "structural-contract",
+          "surface": "handoff-readiness",
+          "dimension": "missing-result-certificate"
+        },
+        {
+          "risk_family": "structural-contract",
+          "surface": "handoff-readiness",
+          "dimension": "stable-material-no-refreeze"
+        }
+      ],
       "revalidated_head_sha": "9a34c199fa995246312fbc0ef8df7d7ac92597e4"
     },
     {
       "escape_id": "A-001",
       "escape_class": "handoff-readiness-omission",
-      "source_audit": {"head_sha":"9a34c199fa995246312fbc0ef8df7d7ac92597e4","rejection_id":"audit-rejection:abc8b5dc-9f6c-48d4-909a-3f056c3fb660","finding_id":"A-001"},
+      "source_audit": {
+        "head_sha": "9a34c199fa995246312fbc0ef8df7d7ac92597e4",
+        "rejection_id": "audit-rejection:abc8b5dc-9f6c-48d4-909a-3f056c3fb660",
+        "finding_id": "A-001"
+      },
       "plausible_wrong_implementation": "Return a locally green candidate as audit-ready without producing the mandatory certified handoff for the selected transport.",
-      "literal_case": {"procedure":"Resolve audit transport on the trusted base and require a current-target handoff certificate before audit handoff.","status":"passed","evidence":"Connector-only recovery now builds the current-target certified handoff package.","observed":"The material candidate 9a34c199fa995246312fbc0ef8df7d7ac92597e4 remains stable while the mandatory handoff package is produced before re-audit."},
-      "sibling_cases": [{"id":"missing-cert","surface":"handoff-readiness","dimension":"missing-certificate","status":"passed","evidence":"Missing certificate is classified as not audit-ready."},{"id":"foreign-target","surface":"handoff-readiness","dimension":"target-binding","status":"passed","evidence":"Subject and specification snapshot are bound to repository/issue/PR before publication."}],
-      "required_attack_dimensions": [{"risk_family":"structural-contract","surface":"handoff-readiness","dimension":"missing-certificate"},{"risk_family":"structural-contract","surface":"handoff-readiness","dimension":"target-binding"}],
-      "prevention_change": {"skill_or_code":"existing entregar-issue terminal handoff gate","evidence":"Existing contract already requires certified handoff; this remediation executes that mandatory gate instead of changing product code."},
-      "detection_change": {"skill_or_gate":"validate_terminal_handoff","control_id":"HANDOFF-READY-001","evidence":"Prepublication and terminal validation are required before the next independent audit."},
-      "trigger_terms": ["certified-handoff","handoff-ready","audit transport","result-only-child"],
-      "required_risk_families": ["structural-contract"],
+      "literal_case": {
+        "procedure": "Resolve audit transport on the trusted base and require a current-target handoff certificate before audit handoff.",
+        "status": "passed",
+        "evidence": "Connector-only recovery now builds the current-target certified handoff package.",
+        "observed": "The material candidate 9a34c199fa995246312fbc0ef8df7d7ac92597e4 remains stable while the mandatory handoff package is produced before re-audit."
+      },
+      "sibling_cases": [
+        {
+          "id": "missing-cert",
+          "surface": "handoff-readiness",
+          "dimension": "missing-certificate",
+          "status": "passed",
+          "evidence": "Missing certificate is classified as not audit-ready."
+        },
+        {
+          "id": "foreign-target",
+          "surface": "handoff-readiness",
+          "dimension": "target-binding",
+          "status": "passed",
+          "evidence": "Subject and specification snapshot are bound to repository/issue/PR before publication."
+        }
+      ],
+      "required_attack_dimensions": [
+        {
+          "risk_family": "structural-contract",
+          "surface": "handoff-readiness",
+          "dimension": "missing-certificate"
+        },
+        {
+          "risk_family": "structural-contract",
+          "surface": "handoff-readiness",
+          "dimension": "target-binding"
+        }
+      ],
+      "prevention_change": {
+        "skill_or_code": "existing entregar-issue terminal handoff gate",
+        "evidence": "Existing contract already requires certified handoff; this remediation executes that mandatory gate instead of changing product code."
+      },
+      "detection_change": {
+        "skill_or_gate": "validate_terminal_handoff",
+        "control_id": "HANDOFF-READY-001",
+        "evidence": "Prepublication and terminal validation are required before the next independent audit."
+      },
+      "trigger_terms": [
+        "certified-handoff",
+        "handoff-ready",
+        "audit transport",
+        "result-only-child"
+      ],
+      "required_risk_families": [
+        "structural-contract"
+      ],
       "revalidated_head_sha": "9a34c199fa995246312fbc0ef8df7d7ac92597e4",
       "status": "passed"
     },
@@ -34,15 +124,121 @@
       "escape_id": "ESC-ISSUE300-HANDOFF-STALE-001",
       "status": "passed",
       "escape_class": "handoff-identity-stale-after-base-advance",
-      "source_audit": {"head_sha":"6cce4813cfe4dd1abd51e619f490597b33f2b17f","rejection_id":"audit-rejection:4b8e3fa1-7a21-4f4e-9f7d-300305a1c001","finding_id":"A-001"},
+      "source_audit": {
+        "head_sha": "6cce4813cfe4dd1abd51e619f490597b33f2b17f",
+        "rejection_id": "audit-rejection:4b8e3fa1-7a21-4f4e-9f7d-300305a1c001",
+        "finding_id": "A-001"
+      },
       "plausible_wrong_implementation": "Reuse a previously valid result-only handoff after the PR base advances and return audit-ready without reconciling the material merge preview.",
-      "literal_case": {"procedure":"Re-read PR #305 base/head and rebuild the material merge preview for the unchanged material head before replacing the result-only child.","expected":"The same material head remains CI-green while a fresh certificate binds the current base and material merge preview.","observed":"Material head 6cce4813cfe4dd1abd51e619f490597b33f2b17f remained unchanged; current base cd7ab62bc47e2fc47ec913c2c6a5825864c58377 was reconciled into material preview 1167bcd905aa7f1843841766e1970eb587e8a0f9 and only result artifacts changed.","status":"passed"},
-      "sibling_cases": [{"id":"base-advance-same-material","surface":"handoff-identity","dimension":"base-advance","status":"passed","evidence":"Fresh remote base is bound before terminal return."},{"id":"result-child-replacement","surface":"handoff-identity","dimension":"result-only-sibling","status":"passed","evidence":"Replacement child remains a direct child of the same material SHA and contains only allowlisted result paths."}],
-      "required_attack_dimensions": [{"risk_family":"structural-contract","surface":"handoff-identity","dimension":"base-advance"},{"risk_family":"structural-contract","surface":"handoff-identity","dimension":"result-only-sibling"}],
-      "prevention_change": {"skill_or_code":"existing entregar-issue terminal identity gate","evidence":"The contract already requires fresh remote identity and base reconciliation before audit-ready return."},
-      "detection_change": {"skill_or_gate":"validate_terminal_handoff + completion guard","control_id":"HANDOFF-IDENTITY-FRESH-001","evidence":"Terminal re-read checks current head/parent/paths and binds the certificate to the current target."},
-      "required_risk_families": ["structural-contract"],
+      "literal_case": {
+        "procedure": "Re-read PR #305 base/head and rebuild the material merge preview for the unchanged material head before replacing the result-only child.",
+        "expected": "The same material head remains CI-green while a fresh certificate binds the current base and material merge preview.",
+        "observed": "Material head 6cce4813cfe4dd1abd51e619f490597b33f2b17f remained unchanged; current base cd7ab62bc47e2fc47ec913c2c6a5825864c58377 was reconciled into material preview 1167bcd905aa7f1843841766e1970eb587e8a0f9 and only result artifacts changed.",
+        "status": "passed"
+      },
+      "sibling_cases": [
+        {
+          "id": "base-advance-same-material",
+          "surface": "handoff-identity",
+          "dimension": "base-advance",
+          "status": "passed",
+          "evidence": "Fresh remote base is bound before terminal return."
+        },
+        {
+          "id": "result-child-replacement",
+          "surface": "handoff-identity",
+          "dimension": "result-only-sibling",
+          "status": "passed",
+          "evidence": "Replacement child remains a direct child of the same material SHA and contains only allowlisted result paths."
+        }
+      ],
+      "required_attack_dimensions": [
+        {
+          "risk_family": "structural-contract",
+          "surface": "handoff-identity",
+          "dimension": "base-advance"
+        },
+        {
+          "risk_family": "structural-contract",
+          "surface": "handoff-identity",
+          "dimension": "result-only-sibling"
+        }
+      ],
+      "prevention_change": {
+        "skill_or_code": "existing entregar-issue terminal identity gate",
+        "evidence": "The contract already requires fresh remote identity and base reconciliation before audit-ready return."
+      },
+      "detection_change": {
+        "skill_or_gate": "validate_terminal_handoff + completion guard",
+        "control_id": "HANDOFF-IDENTITY-FRESH-001",
+        "evidence": "Terminal re-read checks current head/parent/paths and binds the certificate to the current target."
+      },
+      "required_risk_families": [
+        "structural-contract"
+      ],
       "revalidated_head_sha": "6cce4813cfe4dd1abd51e619f490597b33f2b17f"
+    },
+    {
+      "escape_id": "A-002",
+      "escape_class": "remote-publication-lifecycle-blind-spot",
+      "source_audit": {
+        "head_sha": "6cce4813cfe4dd1abd51e619f490597b33f2b17f",
+        "rejection_id": "audit-rejection:300-305-closed-pr-publication-gap",
+        "finding_id": "A-002"
+      },
+      "plausible_wrong_implementation": "Infer no publication from the open-PR collection, so a managed PR that was closed or merged becomes invisible and pre-material retry can duplicate work.",
+      "literal_case": {
+        "procedure": "Observe publication through the controller after a managed PR leaves the open state.",
+        "expected": "Closed or merged managed PR remains proof of prior publication.",
+        "observed": "Controller now queries pulls?state=all and CI run 36916123994 passes the regression that forbids state=open.",
+        "status": "passed",
+        "evidence": ".audit/entregar-issue/evidence-a002.txt"
+      },
+      "sibling_cases": [
+        {
+          "id": "closed-managed-pr",
+          "surface": "relational-semantic-integrity",
+          "dimension": "dimension-3-2",
+          "status": "passed",
+          "evidence": "state=all includes closed PRs"
+        },
+        {
+          "id": "merged-managed-pr",
+          "surface": "relational-semantic-integrity",
+          "dimension": "dimension-3-2",
+          "status": "passed",
+          "evidence": "state=all includes merged PRs"
+        }
+      ],
+      "required_attack_dimensions": [
+        {
+          "risk_family": "structural-contract",
+          "surface": "relational-semantic-integrity",
+          "dimension": "dimension-3-2"
+        }
+      ],
+      "prevention_change": {
+        "skill_or_code": "scripts/run-delivery-v2-controller.mjs",
+        "evidence": "Managed PR observation now uses state=all."
+      },
+      "detection_change": {
+        "skill_or_gate": "test/v2-pre-material-retry.test.mjs",
+        "control_id": "NEG-003-2",
+        "evidence": "Regression requires state=all and rejects state=open."
+      },
+      "trigger_terms": [
+        "managed PR",
+        "state=open",
+        "closed PR",
+        "merged PR",
+        "materialPublished",
+        "pre-material recovery"
+      ],
+      "required_risk_families": [
+        "structural-contract"
+      ],
+      "revalidated_head_sha": "25f6d39b9ac415e2c512fb2b8e9c0b39fe043f27",
+      "status": "passed"
     }
   ]
 }

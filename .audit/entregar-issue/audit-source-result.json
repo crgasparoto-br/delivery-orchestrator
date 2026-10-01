@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "contract_version": "2026-08-20.3",
-  "rejection_id": "audit-rejection:4b8e3fa1-7a21-4f4e-9f7d-300305a1c001",
-  "head_sha": "6cce4813cfe4dd1abd51e619f490597b33f2b17f",
+  "rejection_id": "audit-rejection:300-305-scope-binding-mismatch",
+  "head_sha": "cd88be004c30d036805c39c8f4470b6cddbe744c",
   "findings": [
     {
-      "id": "A-001",
+      "id": "A-003",
       "disposition": "blocking",
       "status": "open",
       "actionable": true,
       "remediation_mode": "targeted-remediation",
-      "title": "Handoff nao representa mais o merge preview corrente",
-      "reason": "certified merge preview became stale after main advanced"
+      "title": "Scope certificado não corresponde ao diff real",
+      "reason": "scope.issue_changed_paths omitted audit artifacts that are present in work_item_start_sha..material_head_sha"
     }
   ],
   "recommendations": []

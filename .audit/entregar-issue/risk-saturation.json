@@ -1,19 +1,192 @@
 {
   "schema_version": 1,
-  "head_sha": "6cce4813cfe4dd1abd51e619f490597b33f2b17f",
+  "head_sha": "25f6d39b9ac415e2c512fb2b8e9c0b39fe043f27",
   "families": [
-    {"family":"authorization","applicable":true,"reason":"Derived from requirement attack matrix.","control_ids":["NEG-006-1"],"dimensions":[{"surface":"attempt-budget-ceiling","reason":"Discriminates the Issue 300 contract at the attempt-budget-ceiling boundary.","control_ids":["NEG-006-1"],"status":"passed"}],"status":"passed"},
-    {"family":"tenant-isolation","applicable":false,"reason":"No current contract or diff signal requires this family.","control_ids":[],"dimensions":[],"status":"not-applicable"},
-    {"family":"public-boundary","applicable":false,"reason":"No current contract or diff signal requires this family.","control_ids":[],"dimensions":[],"status":"not-applicable"},
-    {"family":"reference-liveness","applicable":true,"reason":"Derived from requirement attack matrix.","control_ids":["NEG-007-2"],"dimensions":[{"surface":"persisted-worker-reference","reason":"Reentry must keep the persisted worker/run reference live and correlated to the same recovery decision.","control_ids":["NEG-007-2"],"status":"passed"}],"status":"passed"},
-    {"family":"temporal-consistency","applicable":false,"reason":"No current contract or diff signal requires this family.","control_ids":[],"dimensions":[],"status":"not-applicable"},
-    {"family":"temporal-destination","applicable":false,"reason":"No current contract or diff signal requires this family.","control_ids":[],"dimensions":[],"status":"not-applicable"},
-    {"family":"concurrency-atomicity","applicable":false,"reason":"No current contract or diff signal requires this family.","control_ids":[],"dimensions":[],"status":"not-applicable"},
-    {"family":"idempotency","applicable":true,"reason":"Derived from requirement attack matrix.","control_ids":["NEG-005-1","NEG-012-1"],"dimensions":[{"surface":"duplicate-processing","reason":"Discriminates the Issue 300 contract at the duplicate-processing boundary.","control_ids":["NEG-005-1","NEG-012-1"],"status":"passed"}],"status":"passed"},
-    {"family":"rollback","applicable":false,"reason":"No current contract or diff signal requires this family.","control_ids":[],"dimensions":[],"status":"not-applicable"},
-    {"family":"historical-immutability","applicable":false,"reason":"No current contract or diff signal requires this family.","control_ids":[],"dimensions":[],"status":"not-applicable"},
-    {"family":"structural-contract","applicable":true,"reason":"Derived from requirement attack matrix.","control_ids":["NEG-002-1","NEG-003-1","NEG-003-2","NEG-004-1","NEG-007-1","NEG-008-1","NEG-009-1","NEG-010-1","NEG-011-1","NEG-013-1"],"dimensions":[{"surface":"canonical-source-consistency","reason":"Discriminates the Issue 300 contract at the canonical-source-consistency boundary.","control_ids":["NEG-003-1","NEG-010-1"],"status":"passed"},{"surface":"relational-semantic-integrity","reason":"Discriminates the Issue 300 contract at the relational-semantic-integrity boundary.","control_ids":["NEG-003-2"],"status":"passed"},{"surface":"specified-test-matrix","reason":"Discriminates the Issue 300 contract at the specified-test-matrix boundary.","control_ids":["NEG-002-1","NEG-004-1","NEG-007-1","NEG-008-1","NEG-009-1","NEG-011-1","NEG-013-1"],"status":"passed"}],"status":"passed"},
-    {"family":"documentation","applicable":true,"reason":"Derived from requirement attack matrix.","control_ids":["NEG-010-2"],"dimensions":[{"surface":"canonical-policy-documentation","reason":"Discriminates the Issue 300 contract at the canonical-policy-documentation boundary.","control_ids":["NEG-010-2"],"status":"passed"}],"status":"passed"}
+    {
+      "family": "authorization",
+      "applicable": true,
+      "reason": "Derived from requirement attack matrix.",
+      "control_ids": [
+        "NEG-006-1"
+      ],
+      "dimensions": [
+        {
+          "surface": "attempt-budget-ceiling",
+          "reason": "Discriminates the Issue 300 contract at the attempt-budget-ceiling boundary.",
+          "control_ids": [
+            "NEG-006-1"
+          ],
+          "status": "passed"
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "family": "tenant-isolation",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "public-boundary",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "reference-liveness",
+      "applicable": true,
+      "reason": "Derived from requirement attack matrix.",
+      "control_ids": [
+        "NEG-007-2"
+      ],
+      "dimensions": [
+        {
+          "surface": "persisted-worker-reference",
+          "reason": "Reentry must keep the persisted worker/run reference live and correlated to the same recovery decision.",
+          "control_ids": [
+            "NEG-007-2"
+          ],
+          "status": "passed"
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "family": "temporal-consistency",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "temporal-destination",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "concurrency-atomicity",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "idempotency",
+      "applicable": true,
+      "reason": "Derived from requirement attack matrix.",
+      "control_ids": [
+        "NEG-005-1",
+        "NEG-012-1"
+      ],
+      "dimensions": [
+        {
+          "surface": "duplicate-processing",
+          "reason": "Discriminates the Issue 300 contract at the duplicate-processing boundary.",
+          "control_ids": [
+            "NEG-005-1",
+            "NEG-012-1"
+          ],
+          "status": "passed"
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "family": "rollback",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "historical-immutability",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "structural-contract",
+      "applicable": true,
+      "reason": "Derived from requirement attack matrix.",
+      "control_ids": [
+        "NEG-002-1",
+        "NEG-003-1",
+        "NEG-003-2",
+        "NEG-004-1",
+        "NEG-007-1",
+        "NEG-008-1",
+        "NEG-009-1",
+        "NEG-010-1",
+        "NEG-011-1",
+        "NEG-013-1"
+      ],
+      "dimensions": [
+        {
+          "surface": "canonical-source-consistency",
+          "reason": "Discriminates the Issue 300 contract at the canonical-source-consistency boundary.",
+          "control_ids": [
+            "NEG-003-1",
+            "NEG-010-1"
+          ],
+          "status": "passed"
+        },
+        {
+          "surface": "relational-semantic-integrity",
+          "reason": "Discriminates the Issue 300 contract at the relational-semantic-integrity boundary.",
+          "control_ids": [
+            "NEG-003-2"
+          ],
+          "status": "passed"
+        },
+        {
+          "surface": "specified-test-matrix",
+          "reason": "Discriminates the Issue 300 contract at the specified-test-matrix boundary.",
+          "control_ids": [
+            "NEG-002-1",
+            "NEG-004-1",
+            "NEG-007-1",
+            "NEG-008-1",
+            "NEG-009-1",
+            "NEG-011-1",
+            "NEG-013-1"
+          ],
+          "status": "passed"
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "family": "documentation",
+      "applicable": true,
+      "reason": "Derived from requirement attack matrix.",
+      "control_ids": [
+        "NEG-010-2"
+      ],
+      "dimensions": [
+        {
+          "surface": "canonical-policy-documentation",
+          "reason": "Discriminates the Issue 300 contract at the canonical-policy-documentation boundary.",
+          "control_ids": [
+            "NEG-010-2"
+          ],
+          "status": "passed"
+        }
+      ],
+      "status": "passed"
+    }
   ],
   "material_families_missing_controls": []
 }

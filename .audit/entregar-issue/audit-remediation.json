@@ -3,27 +3,29 @@
   "contract_version": "2026-08-20.3",
   "resolution_policy": "all-actionable-items",
   "status": "closed",
-  "candidate_head_sha": "6cce4813cfe4dd1abd51e619f490597b33f2b17f",
+  "candidate_head_sha": "25f6d39b9ac415e2c512fb2b8e9c0b39fe043f27",
   "remediation_mode": "targeted-remediation",
   "source": {
-    "rejection_id": "audit-rejection:4b8e3fa1-7a21-4f4e-9f7d-300305a1c001",
-    "audited_head_sha": "6cce4813cfe4dd1abd51e619f490597b33f2b17f",
-    "audit_report_sha256": "5f8ec92cd31db35947a46c9c09b2ca10d78c68d1b6807fbef49fe8db3abe1954"
+    "rejection_id": "audit-rejection:300-305-scope-binding-mismatch",
+    "audited_head_sha": "cd88be004c30d036805c39c8f4470b6cddbe744c",
+    "audit_report_sha256": "9bcff671439fb8ccffebd6641f482b78a7bc3b310262e642481513b02347e4d4"
   },
   "items": [
     {
       "source_kind": "finding",
-      "source_id": "A-001",
+      "source_id": "A-003",
       "remediation_mode": "targeted-remediation",
       "status": "fixed",
       "closure_kind": "artifact-recertification",
       "evidence": [
-        "Material head remained 6cce4813cfe4dd1abd51e619f490597b33f2b17f with exact-SHA CI green.",
-        "Current main cd7ab62bc47e2fc47ec913c2c6a5825864c58377 was reconciled into material merge preview 1167bcd905aa7f1843841766e1970eb587e8a0f9 without changing product material."
+        "Remote compare ffcedf88a5bedd0300411fce0ee5f62eba683195..25f6d39b9ac415e2c512fb2b8e9c0b39fe043f27 contains the exact 18 paths now certified in scope.issue_changed_paths.",
+        "scope.issue_delta_sha256 was recomputed from the canonical compact JSON object containing work_item_start_sha, material_head_sha and the sorted exact path list.",
+        "Material head and Delivery V2 CI run 36916123994 remain unchanged and green."
       ],
       "validations": [
-        "Replacement result-only child must remain a direct child of the same material head and touch only certificate allowlisted paths.",
-        "Terminal identity is reread after publication before independent re-audit."
+        "No material files were changed by this remediation.",
+        "Recovery remains handoff-only with requires_refreeze=false.",
+        "The replacement result-only child is built directly from material head 25f6d39b9ac415e2c512fb2b8e9c0b39fe043f27."
       ]
     }
   ]
