@@ -678,6 +678,29 @@ async function runWorkflowStageWithInfrastructureRecovery({
     runs.push(run);
 
     if (run.conclusion === 'success') {
+      if (stage !== 'independent-audit') {
+        const workerEvidence = await downloadGhAwAgentOutputArtifact({
+          repository: orchestratorRepository,
+          runId: run.id,
+          token: actionsToken
+        });
+        const semanticOutcome = classifyWorkflowStageFailure({
+          stage,
+          conclusion: run.conclusion,
+          materialHeadChanged: false,
+          hasPatch: workerEvidence.hasPatch,
+          agentOutput: workerEvidence.agentOutput
+        });
+        const semanticRetry = decideWorkflowStageRetry({
+          failure: semanticOutcome,
+          retriesUsed,
+          maxRetries: MAX_INFRA_STAGE_RETRIES
+        });
+        if (semanticRetry.action === 'retry-same-stage') {
+          retriesUsed = semanticRetry.nextRetriesUsed;
+          continue;
+        }
+      }
       return Object.freeze({ run, runs: Object.freeze([...runs]), retriesUsed, dispatchNonce: lastDispatchNonce });
     }
 
@@ -1082,6 +1105,51 @@ export async function main() {
         artifactError: materialEvidence.error ?? null
       });
       if (materialOutcome.action !== 'await-material-head') {
+        const semanticFailure = classifyPreMaterialWorkerFailure({
+          workerConclusion: worker.conclusion,
+          hasPatch: materialEvidence.hasPatch,
+          agentOutput: materialEvidence.agentOutput
+        });
+
+        if (semanticFailure.recoverable) {
+          await recordInitialWorkerFailure({
+            repository: targetRepository,
+            issueNumber,
+            token: targetWriteToken,
+            attempt: currentInitialAttempt,
+            dispatchNonce: currentDispatchNonce,
+            worker,
+            failure: semanticFailure,
+            evidence: materialEvidence
+          });
+
+          const retry = await reserveNextInitialAttempt({
+            repository: targetRepository,
+            issueNumber,
+            token: targetWriteToken,
+            currentAttempt: currentInitialAttempt,
+            maxAttempts: plan.implementation.maxAttempts,
+            workerWorkflow: initialWorkerIdentity,
+            failure: semanticFailure,
+            workerRunId: worker.id,
+            controllerRunId,
+            controllerHeadSha
+          });
+
+          if (retry.decision.action === 'budget-exhausted') {
+            throw new Error(`initial implementation budget exhausted after recoverable semantic infrastructure outcome: ${worker.html_url}`);
+          }
+          if (!['retry', 'retry-same-attempt'].includes(retry.decision.action)) {
+            throw new Error(`unsupported initial semantic retry decision: ${retry.decision.action}`);
+          }
+
+          currentInitialAttempt = retry.decision.nextAttempt;
+          currentDispatchNonce = retry.dispatchNonce;
+          currentRetryContext = JSON.stringify(retry.retryContext);
+          worker = null;
+          continue;
+        }
+
         await recordInitialSuccessfulNoMaterial({
           repository: targetRepository,
           issueNumber,
