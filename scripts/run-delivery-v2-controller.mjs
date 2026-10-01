@@ -45,6 +45,7 @@ const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
 const POLL_MS = Number(process.env.DELIVERY_V2_POLL_MS || 10000);
+const HEARTBEAT_MS = Number(process.env.DELIVERY_V2_HEARTBEAT_MS || 20000);
 const MAX_STAGE_MS = Number(process.env.DELIVERY_V2_STAGE_TIMEOUT_MS || 75 * 60 * 1000);
 
 function requiredEnv(name) {
@@ -235,7 +236,7 @@ async function dispatchWorkflowAndResolveRun({ repository, workflow, ref, inputs
 
     const now = Date.now();
 
-    if (now - lastHeartbeatAt >= 60_000) {
+    if (now - lastHeartbeatAt >= HEARTBEAT_MS) {
       process.stdout.write(
         `[delivery-v2] waiting workflow dispatch correlation ` +
         `repository=${repository} workflow="${workflow}" ` +
@@ -268,7 +269,7 @@ async function waitWorkflowRun(repository, runId, token) {
 
     const now = Date.now();
     const statusChanged = run.status !== lastStatus;
-    const heartbeatDue = now - lastHeartbeatAt >= 60_000;
+    const heartbeatDue = now - lastHeartbeatAt >= HEARTBEAT_MS;
 
     if (statusChanged || heartbeatDue) {
       const elapsedSeconds = Math.floor((now - startedAt) / 1000);
@@ -322,7 +323,7 @@ async function findManagedPullRequest({ repository, issueNumber, baseBranch, sin
 
     const now = Date.now();
 
-    if (now - lastHeartbeatAt >= 60_000) {
+    if (now - lastHeartbeatAt >= HEARTBEAT_MS) {
       process.stdout.write(
         `[delivery-v2] waiting managed pull request ` +
         `repository=${repository} issue=${issueNumber} ` +
@@ -425,7 +426,7 @@ async function waitRequiredCheck({ repository, prNumber, sha, requiredStatusName
 
     if (
       observedState !== lastObservedState ||
-      now - lastHeartbeatAt >= 60_000
+      now - lastHeartbeatAt >= HEARTBEAT_MS
     ) {
       const elapsedSeconds = Math.floor((now - startedAt) / 1000);
 
@@ -830,7 +831,7 @@ async function waitHeadChange(repository, prNumber, previousSha, token) {
 
     const now = Date.now();
 
-    if (now - lastHeartbeatAt >= 60_000) {
+    if (now - lastHeartbeatAt >= HEARTBEAT_MS) {
       process.stdout.write(
         `[delivery-v2] waiting material head change ` +
         `repository=${repository} pr=${prNumber} ` +
