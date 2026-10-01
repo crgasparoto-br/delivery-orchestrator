@@ -1,25 +1,176 @@
-## Problema
+## Contexto
 
-Uma execução Delivery V2 pode terminar pre-material com worker `completed/success` e sem PR gerenciada porque o worker concluiu `noop` a partir de uma versão anterior do contrato da issue.
-Quando a issue alvo é materialmente atualizada depois disso, o bootstrap `reserved-initial-attempt` continua preso ao `scopeBinding.issueContractSha256` antigo. A reentrada atual só rearma esse caminho quando muda o SHA do control plane, portanto um novo dispatch no mesmo control plane recupera a tentativa antiga em vez de executar contra o contrato novo.
+Foi feita uma varredura histórica das issues do `delivery-orchestrator` criadas entre agosto e 2026-10-01: 182 issues no período, com 83 diretamente relacionadas por título a Delivery V2, controller, worker, CI, auditoria, recovery, sandbox, bootstrap, nonce, safe outputs ou remediação.
 
-Caso observado: SolverFin #621, controller run 36569020189, worker 36569056972.
+A sequência de correções mostra reincidência da mesma classe arquitetural em caminhos diferentes, incluindo #130, #134, #139, #149, #155, #188, #208, #233, #237, #240, #254, #257, #260, #263, #273, #277, #280, #283, #286, #290 e #297.
 
-## Esperado
+O incidente atual #300 / SolverFin #621 confirma que o ciclo ainda não é fechado de ponta a ponta.
 
-- detectar mudança do fingerprint canônico `repository + issueNumber + title + body` entre o bootstrap persistido e a issue corrente;
-- para worker `completed/success` sem PR material, permitir rearmar a mesma tentativa quando o contrato da issue mudou, mesmo com o mesmo SHA do control plane;
-- gerar nonce novo e persistir `scopeBinding` atualizado antes do novo worker;
-- não consumir tentativa adicional;
-- mesma issue fingerprint + mesmo control plane continua recuperando a execução anterior, sem retry cego;
-- preservar fail-closed para bootstrap sem fingerprint/proveniência suficiente;
-- adicionar testes discriminantes e atualizar o contrato documental.
+### Evidência atual
+
+No controller run `36595831614`:
+- os workers `36595874483` e `36596887206` falharam por context-rebuild circuit breaker e foram recuperados;
+- a terceira tentativa `36597929820` terminou o workflow com `success`, mas não publicou patch/PR;
+- o `agent_output.json` continha somente `noop`, declarando escopo incompleto e toolchain local insuficiente;
+- o controller tratou `workflow success` como se implicasse efeito material e ficou ~12 minutos procurando uma PR inexistente;
+- o bootstrap persistido permaneceu com `workerRunId=null`, embora o run já estivesse correlacionado;
+- o sandbox Codex declarava toolchain completa, porém o PATH restrito não continha `rm`, fazendo scripts npm reais falharem.
+
+Isso reproduz a causa da #290, mas agora no caminho inicial; e a mesma assimetria ainda existe no controller principal para CI remediation e audit remediation.
+
+## Causa sistêmica
+
+O controller mistura três estados que precisam ser independentes:
+
+1. estado técnico do workflow (`success/failure`);
+2. resultado semântico do agente (`noop/report_incomplete/missing_tool/...`);
+3. efeito material observado (patch/PR/novo HEAD).
+
+Além disso, regras corrigidas no resume/legacy controller não foram promovidas para um contrato compartilhado, permitindo regressões entre caminhos equivalentes.
+
+## Objetivo
+
+Fechar deterministicamente o ciclo:
+
+`implementação -> CI exact-head -> auditoria independente -> remediação dos findings -> CI exact-head -> nova auditoria independente`
+
+repetindo até aprovação ou impedimento realmente terminal, sem depender de nova intervenção humana para falhas recuperáveis de código, CI, control plane ou ambiente.
+
+## Fonte canônica e precedência
+
+A implementação desta issue deve preservar `docs/delivery-v2/MASTER_SPEC.md` como fonte canônica do contrato Delivery V2. `docs/delivery-v2.md` permanece apenas quick guide.
+
+Quando houver divergência entre caminhos equivalentes, a precedência obrigatória é:
+
+1. identidade material observada e vinculada ao HEAD exato;
+2. artefato estruturado do worker (`hasPatch` + `agent_output`) validado;
+3. estado técnico do workflow;
+4. inferências por polling ou ausência de efeito observado.
+
+`workflow success` nunca pode promover sozinho um resultado para material, remediado ou concluído.
+
+## Escopo obrigatório
+
+- criar um classificador canônico compartilhado de outcome de worker material;
+- nunca tratar `workflow success` como sinônimo de material publicado;
+- consumir `hasPatch + agent_output` antes de procurar PR ou esperar novo HEAD;
+- aplicar a mesma regra à implementação inicial, CI remediation, audit remediation e resume/legacy adoption;
+- persistir imediatamente o `workerRunId` correlacionado da tentativa inicial, antes da espera terminal;
+- impedir polling longo quando o outcome prova `hasPatch=false`;
+- falhar fechado em evidência ausente, inconsistente ou ambígua;
+- manter retries de infraestrutura bounded e idempotentes;
+- garantir que auditoria continue sendo executada em contexto/runtime independente e exact-head;
+- após finding remediado, invalidar toda evidência de auditoria vinculada ao SHA anterior e obrigar nova auditoria independente do novo SHA;
+- substituir o limite mágico de 8 ciclos por budget derivado da política configurada, sem criar um segundo contador concorrente;
+- corrigir o PATH restrito do Codex para cobrir comandos básicos exigidos por scripts de build/teste, incluindo `rm`, e validar essa baseline no preflight;
+- tornar explícito no contrato do worker que `noop` não representa implementação/remediação incompleta; falha de infraestrutura/capacidade deve usar safe output estruturado apropriado;
+- preservar segurança: nenhum token de escrita direto ao agente, sem relaxar threat detection/scope/release gates.
+
+## Invariantes estruturais
+
+### must_behave
+- Um estágio material só pode avançar quando existe evidência estruturada suficiente para classificar separadamente estado técnico, resultado semântico e efeito material.
+- Qualquer novo HEAD material invalida CI, auditoria, hygiene e release evidence vinculados ao HEAD anterior.
+- Auditoria rejeitada seguida de remediação material deve voltar obrigatoriamente a CI exact-head antes de uma nova auditoria independente.
+- O encerramento `ready` só pode ocorrer para o candidato material atual que satisfaça todos os gates do `MASTER_SPEC.md`.
+
+### must_not_behave
+- Não procurar PR, esperar novo HEAD ou declarar implementação/remediação publicada quando `hasPatch=false`.
+- Não reutilizar aprovação de auditoria anterior após mudança material do HEAD.
+- Não converter `noop`, `report_incomplete`, `missing_tool` ou artefato incompleto em sucesso material apenas porque o workflow terminou com `success`.
+- Não consumir budget material adicional por simples reentrada idempotente ou recuperação da mesma tentativa já reservada, quando a política canônica define reuso da tentativa.
+
+### must_reuse / must_be_single_source
+- O classificador de outcome deve ser compartilhado pelos caminhos inicial, CI remediation, audit remediation e resume/legacy; não podem existir classificadores semanticamente equivalentes mantidos separadamente.
+- Budget e ceilings devem derivar da política/configuração Delivery V2 já existente; não criar contador fixo paralelo que possa truncar ou ampliar o budget.
+- Regras duráveis desta issue devem ser reconciliadas em `docs/delivery-v2/MASTER_SPEC.md`, evitando manter a issue como segunda fonte permanente de verdade.
+
+### precedence_invariants
+- `hasPatch=false` validado tem precedência sobre expectativa de criação de PR/novo HEAD.
+- Novo SHA material observado tem precedência sobre qualquer evidência candidate-bound do SHA anterior, que deve ser invalidada.
+- Artefato ausente ou contraditório não deve cair para heurística otimista; deve falhar fechado.
+
+### forbidden_implementation
+- É proibido corrigir somente o caminho inicial deixando CI remediation/audit remediation com espera cega de HEAD.
+- É proibido copiar a lógica corrigida para múltiplos fluxos sem um contrato/classificador canônico compartilhado.
+- É proibido resolver o problema aumentando timeouts/polling sem corrigir a classificação semântica/material.
+- É proibido declarar auditoria independente nova reutilizando run/evidence do SHA anterior.
+
+## Implementações plausíveis erradas e controles discriminantes
+
+- **Erro plausível:** parar o polling quando `hasPatch=false` apenas no initial worker.
+  - **Controle:** regressões equivalentes obrigatórias para initial, CI remediation e audit remediation.
+- **Erro plausível:** manter `workflow success` como fallback quando `agent_output` estiver ausente.
+  - **Controle:** teste de artefato ausente/ambíguo deve falhar fechado e não procurar PR/HEAD.
+- **Erro plausível:** refazer auditoria após remediação sem refazer CI no novo SHA.
+  - **Controle:** cenário end-to-end deve provar a ordem `audit reject -> material remediation -> exact-head CI -> independent audit`.
+- **Erro plausível:** nova auditoria rodar, mas usar aprovação/evidence cacheada do SHA anterior.
+  - **Controle:** assertar identidade do novo run/evidence e binding explícito ao novo HEAD.
+- **Erro plausível:** remover o contador 8 e introduzir outro limite fixo equivalente.
+  - **Controle:** teste parametrizado com policy budget acima de 8 ciclos possíveis deve avançar até o limite derivado da configuração.
+- **Erro plausível:** adicionar `rm` ao ambiente do controller, mas não ao PATH efetivo do sandbox worker.
+  - **Controle:** preflight dentro do mesmo runtime/PATH usado pelo Codex deve resolver `rm` e executar a baseline mínima requerida pelos scripts reais.
+
+## Tratamento de erros e fallback
+
+- `success + hasPatch=false`: classificar pelo resultado semântico; não procurar efeito material inexistente.
+- `success + hasPatch=true`: exigir efeito material observável e coerente com PR/HEAD esperado antes de avançar.
+- artefato ausente, inválido ou contraditório: fail-closed, sem polling especulativo por PR/HEAD.
+- falha recuperável de infraestrutura: retry somente quando a política canônica reconhecer a assinatura, mantendo boundedness, idempotência e provenance.
+- falha semântica de implementação/remediação: não mascarar como infraestrutura e não reusar `noop` como sucesso.
+- mudança de HEAD durante qualquer gate candidate-bound: invalidar evidência stale e reiniciar pelo próximo gate correto definido pelo contrato canônico.
+- budget esgotado: escalar pelo estado terminal canônico, sem loop AI-on-AI adicional.
+
+## Fora de escopo
+
+- alterar a política de risco FAST/STANDARD/CRITICAL ou seus ceilings padrão, salvo substituir o contador fixo por derivação da política já configurada;
+- relaxar autorização, scope binding, threat detection, safe outputs ou isolamento de credenciais;
+- permitir auditoria no mesmo contexto/runtime do implementador;
+- introduzir fallback silencioso de provider/model;
+- redesenhar a governança de merge/release além do necessário para preservar os gates existentes.
+
+## Regressões obrigatórias
+
+- initial worker: `success + hasPatch=false + noop/report_incomplete/missing_tool` não procura PR;
+- initial worker: run ID fica persistido assim que correlacionado;
+- remediation de CI: `success + hasPatch=false` não espera HEAD;
+- remediation de auditoria: `success + hasPatch=false` não espera HEAD;
+- `success + hasPatch=true` continua exigindo novo efeito material;
+- artefato ausente/ambíguo falha fechado;
+- ciclo completo: auditoria rejeita -> remediation publica novo SHA -> CI verde -> auditoria independente nova no novo SHA -> aprovação;
+- a nova auditoria possui nova identidade de execução/evidência e binding ao novo SHA;
+- qualquer mudança material invalida CI/audit/release evidence do SHA anterior;
+- sandbox Codex efetivo resolve `rm` e baseline de comandos de build no mesmo PATH/runtime do worker;
+- budget configurável não é truncado por contador fixo de ciclos;
+- reentrada idempotente da mesma tentativa reservada não consome novo slot indevidamente;
+- locks/workflows gerados permanecem sem drift.
 
 ## Critérios de aceite
 
-- [ ] mudança apenas do contrato da issue rearma o bootstrap pre-material bem-sucedido sem PR;
-- [ ] o rearm atualiza o `issueContractSha256` persistido;
-- [ ] o número da tentativa é preservado;
-- [ ] um novo `dispatchNonce` é usado;
-- [ ] reentrada sem mudança de contrato nem control plane não cria nova tentativa;
-- [ ] os testes de reentry/bootstrap existentes continuam verdes.
+- [ ] Existe um único contrato/classificador compartilhado de outcome material consumido pelos quatro caminhos: initial, CI remediation, audit remediation e resume/legacy.
+- [ ] Nenhum desses caminhos usa `workflow success` isoladamente como prova de publicação material.
+- [ ] `hasPatch=false` validado encerra imediatamente qualquer procura/polling por PR ou novo HEAD naquele estágio.
+- [ ] `hasPatch=true` só avança após observar efeito material coerente e identificar o HEAD candidato.
+- [ ] `workerRunId` da tentativa inicial é persistido assim que o run é correlacionado, antes de aguardar seu estado terminal.
+- [ ] Evidência ausente, inválida, inconsistente ou ambígua falha fechado sem heurística otimista.
+- [ ] Após qualquer remediação material, CI e auditoria anteriores ficam stale; o novo SHA passa por CI exact-head e, quando exigido pelo risco, por nova auditoria independente.
+- [ ] A nova auditoria não reutiliza identidade/evidência de aprovação do SHA anterior.
+- [ ] Retries recuperáveis são bounded, idempotentes e não criam slots materiais além da política.
+- [ ] O número máximo de ciclos operacionais não é limitado por constante fixa independente da política configurada.
+- [ ] O PATH efetivo do sandbox Codex contém a baseline necessária aos scripts reais, incluindo `rm`, e o preflight valida o mesmo ambiente efetivo.
+- [ ] Testes focados e suíte V2 ficam verdes.
+- [ ] CI da PR terminal fica verde no HEAD exato.
+- [ ] Auditoria independente da própria correção é executada após CI; findings bloqueantes, se houver, são remediados e submetidos novamente a CI + auditoria independente até estado terminal.
+- [ ] Locks/workflows gerados permanecem sem drift.
+- [ ] `docs/delivery-v2/MASTER_SPEC.md` é atualizado para registrar o invariante técnico/semântico/material e o ciclo fechado; `docs/delivery-v2.md` é atualizado somente se necessário para manter o quick guide coerente.
+
+## Resultado esperado
+
+Delivery V2 só pode declarar a entrega concluída quando o candidato material atual:
+1. existe e está identificado;
+2. passou CI exact-head;
+3. passou auditoria independente exigida pelo risco;
+4. não possui findings bloqueantes em aberto;
+5. foi re-auditado independentemente depois de qualquer remediação material.
+
+Qualquer evidência vinculada a candidato material anterior não pode satisfazer esses critérios para o HEAD atual.

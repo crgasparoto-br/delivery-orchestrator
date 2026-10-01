@@ -5,7 +5,7 @@ import test from 'node:test';
 import {
   classifySuccessfulRemediationOutcome,
   continueAfterSuccessfulRemediation
-} from '../scripts/resume-delivery-v2-controller.mjs';
+} from '../src/v2/worker-material-outcome.mjs';
 
 test('issue 290: successful remediation with a patch still requires a new material head', () => {
   assert.deepEqual(
@@ -17,7 +17,7 @@ test('issue 290: successful remediation with a patch still requires a new materi
     {
       action: 'await-material-head',
       classification: 'patch-produced',
-      reason: 'remediation artifact contains a material patch',
+      reason: 'worker artifact contains a material patch; repository effect must still be observed',
       evidenceRef: 'artifact:patch'
     }
   );
@@ -144,7 +144,7 @@ test('issue 290: both remediation entry paths classify evidence before waiting f
   const implementingStart = source.indexOf("if (state.status === 'implementing')");
   const implementingEnd = source.indexOf("if (state.status === 'ci-pending')", implementingStart);
   const implementing = source.slice(implementingStart, implementingEnd);
-  assert.match(implementing, /continueAfterSuccessfulRemediation/);
+  assert.match(implementing, /continueAfterSuccessfulWorkerOutcome/);
   assert.match(implementing, /runId: run\.id/);
   assert.doesNotMatch(implementing, /runId: worker\.id/);
   assert.doesNotMatch(implementing, /remediationStage\.dispatchNonce/);
@@ -155,9 +155,9 @@ test('issue 290: both remediation entry paths classify evidence before waiting f
   const remediationEnd = source.indexOf("if (state.status === 'audit-pending')", remediationStart);
   const remediation = source.slice(remediationStart, remediationEnd);
   assert.match(remediation, /runId: worker\.id/);
-  assert.match(remediation, /continueAfterSuccessfulRemediation/);
+  assert.match(remediation, /continueAfterSuccessfulWorkerOutcome/);
   assert.ok(
-    remediation.indexOf('continueAfterSuccessfulRemediation') <
+    remediation.indexOf('continueAfterSuccessfulWorkerOutcome') <
       remediation.indexOf('waitHeadChange')
   );
   assert.match(remediation, /workerDispatchNonce: remediationStage\.dispatchNonce/);

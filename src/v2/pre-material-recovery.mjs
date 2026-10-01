@@ -25,10 +25,11 @@ export function classifyStructuredContextRebuildFailure({
     );
   }
 
-  if (String(workerConclusion ?? '').trim().toLowerCase() !== 'failure') {
+  const terminalConclusion = String(workerConclusion ?? '').trim().toLowerCase();
+  if (!['success', 'failure'].includes(terminalConclusion)) {
     return failClosed(
       'unsupported-worker-conclusion',
-      'context-rebuild recovery requires terminal worker failure'
+      'context-rebuild recovery requires a terminal success/failure workflow outcome'
     );
   }
 

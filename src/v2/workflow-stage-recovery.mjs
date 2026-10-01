@@ -25,12 +25,26 @@ export function classifyWorkflowStageFailure({
   const terminalConclusion = String(conclusion ?? '').trim().toLowerCase();
 
   if (terminalConclusion === 'success') {
+    if (normalizedStage !== 'independent-audit' && hasPatch === false) {
+      const structured = classifyStructuredContextRebuildFailure({
+        workerConclusion: terminalConclusion,
+        hasPatch,
+        agentOutput
+      });
+      if (structured.recoverable) {
+        return Object.freeze({
+          ...structured,
+          action: 'retry-same-stage',
+          stage: normalizedStage
+        });
+      }
+    }
     return Object.freeze({
       recoverable: false,
       action: 'none',
       stage: normalizedStage,
       classification: 'success',
-      reason: 'workflow succeeded'
+      reason: 'workflow succeeded without a recognized recoverable semantic infrastructure outcome'
     });
   }
 

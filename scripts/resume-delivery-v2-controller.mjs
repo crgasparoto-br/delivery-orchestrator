@@ -38,6 +38,7 @@ import { persistOperationalDeliveryMetrics } from '../src/v2/metrics-store.mjs';
 import { summarizeDeliveryAiUsage, renderDeliveryAiUsageSummary } from '../src/v2/ai-usage-summary.mjs';
 import { downloadGhAwTechnicalHygieneArtifact } from '../src/v2/gh-aw-hygiene-artifact.mjs';
 import { downloadGhAwAgentOutputArtifact } from '../src/v2/gh-aw-agent-output-artifact.mjs';
+import { continueAfterSuccessfulWorkerOutcome } from '../src/v2/worker-material-outcome.mjs';
 import { classifyWorkflowStageFailure, decideWorkflowStageRetry } from '../src/v2/workflow-stage-recovery.mjs';
 import { attachLegacyAdoptionAuditRun, legacyAdoptionComment, parseLegacyAdoptionEnvelope, rearmLegacyAdoptionAudit, reconcileLegacyAdoption, recordLegacyAdoptionAuditResult, refreezeLegacyAdoption, reserveLegacyAdoptionAudit, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
@@ -731,6 +732,29 @@ async function runWorkflowStageWithInfrastructureRecovery({
     runs.push(run);
 
     if (run.conclusion === 'success') {
+      if (stage !== 'independent-audit') {
+        const workerEvidence = await downloadGhAwAgentOutputArtifact({
+          repository: orchestratorRepository,
+          runId: run.id,
+          token: actionsToken
+        });
+        const semanticOutcome = classifyWorkflowStageFailure({
+          stage,
+          conclusion: run.conclusion,
+          materialHeadChanged: false,
+          hasPatch: workerEvidence.hasPatch,
+          agentOutput: workerEvidence.agentOutput
+        });
+        const semanticRetry = decideWorkflowStageRetry({
+          failure: semanticOutcome,
+          retriesUsed,
+          maxRetries: MAX_INFRA_STAGE_RETRIES
+        });
+        if (semanticRetry.action === 'retry-same-stage') {
+          retriesUsed = semanticRetry.nextRetriesUsed;
+          continue;
+        }
+      }
       return Object.freeze({
         run,
         runs: Object.freeze([...runs]),
@@ -824,111 +848,6 @@ async function waitHeadChange(repository, prNumber, previousSha, token) {
     'in-flight remediation completed without publishing a new material head after ' +
     `${Math.floor((Date.now() - startedAt) / 1000)}s`
   );
-}
-
-const NO_MATERIAL_SAFE_OUTPUT_TYPES = new Set([
-  'missing_tool',
-  'missing_data',
-  'noop',
-  'report_incomplete'
-]);
-
-export function classifySuccessfulRemediationOutcome({
-  hasPatch,
-  agentOutput,
-  evidenceRef = null,
-  artifactError = null
-} = {}) {
-  if (hasPatch === true) {
-    return Object.freeze({
-      action: 'await-material-head',
-      classification: 'patch-produced',
-      reason: 'remediation artifact contains a material patch',
-      evidenceRef
-    });
-  }
-
-  if (hasPatch !== false) {
-    return Object.freeze({
-      action: 'fail-closed',
-      classification: 'material-evidence-ambiguous',
-      reason: String(artifactError ?? 'successful remediation did not provide deterministic patch evidence'),
-      evidenceRef
-    });
-  }
-
-  const errors = Array.isArray(agentOutput?.errors) ? agentOutput.errors.filter(Boolean) : null;
-  const items = Array.isArray(agentOutput?.items) ? agentOutput.items : null;
-  if (!errors || !items || errors.length > 0 || items.length === 0) {
-    return Object.freeze({
-      action: 'fail-closed',
-      classification: 'no-patch-output-ambiguous',
-      reason: errors?.length
-        ? 'successful remediation reported framework errors without a material patch'
-        : 'successful remediation produced no material patch and no trusted semantic safe-output item',
-      evidenceRef
-    });
-  }
-
-  const itemTypes = [...new Set(
-    items.map((item) => String(item?.type ?? '').trim()).filter(Boolean)
-  )];
-  if (
-    itemTypes.length === 0 ||
-    itemTypes.some((type) => !NO_MATERIAL_SAFE_OUTPUT_TYPES.has(type))
-  ) {
-    return Object.freeze({
-      action: 'fail-closed',
-      classification: 'no-patch-output-unsupported',
-      reason: 'successful remediation produced no material patch with unsupported semantic output',
-      evidenceRef
-    });
-  }
-
-  const primary = items[0] ?? {};
-  return Object.freeze({
-    action: 'blocked-no-material',
-    classification: `no-material-${itemTypes.join('+')}`,
-    reason: String(
-      primary.reason ??
-      primary.message ??
-      'remediation completed without a material patch'
-    ),
-    ...(primary.tool ? { tool: String(primary.tool) } : {}),
-    evidenceRef
-  });
-}
-
-export async function continueAfterSuccessfulRemediation({
-  evidence,
-  waitForMaterialHead
-} = {}) {
-  const remediationEvidence = evidence ?? {};
-  const remediationOutcome = classifySuccessfulRemediationOutcome({
-    ...remediationEvidence,
-    artifactError:
-      remediationEvidence.artifactError ??
-      remediationEvidence.error ??
-      null
-  });
-
-  if (remediationOutcome.action !== 'await-material-head') {
-    return Object.freeze({
-      remediationOutcome,
-      pullRequest: null
-    });
-  }
-
-  if (typeof waitForMaterialHead !== 'function') {
-    throw new Error(
-      'successful remediation with a material patch requires a head-change waiter'
-    );
-  }
-
-  return Object.freeze({
-    remediationOutcome,
-    pullRequest: await waitForMaterialHead()
-  });
 }
 
 async function dispatchWorker({ orchestratorRepository, orchestratorRef, plan, controllerRunId, targetRepository, issueNumber, baseBranch, targetRef, targetPr, remediationContext, token, dispatchNonce = createDispatchNonce() }) {
@@ -1844,8 +1763,7 @@ export async function main() {
     })
   });
 
-  for (let cycle = 0; cycle < 8; cycle += 1) {
-    if (['ready-for-human-merge', 'escalated', 'terminal'].includes(state.status)) break;
+  while (!['ready-for-human-merge', 'escalated', 'terminal'].includes(state.status)) {
 
     if (state.status === 'implementing') {
       let workerRunId = Number(controller.workerRunId ?? 0);
@@ -2055,7 +1973,7 @@ export async function main() {
         runId: run.id,
         token: actionsToken
       });
-      const remediationContinuation = await continueAfterSuccessfulRemediation({
+      const remediationContinuation = await continueAfterSuccessfulWorkerOutcome({
         evidence: remediationEvidence,
         waitForMaterialHead: () =>
           waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken)
@@ -2288,7 +2206,7 @@ export async function main() {
         runId: worker.id,
         token: actionsToken
       });
-      const remediationContinuation = await continueAfterSuccessfulRemediation({
+      const remediationContinuation = await continueAfterSuccessfulWorkerOutcome({
         evidence: remediationEvidence,
         waitForMaterialHead: () =>
           waitHeadChange(targetRepository, resumePr, beforeSha, targetReadToken)

@@ -218,7 +218,7 @@ test('codex command environment receives the validated sandbox PATH', async () =
     /CODEX_COMMAND_TOOLS[\s\S]*'cat'/
   );
 
-  for (const tool of ['gh', 'sh', 'sort']) {
+  for (const tool of ['gh', 'sh', 'sort', 'rm']) {
     assert.match(
       hostStager,
       new RegExp(`CODEX_COMMAND_TOOLS[\\s\\S]*'${tool}'`)
@@ -227,7 +227,7 @@ test('codex command environment receives the validated sandbox PATH', async () =
 
   assert.match(
     wrapper,
-    /for tool in bash cat gh git sed sh sort node npm pnpm safeoutputs/
+    /for tool in bash cat gh git sed sh sort node npm pnpm rm safeoutputs/
   );
 
   assert.match(
