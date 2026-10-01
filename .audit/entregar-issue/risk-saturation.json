@@ -1,1 +1,239 @@
-{"schema_version":2,"artifact_format":"base64-shards-v1","artifact_kind":"risk-saturation","compression":"gzip","encoded_size":1308,"encoded_sha256":"d11b9a479d129c52d8b72f4880e532143f0d8078385914cbda0b444d23316699","decoded_size":6549,"decoded_sha256":"26d5e877e2ed3fe3697959142ac5cd15c95586ded83ac1e06967463ac554c292","parts":[{"path":"risk-saturation.parts/part-000.b64","size":1308,"sha256":"d11b9a479d129c52d8b72f4880e532143f0d8078385914cbda0b444d23316699"}]}
+{
+  "schema_version": 1,
+  "head_sha": "03b5566926f30bd4114374cd644f7a7e34c26bce",
+  "families": [
+    {
+      "family": "authorization",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "tenant-isolation",
+      "applicable": true,
+      "reason": "Issue 301 canonical requirements derive tenant-isolation; exact-head adversarial controls cover the applicable surfaces.",
+      "control_ids": [
+        "NC-025-03"
+      ],
+      "dimensions": [
+        {
+          "surface": "execution-context-isolation",
+          "reason": "Discriminates tenant-isolation behavior required by the canonical Issue 301 contract.",
+          "control_ids": [
+            "NC-025-03"
+          ],
+          "status": "passed"
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "family": "public-boundary",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "reference-liveness",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "temporal-consistency",
+      "applicable": true,
+      "reason": "Issue 301 canonical requirements derive temporal-consistency; exact-head adversarial controls cover the applicable surfaces.",
+      "control_ids": [
+        "NC-011-01",
+        "NC-013-01",
+        "NC-018-01",
+        "NC-023-01",
+        "NC-025-02",
+        "NC-043-01",
+        "NC-051-01",
+        "NC-052-02",
+        "NC-053-01",
+        "NC-055-01",
+        "NC-062-01"
+      ],
+      "dimensions": [
+        {
+          "surface": "candidate-gate-ordering",
+          "reason": "Discriminates temporal-consistency behavior required by the canonical Issue 301 contract.",
+          "control_ids": [
+            "NC-011-01",
+            "NC-013-01",
+            "NC-018-01",
+            "NC-023-01",
+            "NC-025-02",
+            "NC-043-01",
+            "NC-051-01",
+            "NC-052-02",
+            "NC-053-01",
+            "NC-055-01",
+            "NC-062-01"
+          ],
+          "status": "passed"
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "family": "temporal-destination",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "concurrency-atomicity",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "idempotency",
+      "applicable": true,
+      "reason": "Issue 301 canonical requirements derive idempotency; exact-head adversarial controls cover the applicable surfaces.",
+      "control_ids": [
+        "NC-016-01",
+        "NC-027-01",
+        "NC-045-01",
+        "NC-057-01"
+      ],
+      "dimensions": [
+        {
+          "surface": "duplicate-processing",
+          "reason": "Retry, callback duplication, replay or reprocessing can execute the same logical operation more than once.",
+          "control_ids": [
+            "NC-016-01",
+            "NC-027-01",
+            "NC-045-01",
+            "NC-057-01"
+          ],
+          "status": "passed"
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "family": "rollback",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "historical-immutability",
+      "applicable": false,
+      "reason": "No current contract or diff signal requires this family.",
+      "control_ids": [],
+      "dimensions": [],
+      "status": "not-applicable"
+    },
+    {
+      "family": "structural-contract",
+      "applicable": true,
+      "reason": "Issue 301 canonical requirements derive structural-contract; exact-head adversarial controls cover the applicable surfaces.",
+      "control_ids": [
+        "NC-002-01",
+        "NC-005-01",
+        "NC-005-02",
+        "NC-006-01",
+        "NC-007-01",
+        "NC-009-01",
+        "NC-020-01",
+        "NC-021-01",
+        "NC-025-01",
+        "NC-028-01",
+        "NC-031-01",
+        "NC-032-01",
+        "NC-035-01",
+        "NC-044-01",
+        "NC-049-01",
+        "NC-052-01",
+        "NC-056-01",
+        "NC-059-01"
+      ],
+      "dimensions": [
+        {
+          "surface": "benchmark-path-fidelity",
+          "reason": "A benchmark can improve while bypassing productive wrappers or operations that still execute in the real application path.",
+          "control_ids": [
+            "NC-020-01",
+            "NC-032-01",
+            "NC-044-01",
+            "NC-052-01",
+            "NC-059-01"
+          ],
+          "status": "passed"
+        },
+        {
+          "surface": "canonical-source-consistency",
+          "reason": "Equivalent runtime, seed, import or maintenance paths can drift when they do not consume the same canonical product definition.",
+          "control_ids": [
+            "NC-005-01"
+          ],
+          "status": "passed"
+        },
+        {
+          "surface": "relational-semantic-integrity",
+          "reason": "A calculation can look correctly partitioned while linked records carry incompatible semantic dimensions because the canonical write path never enforces their relation.",
+          "control_ids": [
+            "NC-005-02"
+          ],
+          "status": "passed"
+        },
+        {
+          "surface": "shared-contract-consistency",
+          "reason": "Discriminates structural-contract behavior required by the canonical Issue 301 contract.",
+          "control_ids": [
+            "NC-002-01",
+            "NC-006-01",
+            "NC-007-01",
+            "NC-009-01",
+            "NC-021-01",
+            "NC-025-01",
+            "NC-028-01",
+            "NC-031-01",
+            "NC-035-01",
+            "NC-049-01",
+            "NC-056-01"
+          ],
+          "status": "passed"
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "family": "documentation",
+      "applicable": true,
+      "reason": "Issue 301 canonical requirements derive documentation; exact-head adversarial controls cover the applicable surfaces.",
+      "control_ids": [
+        "NC-064-02"
+      ],
+      "dimensions": [
+        {
+          "surface": "canonical-documentation-consistency",
+          "reason": "Discriminates documentation behavior required by the canonical Issue 301 contract.",
+          "control_ids": [
+            "NC-064-02"
+          ],
+          "status": "passed"
+        }
+      ],
+      "status": "passed"
+    }
+  ],
+  "material_families_missing_controls": []
+}
