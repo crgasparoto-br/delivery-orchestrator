@@ -3,13 +3,13 @@
   "classification": "implementation-only",
   "source_event": {
     "kind": "independent-rejection",
-    "rejection_id": "audit-rejection:abc8b5dc-9f6c-48d4-909a-3f056c3fb660",
+    "rejection_id": "audit-rejection:300-305-closed-pr-publication-gap",
     "finding_ids": [
-      "A-001"
+      "A-002"
     ]
   },
   "generalized_learning": {
     "promotion_status": "not-required",
-    "reason": "The governing entregar-issue contract already requires certified handoff and terminal validation; the rejection was an execution/package omission, so no new global rule is necessary."
+    "reason": "The defect is a targeted implementation gap in the existing authoritative-publication contract; the durable contract already requires fail-closed proof of no published material."
   }
 }

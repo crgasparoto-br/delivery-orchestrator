@@ -1,0 +1,5 @@
+Issue 300 targeted remediation evidence
+material_head_sha=25f6d39b9ac415e2c512fb2b8e9c0b39fe043f27
+ci_run=36916123994 conclusion=success
+controller publication lookup uses pulls?state=all so open/closed/merged managed PRs all prove prior publication
+regression=test 'issue 300: publication observation includes closed and merged managed PRs'

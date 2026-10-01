@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "contract_version": "2026-08-20.3",
-  "rejection_id": "audit-rejection:abc8b5dc-9f6c-48d4-909a-3f056c3fb660",
-  "head_sha": "9a34c199fa995246312fbc0ef8df7d7ac92597e4",
+  "rejection_id": "audit-rejection:300-305-scope-binding-mismatch",
+  "head_sha": "cd88be004c30d036805c39c8f4470b6cddbe744c",
   "findings": [
     {
-      "id": "A-001",
+      "id": "A-003",
       "disposition": "blocking",
       "status": "open",
       "actionable": true,
       "remediation_mode": "targeted-remediation",
-      "title": "Pacote certificado de entrega ausente",
-      "reason": "certified-handoff required but handoff-ready.json was not produced"
+      "title": "Scope certificado não corresponde ao diff real",
+      "reason": "scope.issue_changed_paths omitted audit artifacts that are present in work_item_start_sha..material_head_sha"
     }
   ],
   "recommendations": []

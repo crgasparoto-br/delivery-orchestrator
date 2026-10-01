@@ -1,20 +1,20 @@
 {
   "schema_version": 1,
   "repository": "crgasparoto-br/delivery-orchestrator",
-  "issue": 301,
-  "created_at": "2026-10-01T17:40:45.015755+00:00",
+  "issue": 300,
+  "created_at": "2026-10-01T19:05:30.721148+00:00",
   "primary_source_id": "SRC-ISSUE",
   "sources": [
     {
       "id": "SRC-ISSUE",
       "kind": "issue-body",
       "path": "specification-sources/SRC-ISSUE.txt",
-      "locator": "https://github.com/crgasparoto-br/delivery-orchestrator/issues/301",
-      "sha256": "1c4068fc0decb84582155ed53945285e8b59fb3329a3b4d5df4026ac2601393c",
+      "locator": "/mnt/data/issue300-audit/SRC-ISSUE.txt",
+      "sha256": "43cb1137aa1ffcfeae5d72f5fd99a231e46f820b4d52e37f1139063d8d69314c",
       "textual": true,
       "extract_source_id": null,
       "required": true,
-      "line_count": 165
+      "line_count": 40
     }
   ]
 }

@@ -58,6 +58,7 @@ test('recognizes only the exact context-rebuild infrastructure report with trust
   const failure = classifyPreMaterialWorkerFailure({
     workerConclusion: 'failure',
     hasPatch: false,
+    materialPublished: false,
     agentOutput: breakerOutput()
   });
   assert.equal(failure.recoverable, true);
@@ -70,8 +71,9 @@ test('recognizes only the exact context-rebuild infrastructure report with trust
 test('recognized context rebuild remains recoverable when workflow is technically successful', () => {
   const failure = classifyPreMaterialWorkerFailure({
     workerConclusion: 'success',
-    hasPatch: false,
-    agentOutput: breakerOutput()
+    hasPatch: true,
+    materialPublished: false,
+    agentOutput: breakerOutput('context-rebuild circuit breaker tripped: rebuild_factor=35.82 cumulative_input_tokens=2773503 thresholds=35/1000000')
   });
   assert.equal(failure.recoverable, true);
   assert.equal(failure.classification, 'context-rebuild-circuit-breaker');
@@ -81,25 +83,54 @@ test('recognized context rebuild remains recoverable when workflow is technicall
   });
 });
 
+test('issue 300: local patch evidence is recoverable when authoritative remote material is absent', () => {
+  const failure = classifyPreMaterialWorkerFailure({
+    workerConclusion: 'failure',
+    hasPatch: true,
+    materialPublished: false,
+    agentOutput: breakerOutput('context-rebuild circuit breaker tripped: rebuild_factor=35.36 cumulative_input_tokens=2742385 thresholds=35/1000000')
+  });
+  assert.equal(failure.recoverable, true);
+  assert.equal(failure.classification, 'context-rebuild-circuit-breaker');
+  assert.equal(failure.evidence.localPatchPresent, true);
+  assert.equal(failure.evidence.materialPublished, false);
+});
+
+test('issue 300: recognized incomplete report never becomes recoverable after remote material publication', () => {
+  const failure = classifyPreMaterialWorkerFailure({
+    workerConclusion: 'success',
+    hasPatch: true,
+    materialPublished: true,
+    agentOutput: breakerOutput()
+  });
+  assert.equal(failure.recoverable, false);
+  assert.equal(failure.recognizedReport, true);
+  assert.equal(failure.classification, 'context-rebuild-circuit-breaker-material-published');
+});
+
 test('random infrastructure_error is not recoverable', () => {
   const failure = classifyPreMaterialWorkerFailure({
     workerConclusion: 'failure',
     hasPatch: false,
+    materialPublished: false,
     agentOutput: breakerOutput('network is flaky')
   });
   assert.equal(failure.recoverable, false);
   assert.equal(failure.classification, 'unclassified-infrastructure-error');
 });
 
-test('missing, invalid or material has_patch evidence fails closed', () => {
-  for (const hasPatch of [undefined, null, true, 'false']) {
-    const failure = classifyPreMaterialWorkerFailure({
-      workerConclusion: 'failure',
-      hasPatch,
-      agentOutput: breakerOutput()
-    });
-    assert.equal(failure.recoverable, false);
-    assert.equal(failure.classification, 'material-status-not-trusted-no-patch');
+test('missing or ambiguous publication evidence stays fail closed without explicit remote proof', () => {
+  for (const materialPublished of [undefined, null, 'false']) {
+    for (const hasPatch of [undefined, null, false, true, 'false']) {
+      const failure = classifyPreMaterialWorkerFailure({
+        workerConclusion: 'failure',
+        hasPatch,
+        materialPublished,
+        agentOutput: breakerOutput()
+      });
+      assert.equal(failure.recoverable, false);
+      assert.equal(failure.classification, 'material-status-not-trusted-no-patch');
+    }
   }
 });
 
@@ -107,6 +138,7 @@ test('retry consumes the next implementation slot and exhausts exactly at the co
   const failure = classifyPreMaterialWorkerFailure({
     workerConclusion: 'failure',
     hasPatch: false,
+    materialPublished: false,
     agentOutput: breakerOutput()
   });
   assert.deepEqual(decidePreMaterialRetry({ failure, currentAttempt: 1, maxAttempts: 3 }), {
@@ -124,6 +156,7 @@ test('bounded retry context contains only durable retry identity, not transcript
   const failure = classifyPreMaterialWorkerFailure({
     workerConclusion: 'failure',
     hasPatch: false,
+    materialPublished: false,
     agentOutput: breakerOutput()
   });
   const context = boundedPreMaterialRetryContext({
@@ -308,4 +341,20 @@ test('same-attempt authorization retry is a reservable retry action', async () =
     source,
     /\['retry', 'retry-same-attempt'\]\.includes\(decision\.action\)/
   );
+});
+
+test('issue 300: controller observes remote managed PR state before classifying terminal initial worker output', async () => {
+  const source = await readFile(new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url), 'utf8');
+  const observation = source.indexOf('const publishedPullRequest = await observeManagedPullRequest');
+  const classification = source.indexOf('const semanticFailure = classifyPreMaterialWorkerFailure', observation);
+  assert.ok(observation >= 0);
+  assert.ok(classification > observation);
+  assert.match(source.slice(observation, classification + 500), /materialPublished/);
+  assert.match(source, /semanticFailure\.recognizedReport === true/);
+});
+
+test('issue 300: publication observation includes closed and merged managed PRs', async () => {
+  const source = await readFile(new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url), 'utf8');
+  assert.match(source, /pulls\?state=all&base=/);
+  assert.doesNotMatch(source, /pulls\?state=open&base=/);
 });

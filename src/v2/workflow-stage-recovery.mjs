@@ -17,7 +17,7 @@ function normalizeStage(stage) {
 export function classifyWorkflowStageFailure({
   stage,
   conclusion,
-  materialHeadChanged = false,
+  materialHeadChanged = null,
   hasPatch = null,
   agentOutput = null
 } = {}) {
@@ -29,12 +29,24 @@ export function classifyWorkflowStageFailure({
       const structured = classifyStructuredContextRebuildFailure({
         workerConclusion: terminalConclusion,
         hasPatch,
+        materialPublished: materialHeadChanged === false
+          ? false
+          : materialHeadChanged === true
+            ? true
+            : null,
         agentOutput
       });
       if (structured.recoverable) {
         return Object.freeze({
           ...structured,
           action: 'retry-same-stage',
+          stage: normalizedStage
+        });
+      }
+      if (structured.recognizedReport === true) {
+        return Object.freeze({
+          ...structured,
+          action: 'fail-closed',
           stage: normalizedStage
         });
       }
@@ -73,12 +85,24 @@ export function classifyWorkflowStageFailure({
     const structured = classifyStructuredContextRebuildFailure({
       workerConclusion: terminalConclusion,
       hasPatch,
+      materialPublished: materialHeadChanged === false
+        ? false
+        : materialHeadChanged === true
+          ? true
+          : null,
       agentOutput
     });
     if (structured.recoverable) {
       return Object.freeze({
         ...structured,
         action: 'retry-same-stage',
+        stage: normalizedStage
+      });
+    }
+    if (structured.recognizedReport === true) {
+      return Object.freeze({
+        ...structured,
+        action: 'fail-closed',
         stage: normalizedStage
       });
     }

@@ -1,10 +1,19 @@
 {
   "schema_version": 1,
-  "head_sha": "03b5566926f30bd4114374cd644f7a7e34c26bce",
+  "head_sha": "25f6d39b9ac415e2c512fb2b8e9c0b39fe043f27",
   "source_audits": [
     {
       "rejection_id": "audit-rejection:abc8b5dc-9f6c-48d4-909a-3f056c3fb660",
-      "finding_ids": ["A-001"],
+      "finding_ids": [
+        "A-001"
+      ],
+      "remediation_mode": "targeted-remediation"
+    },
+    {
+      "rejection_id": "audit-rejection:300-305-closed-pr-publication-gap",
+      "finding_ids": [
+        "A-002"
+      ],
       "remediation_mode": "targeted-remediation"
     }
   ],
