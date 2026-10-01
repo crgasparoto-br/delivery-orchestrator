@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const HEARTBEAT_MS = 60_000;
+const HEARTBEAT_MS = 20_000;
 
 function shouldEmitHeartbeat({
   now,
@@ -20,10 +20,10 @@ function elapsedSeconds(startedAt, now) {
   return Math.floor((now - startedAt) / 1000);
 }
 
-test('wait heartbeat is not emitted again before 60 seconds when state is unchanged', () => {
+test('wait heartbeat is not emitted again before 20 seconds when state is unchanged', () => {
   assert.equal(
     shouldEmitHeartbeat({
-      now: 59_999,
+      now: 19_999,
       lastHeartbeatAt: 0,
       observedState: 'run:in_progress:check:queued',
       lastObservedState: 'run:in_progress:check:queued'
@@ -32,10 +32,10 @@ test('wait heartbeat is not emitted again before 60 seconds when state is unchan
   );
 });
 
-test('wait heartbeat is emitted at the 60 second boundary', () => {
+test('wait heartbeat is emitted at the 20 second boundary', () => {
   assert.equal(
     shouldEmitHeartbeat({
-      now: 60_000,
+      now: 20_000,
       lastHeartbeatAt: 0,
       observedState: 'run:in_progress:check:queued',
       lastObservedState: 'run:in_progress:check:queued'
@@ -59,7 +59,7 @@ test('status change emits progress immediately before 60 seconds', () => {
 test('missing source run remains an observable wait state', () => {
   assert.equal(
     shouldEmitHeartbeat({
-      now: 60_000,
+      now: 20_000,
       lastHeartbeatAt: 0,
       observedState: 'source-run-missing',
       lastObservedState: 'source-run-missing'
@@ -72,6 +72,32 @@ test('elapsed time is deterministic and expressed in whole seconds', () => {
   assert.equal(elapsedSeconds(1_000, 61_999), 60);
   assert.equal(elapsedSeconds(10_000, 10_000), 0);
   assert.equal(elapsedSeconds(10_000, 130_001), 120);
+});
+
+test('initial and resumed controllers share a configurable <=30s heartbeat contract', async () => {
+  const [initial, resume] = await Promise.all([
+    readFile('scripts/run-delivery-v2-controller.mjs', 'utf8'),
+    readFile('scripts/resume-delivery-v2-controller.mjs', 'utf8')
+  ]);
+
+  for (const [name, body] of [['initial', initial], ['resume', resume]]) {
+    assert.match(body, /DELIVERY_V2_HEARTBEAT_MS/,
+      `${name}: heartbeat must be configurable`);
+    assert.match(body, /DELIVERY_V2_HEARTBEAT_MS \|\| 20000/,
+      `${name}: default heartbeat must remain 20 seconds`);
+    assert.match(body, /now - lastHeartbeatAt >= HEARTBEAT_MS/,
+      `${name}: long waits must use the shared heartbeat interval`);
+    assert.doesNotMatch(body, /now - lastHeartbeatAt >= 60_000/,
+      `${name}: hard-coded 60 second silence must not return`);
+  }
+});
+
+test('in-flight worker identity is persisted before resumed controller waits', async () => {
+  const resume = await readFile('scripts/resume-delivery-v2-controller.mjs', 'utf8');
+  const persistedIdentity = resume.indexOf("cannot safely resume an in-flight implementation without persisted worker identity");
+  const wait = resume.indexOf('let run = await waitWorkflowRun(', persistedIdentity);
+  assert.ok(persistedIdentity >= 0, 'resume must fail closed without persisted worker identity');
+  assert.ok(wait > persistedIdentity, 'resume may wait only after durable worker identity is available');
 });
 
 test('initial and resumed controllers expose progress for every material wait family', async () => {
