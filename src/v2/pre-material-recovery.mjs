@@ -14,17 +14,9 @@ function failClosed(classification, reason, extra = {}) {
 export function classifyStructuredContextRebuildFailure({
   workerConclusion,
   hasPatch,
+  materialPublished = null,
   agentOutput
 } = {}) {
-  if (hasPatch !== false) {
-    return failClosed(
-      'material-status-not-trusted-no-patch',
-      hasPatch === true
-        ? 'worker produced material patch'
-        : 'trusted has_patch=false evidence is unavailable'
-    );
-  }
-
   const terminalConclusion = String(workerConclusion ?? '').trim().toLowerCase();
   if (!['success', 'failure'].includes(terminalConclusion)) {
     return failClosed(
@@ -67,24 +59,56 @@ export function classifyStructuredContextRebuildFailure({
     );
   }
 
+  const parsedEvidence = Object.freeze({
+    rebuildFactor: Number(match[1]),
+    cumulativeInputTokens: Number(match[2]),
+    maxRebuildFactor: Number(match[3]),
+    rebuildMinCumulativeInputTokens: Number(match[4]),
+    localPatchPresent: hasPatch === true,
+    materialPublished: materialPublished === true
+  });
+
+  if (materialPublished === true) {
+    return failClosed(
+      'context-rebuild-circuit-breaker-material-published',
+      'recognized context-rebuild report occurred after material publication',
+      {
+        recognizedReport: true,
+        failureClass: 'infrastructure',
+        evidence: parsedEvidence
+      }
+    );
+  }
+
+  if (materialPublished !== false && hasPatch !== false) {
+    return failClosed(
+      'material-status-not-trusted-no-patch',
+      hasPatch === true
+        ? 'worker produced a local patch but authoritative remote publication evidence is unavailable'
+        : 'trusted no-published-material evidence is unavailable',
+      {
+        recognizedReport: true,
+        failureClass: 'infrastructure',
+        evidence: parsedEvidence
+      }
+    );
+  }
+
   return Object.freeze({
     recoverable: true,
+    recognizedReport: true,
     classification: 'context-rebuild-circuit-breaker',
     reason: 'infrastructure_error',
     failureStage: 'pre-material',
     failureClass: 'infrastructure',
-    evidence: Object.freeze({
-      rebuildFactor: Number(match[1]),
-      cumulativeInputTokens: Number(match[2]),
-      maxRebuildFactor: Number(match[3]),
-      rebuildMinCumulativeInputTokens: Number(match[4])
-    })
+    evidence: parsedEvidence
   });
 }
 
 export function classifyPreMaterialWorkerFailure({
   workerConclusion,
   hasPatch,
+  materialPublished = null,
   agentOutput,
   authorizationFailure = null
 } = {}) {
@@ -119,6 +143,7 @@ export function classifyPreMaterialWorkerFailure({
   return classifyStructuredContextRebuildFailure({
     workerConclusion,
     hasPatch,
+    materialPublished,
     agentOutput
   });
 }

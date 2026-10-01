@@ -293,33 +293,36 @@ async function waitWorkflowRun(repository, runId, token) {
   );
 }
 
+async function observeManagedPullRequest({ repository, issueNumber, baseBranch, since, token }) {
+  const closing = new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
+  const pulls = await withTransientFetchRetry(
+    () => api(`https://api.github.com/repos/${repository}/pulls?state=open&base=${encodeURIComponent(baseBranch)}&per_page=100`, token),
+    { label: `observeManagedPullRequest(${repository}#${issueNumber})` }
+  );
+  const trustedLogin = trustedCommentAuthorForRepository(repository);
+  const candidates = pulls.filter((pr) => Date.parse(pr.created_at) >= since - 5000 && String(pr.title ?? '').startsWith('[delivery-v2] ') && closing.test(String(pr.body ?? '')) && String(pr.user?.login ?? '').toLowerCase() === trustedLogin && String(pr.head?.repo?.full_name ?? repository) === repository);
+  if (candidates.length > 1) {
+    throw new Error(`multiple Delivery V2 PRs found for issue #${issueNumber}`);
+  }
+  return candidates[0] ?? null;
+}
+
 async function findManagedPullRequest({ repository, issueNumber, baseBranch, since, token }) {
   const startedAt = Date.now();
   const deadline = startedAt + 12 * 60 * 1000;
   let lastHeartbeatAt = 0;
-  const closing = new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
 
   while (Date.now() < deadline) {
-    const pulls = await withTransientFetchRetry(
-      () => api(`https://api.github.com/repos/${repository}/pulls?state=open&base=${encodeURIComponent(baseBranch)}&per_page=100`, token),
-      { label: `findManagedPullRequest(${repository}#${issueNumber})` }
-    );
+    const candidate = await observeManagedPullRequest({ repository, issueNumber, baseBranch, since, token });
 
-    const trustedLogin = trustedCommentAuthorForRepository(repository);
-    const candidates = pulls.filter((pr) => Date.parse(pr.created_at) >= since - 5000 && String(pr.title ?? '').startsWith('[delivery-v2] ') && closing.test(String(pr.body ?? '')) && String(pr.user?.login ?? '').toLowerCase() === trustedLogin && String(pr.head?.repo?.full_name ?? repository) === repository);
-
-    if (candidates.length === 1) {
+    if (candidate) {
       process.stdout.write(
         `[delivery-v2] managed pull request found ` +
         `repository=${repository} issue=${issueNumber} ` +
-        `pr=${candidates[0].number} ` +
+        `pr=${candidate.number} ` +
         `elapsed=${Math.floor((Date.now() - startedAt) / 1000)}s\n`
       );
-      return candidates[0];
-    }
-
-    if (candidates.length > 1) {
-      throw new Error(`multiple Delivery V2 PRs found for issue #${issueNumber}`);
+      return candidate;
     }
 
     const now = Date.now();
@@ -784,6 +787,7 @@ async function recordInitialSuccessfulNoMaterial({ repository, issueNumber, toke
         failureClass: outcome.action === 'blocked-no-material' ? 'semantic-no-material' : 'ambiguous-material-evidence',
         recoverable: false,
         hasPatch: evidence.hasPatch === false ? false : evidence.hasPatch === true ? true : null,
+        materialPublished: evidence.materialPublished === true,
         evidenceRef: outcome.evidenceRef ?? worker.html_url ?? null
       }
     }
@@ -806,6 +810,7 @@ async function recordInitialWorkerFailure({ repository, issueNumber, token, atte
     failureClass: failure.failureClass,
     recoverable: failure.recoverable === true,
     hasPatch: evidence.hasPatch === false ? false : evidence.hasPatch === true ? true : null,
+    materialPublished: evidence.materialPublished === true,
     evidenceRef: evidence.evidenceRef ?? worker.html_url ?? null
   });
   return persistBootstrapLeaseForController({
@@ -1094,63 +1099,86 @@ export async function main() {
       evidenceRef: workerUsage.evidenceRef ?? worker.html_url
     });
     if (workerUsage.evidenceRef) evidenceRefs.push(workerUsage.evidenceRef);
+    const materialEvidence = await downloadGhAwAgentOutputArtifact({
+      repository: orchestratorRepository,
+      runId: worker.id,
+      token: actionsToken
+    });
+    if (materialEvidence.evidenceRef) evidenceRefs.push(materialEvidence.evidenceRef);
+    const publishedPullRequest = await observeManagedPullRequest({
+      repository: targetRepository,
+      issueNumber,
+      baseBranch,
+      since: initialDispatchAt,
+      token: targetReadToken
+    });
+    const materialPublished = Boolean(publishedPullRequest);
+    const semanticFailure = classifyPreMaterialWorkerFailure({
+      workerConclusion: worker.conclusion,
+      hasPatch: materialEvidence.hasPatch,
+      materialPublished,
+      agentOutput: materialEvidence.agentOutput
+    });
+
     if (worker.conclusion === 'success') {
-      const materialEvidence = await downloadGhAwAgentOutputArtifact({
-        repository: orchestratorRepository,
-        runId: worker.id,
-        token: actionsToken
-      });
-      if (materialEvidence.evidenceRef) evidenceRefs.push(materialEvidence.evidenceRef);
+      if (semanticFailure.recoverable) {
+        await recordInitialWorkerFailure({
+          repository: targetRepository,
+          issueNumber,
+          token: targetWriteToken,
+          attempt: currentInitialAttempt,
+          dispatchNonce: currentDispatchNonce,
+          worker,
+          failure: semanticFailure,
+          evidence: { ...materialEvidence, materialPublished }
+        });
+
+        const retry = await reserveNextInitialAttempt({
+          repository: targetRepository,
+          issueNumber,
+          token: targetWriteToken,
+          currentAttempt: currentInitialAttempt,
+          maxAttempts: plan.implementation.maxAttempts,
+          workerWorkflow: initialWorkerIdentity,
+          failure: semanticFailure,
+          workerRunId: worker.id,
+          controllerRunId,
+          controllerHeadSha
+        });
+
+        if (retry.decision.action === 'budget-exhausted') {
+          throw new Error(`initial implementation budget exhausted after recoverable semantic infrastructure outcome: ${worker.html_url}`);
+        }
+        if (!['retry', 'retry-same-attempt'].includes(retry.decision.action)) {
+          throw new Error(`unsupported initial semantic retry decision: ${retry.decision.action}`);
+        }
+
+        currentInitialAttempt = retry.decision.nextAttempt;
+        currentDispatchNonce = retry.dispatchNonce;
+        currentRetryContext = JSON.stringify(retry.retryContext);
+        worker = null;
+        continue;
+      }
+
+      if (semanticFailure.recognizedReport === true) {
+        await recordInitialWorkerFailure({
+          repository: targetRepository,
+          issueNumber,
+          token: targetWriteToken,
+          attempt: currentInitialAttempt,
+          dispatchNonce: currentDispatchNonce,
+          worker,
+          failure: semanticFailure,
+          evidence: { ...materialEvidence, materialPublished }
+        });
+        throw new Error(`initial implementation reported incomplete after non-recoverable material state: ${semanticFailure.classification}: ${semanticFailure.reason}`);
+      }
+
       const materialOutcome = classifySuccessfulWorkerOutcome({
         ...materialEvidence,
         artifactError: materialEvidence.error ?? null
       });
       if (materialOutcome.action !== 'await-material-head') {
-        const semanticFailure = classifyPreMaterialWorkerFailure({
-          workerConclusion: worker.conclusion,
-          hasPatch: materialEvidence.hasPatch,
-          agentOutput: materialEvidence.agentOutput
-        });
-
-        if (semanticFailure.recoverable) {
-          await recordInitialWorkerFailure({
-            repository: targetRepository,
-            issueNumber,
-            token: targetWriteToken,
-            attempt: currentInitialAttempt,
-            dispatchNonce: currentDispatchNonce,
-            worker,
-            failure: semanticFailure,
-            evidence: materialEvidence
-          });
-
-          const retry = await reserveNextInitialAttempt({
-            repository: targetRepository,
-            issueNumber,
-            token: targetWriteToken,
-            currentAttempt: currentInitialAttempt,
-            maxAttempts: plan.implementation.maxAttempts,
-            workerWorkflow: initialWorkerIdentity,
-            failure: semanticFailure,
-            workerRunId: worker.id,
-            controllerRunId,
-            controllerHeadSha
-          });
-
-          if (retry.decision.action === 'budget-exhausted') {
-            throw new Error(`initial implementation budget exhausted after recoverable semantic infrastructure outcome: ${worker.html_url}`);
-          }
-          if (!['retry', 'retry-same-attempt'].includes(retry.decision.action)) {
-            throw new Error(`unsupported initial semantic retry decision: ${retry.decision.action}`);
-          }
-
-          currentInitialAttempt = retry.decision.nextAttempt;
-          currentDispatchNonce = retry.dispatchNonce;
-          currentRetryContext = JSON.stringify(retry.retryContext);
-          worker = null;
-          continue;
-        }
-
         await recordInitialSuccessfulNoMaterial({
           repository: targetRepository,
           issueNumber,
@@ -1158,7 +1186,7 @@ export async function main() {
           attempt: currentInitialAttempt,
           dispatchNonce: currentDispatchNonce,
           worker,
-          evidence: materialEvidence,
+          evidence: { ...materialEvidence, materialPublished },
           outcome: materialOutcome
         });
         throw new Error(`initial implementation completed without publishable material: ${materialOutcome.classification}: ${materialOutcome.reason}`);
@@ -1166,12 +1194,6 @@ export async function main() {
       break;
     }
 
-    const materialEvidence = await downloadGhAwAgentOutputArtifact({
-      repository: orchestratorRepository,
-      runId: worker.id,
-      token: actionsToken
-    });
-    if (materialEvidence.evidenceRef) evidenceRefs.push(materialEvidence.evidenceRef);
     const authorizationFailure = await detectBootstrapControllerRunMismatch({
       repository: targetRepository,
       issueNumber,
@@ -1186,13 +1208,14 @@ export async function main() {
     const failure = classifyPreMaterialWorkerFailure({
       workerConclusion: worker.conclusion,
       hasPatch: materialEvidence.hasPatch,
+      materialPublished,
       agentOutput: materialEvidence.agentOutput,
       authorizationFailure
     });
 
     await recordInitialWorkerFailure({
       repository: targetRepository, issueNumber, token: targetWriteToken, attempt: currentInitialAttempt,
-      dispatchNonce: currentDispatchNonce, worker, failure, evidence: materialEvidence
+      dispatchNonce: currentDispatchNonce, worker, failure, evidence: { ...materialEvidence, materialPublished }
     });
 
     const retry = await reserveNextInitialAttempt({
