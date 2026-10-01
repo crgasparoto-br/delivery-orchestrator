@@ -67,6 +67,20 @@ test('recognizes only the exact context-rebuild infrastructure report with trust
   assert.equal(failure.evidence.cumulativeInputTokens, 2931337);
 });
 
+test('recognized context rebuild remains recoverable when workflow is technically successful', () => {
+  const failure = classifyPreMaterialWorkerFailure({
+    workerConclusion: 'success',
+    hasPatch: false,
+    agentOutput: breakerOutput()
+  });
+  assert.equal(failure.recoverable, true);
+  assert.equal(failure.classification, 'context-rebuild-circuit-breaker');
+  assert.equal(failure.failureClass, 'infrastructure');
+  assert.deepEqual(decidePreMaterialRetry({ failure, currentAttempt: 1, maxAttempts: 3 }), {
+    action: 'retry', currentAttempt: 1, nextAttempt: 2, maxAttempts: 3
+  });
+});
+
 test('random infrastructure_error is not recoverable', () => {
   const failure = classifyPreMaterialWorkerFailure({
     workerConclusion: 'failure',
