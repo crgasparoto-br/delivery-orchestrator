@@ -296,7 +296,7 @@ async function waitWorkflowRun(repository, runId, token) {
 async function observeManagedPullRequest({ repository, issueNumber, baseBranch, since, token }) {
   const closing = new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
   const pulls = await withTransientFetchRetry(
-    () => api(`https://api.github.com/repos/${repository}/pulls?state=open&base=${encodeURIComponent(baseBranch)}&per_page=100`, token),
+    () => api(`https://api.github.com/repos/${repository}/pulls?state=all&base=${encodeURIComponent(baseBranch)}&per_page=100`, token),
     { label: `observeManagedPullRequest(${repository}#${issueNumber})` }
   );
   const trustedLogin = trustedCommentAuthorForRepository(repository);

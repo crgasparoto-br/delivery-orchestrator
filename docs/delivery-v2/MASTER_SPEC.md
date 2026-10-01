@@ -351,7 +351,7 @@ Before a material candidate exists, a failed initial implementation worker is au
 - structured agent output contains exactly one `report_incomplete` item and no framework errors;
 - that item has `reason=infrastructure_error`;
 - its detail matches the versioned context-rebuild circuit-breaker signature (`rebuild_factor`, `cumulative_input_tokens`, and `thresholds`);
-- authoritative remote repository evidence proves that no managed PR/material was published for the attempt. A local `aw.patch`, `has_patch=true`, or agent `file_change` is not publication by itself.
+- authoritative remote repository evidence proves that no managed PR/material was published for the attempt. The lookup covers managed PRs in any lifecycle state, so a closed or merged PR still proves prior publication. A local `aw.patch`, `has_patch=true`, or agent `file_change` is not publication by itself.
 
 The controller records the failed worker identity and bounded classification in the bootstrap lease before deciding continuation. If budget remains, it reserves the **next** implementation attempt and a fresh dispatch nonce before dispatching a new worker, then supplies only bounded durable retry context (classification/reason/stage/previous attempt/run identity), never the previous transcript, tool trace or full model history. An actually executed retry therefore consumes one ordinary implementation slot. For a CRITICAL ceiling of three, the only same-cycle sequence is 1 -> 2 -> 3; a third recoverable failure becomes `escalated-initial-budget-exhausted` / `human-escalation`.
 

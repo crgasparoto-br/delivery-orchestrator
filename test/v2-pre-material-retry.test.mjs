@@ -345,3 +345,9 @@ test('issue 300: controller observes remote managed PR state before classifying 
   assert.match(source.slice(observation, classification + 500), /materialPublished/);
   assert.match(source, /semanticFailure\.recognizedReport === true/);
 });
+
+test('issue 300: publication observation includes closed and merged managed PRs', async () => {
+  const source = await readFile(new URL('../scripts/run-delivery-v2-controller.mjs', import.meta.url), 'utf8');
+  assert.match(source, /pulls\?state=all&base=/);
+  assert.doesNotMatch(source, /pulls\?state=open&base=/);
+});
