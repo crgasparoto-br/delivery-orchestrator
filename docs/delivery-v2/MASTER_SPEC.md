@@ -155,7 +155,7 @@ A workflow heartbeat is not evidence that the conversation stream is alive. Logs
 
 Controllers and direct delivery tooling therefore must not use an unbounded or semantically blocking wait such as `--watch`, `tail -f`, prolonged sleep, or an equivalent process whose purpose is to wait for future remote state. Remote state is observed through bounded snapshots with explicit deadlines. Before a material wait, the durable state must contain enough identity to resume without repeating completed discovery, planning, implementation, or exact-head validation.
 
-An interface/runtime disconnect does not invalidate already-persisted material evidence. Recovery revalidates fresh remote identity and resumes from the persisted next phase.
+An interface/runtime disconnect does not invalidate already-persisted material evidence. Recovery must revalidate fresh remote identity and resume from the persisted next phase.
 
 ### 4.6 No implicit merge authority
 
