@@ -731,6 +731,29 @@ async function runWorkflowStageWithInfrastructureRecovery({
     runs.push(run);
 
     if (run.conclusion === 'success') {
+      if (stage !== 'independent-audit') {
+        const workerEvidence = await downloadGhAwAgentOutputArtifact({
+          repository: orchestratorRepository,
+          runId: run.id,
+          token: actionsToken
+        });
+        const semanticOutcome = classifyWorkflowStageFailure({
+          stage,
+          conclusion: run.conclusion,
+          materialHeadChanged: false,
+          hasPatch: workerEvidence.hasPatch,
+          agentOutput: workerEvidence.agentOutput
+        });
+        const semanticRetry = decideWorkflowStageRetry({
+          failure: semanticOutcome,
+          retriesUsed,
+          maxRetries: MAX_INFRA_STAGE_RETRIES
+        });
+        if (semanticRetry.action === 'retry-same-stage') {
+          retriesUsed = semanticRetry.nextRetriesUsed;
+          continue;
+        }
+      }
       return Object.freeze({
         run,
         runs: Object.freeze([...runs]),
