@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 import { originIssueStatus } from '../src/v2/controller-continuity.mjs';
+import { githubApi } from '../src/v2/controller-github-api.mjs';
 
 const MARKER = '<!-- delivery-v2-origin-status -->';
 
@@ -16,23 +17,6 @@ function positiveInteger(value, label) {
   if (!Number.isInteger(resolved) || resolved < 1) throw new Error(`${label} must be a positive integer`);
   return resolved;
 }
-function headers(token) {
-  return {
-    Accept: 'application/vnd.github+json',
-    Authorization: `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'delivery-v2-origin-status'
-  };
-}
-async function api(url, token, options = {}) {
-  const response = await fetch(url, { ...options, headers: { ...headers(token), ...(options.headers ?? {}) } });
-  if (!response.ok) throw new Error(`GitHub API ${response.status} ${options.method ?? 'GET'} ${url}: ${await response.text()}`);
-  if (response.status === 204) return null;
-  const text = await response.text();
-  return text ? JSON.parse(text) : null;
-}
-
 export async function main() {
   const repository = requiredString(process.env.TARGET_REPOSITORY, 'TARGET_REPOSITORY');
   const issueNumber = positiveInteger(process.env.TARGET_ISSUE, 'TARGET_ISSUE');
@@ -58,15 +42,17 @@ export async function main() {
 ${deliveryStatus.body}
 
 Estado: **${deliveryStatus.state}**`;
-  const comments = await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=100`, token);
+  const comments = await githubApi(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments?per_page=100`, token, { userAgent: 'delivery-v2-origin-status' });
   const existing = comments.find((comment) => String(comment.body ?? '').includes(MARKER));
   if (existing) {
-    await api(`https://api.github.com/repos/${repository}/issues/comments/${existing.id}`, token, {
+    await githubApi(`https://api.github.com/repos/${repository}/issues/comments/${existing.id}`, token, {
+      userAgent: 'delivery-v2-origin-status',
       method: 'PATCH',
       body: JSON.stringify({ body })
     });
   } else {
-    await api(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`, token, {
+    await githubApi(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`, token, {
+      userAgent: 'delivery-v2-origin-status',
       method: 'POST',
       body: JSON.stringify({ body })
     });

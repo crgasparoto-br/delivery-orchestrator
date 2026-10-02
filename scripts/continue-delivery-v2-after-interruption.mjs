@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 
 import { decideControllerContinuation } from '../src/v2/controller-continuity.mjs';
 import { parseTrustedJsonEnvelope, trustedCommentAuthorForRepository } from '../src/v2/controller-provenance.mjs';
+import { githubApi, listAllGithub } from '../src/v2/controller-github-api.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const CONTINUATION_MARKER = '<!-- delivery-v2-continuation -->';
@@ -16,32 +17,6 @@ function positiveInteger(value, label) {
   const resolved = Number(value);
   if (!Number.isInteger(resolved) || resolved < 1) throw new Error(`${label} must be a positive integer`);
   return resolved;
-}
-function headers(token) {
-  return {
-    Accept: 'application/vnd.github+json',
-    Authorization: `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'delivery-v2-continuation'
-  };
-}
-async function api(url, token, options = {}) {
-  const response = await fetch(url, { ...options, headers: { ...headers(token), ...(options.headers ?? {}) } });
-  if (!response.ok) throw new Error(`GitHub API ${response.status} ${options.method ?? 'GET'} ${url}: ${await response.text()}`);
-  if (response.status === 204) return null;
-  const text = await response.text();
-  return text ? JSON.parse(text) : null;
-}
-async function listAll(url, token) {
-  const rows = [];
-  for (let page = 1; ; page += 1) {
-    const join = url.includes('?') ? '&' : '?';
-    const batch = await api(`${url}${join}per_page=100&page=${page}`, token);
-    rows.push(...batch);
-    if (batch.length < 100) break;
-  }
-  return rows;
 }
 function managedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin }) {
   const closing = new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`, 'i');
@@ -80,7 +55,7 @@ export async function main() {
   const writeToken = requiredString(process.env.DELIVERY_GITHUB_WRITE_TOKEN, 'DELIVERY_GITHUB_WRITE_TOKEN');
   const actionsToken = requiredString(process.env.GITHUB_TOKEN, 'GITHUB_TOKEN');
 
-  const pulls = await listAll(`https://api.github.com/repos/${targetRepository}/pulls?state=open&base=${encodeURIComponent(baseBranch)}`, readToken);
+  const pulls = await listAllGithub(`https://api.github.com/repos/${targetRepository}/pulls?state=open&base=${encodeURIComponent(baseBranch)}`, readToken);
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
   const pr = managedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin });
   if (!pr) {
@@ -88,7 +63,7 @@ export async function main() {
     return;
   }
 
-  const comments = await listAll(`https://api.github.com/repos/${targetRepository}/issues/${pr.number}/comments`, readToken);
+  const comments = await listAllGithub(`https://api.github.com/repos/${targetRepository}/issues/${pr.number}/comments`, readToken);
   const envelope = parseTrustedJsonEnvelope(comments, {
     marker: STATE_MARKER,
     label: 'Delivery V2 state',
@@ -153,12 +128,14 @@ export async function main() {
 \`\`\`json
 ${JSON.stringify({ persistent, controller: reservedController }, null, 2)}
 \`\`\``;
-  await api(`https://api.github.com/repos/${targetRepository}/issues/comments/${envelope.commentId}`, writeToken, {
+  await githubApi(`https://api.github.com/repos/${targetRepository}/issues/comments/${envelope.commentId}`, writeToken, {
+    userAgent: 'delivery-v2-continuation',
     method: 'PATCH',
     body: JSON.stringify({ body: reservedStateBody })
   });
 
-  await api(`https://api.github.com/repos/${orchestratorRepository}/actions/workflows/delivery-v2-dispatch.yml/dispatches`, actionsToken, {
+  await githubApi(`https://api.github.com/repos/${orchestratorRepository}/actions/workflows/delivery-v2-dispatch.yml/dispatches`, actionsToken, {
+    userAgent: 'delivery-v2-continuation',
     method: 'POST',
     body: JSON.stringify({
       ref: orchestratorRef,
@@ -182,7 +159,8 @@ A controller interruption was recovered from a persisted checkpoint.
 - continuationCount: ${decision.nextContinuationCount}
 - materialHeadSha: \`${checkpoint.materialHeadSha}\`
 - previousRun: https://github.com/${orchestratorRepository}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-  await api(`https://api.github.com/repos/${targetRepository}/issues/${pr.number}/comments`, writeToken, {
+  await githubApi(`https://api.github.com/repos/${targetRepository}/issues/${pr.number}/comments`, writeToken, {
+    userAgent: 'delivery-v2-continuation',
     method: 'POST',
     body: JSON.stringify({ body })
   });
