@@ -161,13 +161,6 @@ jobs:
         if: always() && steps.reentry.outputs.run_controller == 'true'
         run: node scripts/finalize-delivery-v2-controller-status.mjs
 
-      - name: Update origin issue delivery status
-        if: always() && steps.reentry.outputs.run_controller == 'true'
-        env:
-          DELIVERY_V2_CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
-          DELIVERY_V2_CONTINUATION_SCHEDULED: ${{ steps.continuation.outputs.scheduled || 'false' }}
-        run: node scripts/publish-delivery-v2-issue-status.mjs
-
       # The controller wrote the completed delivery into the operational metrics store during the
       # run. Publishing it back to the default branch is what makes the cross-delivery history
       # durable and is the single source `npm run ai:usage` and the AI Usage Report workflow read.
@@ -211,6 +204,13 @@ jobs:
             docs/delivery-v2/evidence/delivery-v2-metrics.json
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Update origin issue delivery status
+        if: always() && steps.reentry.outputs.run_controller == 'true'
+        env:
+          DELIVERY_V2_CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
+          DELIVERY_V2_CONTINUATION_SCHEDULED: ${{ steps.continuation.outputs.scheduled || 'false' }}
+        run: node scripts/publish-delivery-v2-issue-status.mjs
 
       # This must remain the final operational step: job.status must already include failures from
       # evidence publication and every other preceding step before we render the terminal summary.

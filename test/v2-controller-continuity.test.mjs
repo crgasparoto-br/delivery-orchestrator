@@ -124,3 +124,24 @@ test('dispatch workflow schedules bounded continuation and always updates the or
   assert.match(workflow, /publish-delivery-v2-issue-status\.mjs/);
   assert.match(workflow, /DELIVERY_V2_CONTINUATION_SCHEDULED/);
 });
+
+
+test('continuation reservation is persisted before the redispatch outbound', async () => {
+  const body = await readFile('scripts/continue-delivery-v2-after-interruption.mjs', 'utf8');
+  const reservation = body.indexOf('reservedStateBody');
+  const statePatch = body.indexOf('/issues/comments/', reservation);
+  const dispatch = body.indexOf('/actions/workflows/delivery-v2-dispatch.yml/dispatches', reservation);
+  assert.ok(reservation >= 0, 'continuation must create a durable reservation');
+  assert.ok(statePatch > reservation, 'continuation reservation must be persisted');
+  assert.ok(dispatch > statePatch, 'outbound redispatch must happen only after the reservation is durable');
+});
+
+test('origin issue status is published only after delivery evidence upload', async () => {
+  const workflow = await readFile('.github/workflows/delivery-v2-dispatch.yml', 'utf8');
+  const evidence = workflow.indexOf('Upload delivery evidence');
+  const issueStatus = workflow.indexOf('Update origin issue delivery status');
+  const summary = workflow.indexOf('Publish controller summary');
+  assert.ok(evidence >= 0);
+  assert.ok(issueStatus > evidence, 'issue status must not precede final evidence publication');
+  assert.ok(summary > issueStatus, 'controller summary remains the final operational step');
+});

@@ -55,16 +55,6 @@ function managedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin }) {
   if (candidates.length > 1) throw new Error(`multiple Delivery V2 PRs found for issue #${issueNumber}`);
   return candidates[0] ?? null;
 }
-function parseContinuationCount(comments, fingerprint) {
-  let max = 0;
-  for (const comment of comments) {
-    const body = String(comment?.body ?? '');
-    if (!body.includes(CONTINUATION_MARKER) || !body.includes(fingerprint)) continue;
-    const match = body.match(/continuationCount:\s*(\d+)/);
-    if (match) max = Math.max(max, Number(match[1]));
-  }
-  return max;
-}
 async function setOutput(name, value) {
   const outputPath = process.env.GITHUB_OUTPUT;
   if (!outputPath) return;
@@ -132,7 +122,10 @@ export async function main() {
     checkpoint.materialHeadSha,
     checkpoint.nextPhase
   ].join(':');
-  const previousContinuationCount = parseContinuationCount(comments, fingerprint);
+  const previousContinuationCount =
+    controller.continuationFingerprint === fingerprint
+      ? Number(controller.continuationCount ?? 0)
+      : 0;
   const decision = decideControllerContinuation({
     controllerOutcome,
     stateStatus: persistent.status,
@@ -147,6 +140,23 @@ export async function main() {
     await setOutput('reason', decision.reason);
     return;
   }
+
+  const reservedController = {
+    ...controller,
+    continuationFingerprint: decision.fingerprint,
+    continuationCount: decision.nextContinuationCount,
+    continuationReservedByRunId: Number(process.env.GITHUB_RUN_ID)
+  };
+  const reservedStateBody = `${STATE_MARKER}
+## Delivery V2 controller state
+
+\`\`\`json
+${JSON.stringify({ persistent, controller: reservedController }, null, 2)}
+\`\`\``;
+  await api(`https://api.github.com/repos/${targetRepository}/issues/comments/${envelope.commentId}`, writeToken, {
+    method: 'PATCH',
+    body: JSON.stringify({ body: reservedStateBody })
+  });
 
   await api(`https://api.github.com/repos/${orchestratorRepository}/actions/workflows/delivery-v2-dispatch.yml/dispatches`, actionsToken, {
     method: 'POST',
