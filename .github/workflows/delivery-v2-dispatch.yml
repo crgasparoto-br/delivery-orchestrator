@@ -146,6 +146,13 @@ jobs:
           DELIVERY_V2_RECOVER_WORKER_RUN_ID: ${{ steps.reentry.outputs.recover_worker_run_id }}
         run: node scripts/run-delivery-v2-controller.mjs
 
+      - name: Schedule resilient continuation
+        id: continuation
+        if: always() && steps.reentry.outputs.run_controller == 'true' && steps.controller.outcome == 'failure'
+        env:
+          DELIVERY_V2_CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
+        run: node scripts/continue-delivery-v2-after-interruption.mjs
+
       - name: Persist exhausted initial attempt
         if: failure() && steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr == ''
         run: node scripts/guard-delivery-v2-reentry.mjs
@@ -197,6 +204,13 @@ jobs:
             docs/delivery-v2/evidence/delivery-v2-metrics.json
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Update origin issue delivery status
+        if: always() && steps.reentry.outputs.run_controller == 'true'
+        env:
+          DELIVERY_V2_CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
+          DELIVERY_V2_CONTINUATION_SCHEDULED: ${{ steps.continuation.outputs.scheduled || 'false' }}
+        run: node scripts/publish-delivery-v2-issue-status.mjs
 
       # This must remain the final operational step: job.status must already include failures from
       # evidence publication and every other preceding step before we render the terminal summary.
