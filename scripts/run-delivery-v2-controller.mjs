@@ -40,6 +40,7 @@ import {
   runDurationMs
 } from '../src/v2/controller-observability.mjs';
 import { recordControllerTechnicalError } from '../src/v2/controller-summary.mjs';
+import { buildControllerCheckpoint } from '../src/v2/controller-continuity.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
@@ -1281,7 +1282,22 @@ export async function main() {
     provider
   });
   const persist = async (extra = {}, stateOverride = state) => {
-    controller = { ...controller, observability, ...extra };
+    const nextPhase = String(extra.nextAction ?? controller.nextAction ?? '').trim();
+    const waitCheckpoint = nextPhase ? buildControllerCheckpoint({
+      repository: targetRepository,
+      issueNumber,
+      pullRequestNumber: pullRequest.number,
+      branch: pullRequest.head.ref,
+      materialHeadSha,
+      nextPhase,
+      evidenceRefs
+    }) : null;
+    controller = {
+      ...controller,
+      observability,
+      ...extra,
+      ...(waitCheckpoint ? { waitCheckpoint } : {})
+    };
     return upsertStateComment({ repository: targetRepository, prNumber: pullRequest.number, state: stateOverride, identity: identity(), classifier, workflowChecks: latestCheck && latestSourceRun ? checkEvidence(latestCheck, latestSourceRun, materialHeadSha) : [], evidenceRefs, token: targetWriteToken, extra: controller });
   };
 

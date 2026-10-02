@@ -45,6 +45,7 @@ import { buildClassifierPackage } from '../src/v2/classifier-distribution.mjs';
 import { fetchImmutableCompareEvidence } from '../src/v2/github-audit-evidence.mjs';
 import { resolveCheckedOutControlPlaneHeadSha } from './guard-delivery-v2-reentry.mjs';
 import { recordControllerTechnicalError } from '../src/v2/controller-summary.mjs';
+import { buildControllerCheckpoint } from '../src/v2/controller-continuity.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const RISK_RANK = Object.freeze({ fast: 1, standard: 2, critical: 3 });
@@ -1708,7 +1709,26 @@ export async function main() {
   const targetWriteToken = requiredEnv('DELIVERY_GITHUB_WRITE_TOKEN');
 
   const persist = async (extra = {}, stateOverride = state) => {
-    controller = { ...controller, observability, observabilityHistoryComplete, ...extra };
+    const nextPhase = String(extra.nextAction ?? controller.nextAction ?? '').trim();
+    const waitCheckpoint = nextPhase ? buildControllerCheckpoint({
+      repository: targetRepository,
+      issueNumber,
+      pullRequestNumber: resumePr,
+      branch: pullRequest.head.ref,
+      materialHeadSha,
+      nextPhase,
+      evidenceRefs: [
+        latestCheck?.details_url,
+        latestSourceRun?.html_url
+      ].filter(Boolean)
+    }) : null;
+    controller = {
+      ...controller,
+      observability,
+      observabilityHistoryComplete,
+      ...extra,
+      ...(waitCheckpoint ? { waitCheckpoint } : {})
+    };
     return upsertStateComment({
       repository: targetRepository,
       prNumber: resumePr,

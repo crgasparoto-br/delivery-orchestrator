@@ -157,6 +157,10 @@ Controllers and direct delivery tooling therefore must not use an unbounded or s
 
 An interface/runtime disconnect does not invalidate already-persisted material evidence. Recovery must revalidate fresh remote identity and resume from the persisted next phase.
 
+For every persisted controller transition that can precede a material wait, the durable PR state also carries a recoverable wait checkpoint with repository, issue, PR, head branch, exact material SHA, phase owner, next phase, freeze/handoff state and last useful evidence reference. A controller-process failure may schedule a bounded continuation only when that checkpoint is consistent with the persisted next action. Continuation is fail-closed on phase mismatch and has a finite redispatch budget.
+
+The origin issue has a controller-owned status marker. Interrupted runs that successfully schedule a continuation publish a non-terminal `retomada-agendada` status; the run that reaches a terminal Delivery V2 state overwrites that marker with the terminal result. This issue update is operational state, not a substitute for exact-head CI, audit or release evidence.
+
 ### 4.6 No implicit merge authority
 
 Workers do not receive a generic merge capability. Default policy is `noAutomaticMerge=true`. A repository may later opt into an explicit merge policy only through versioned configuration and only after the exact-head release gate. Absence of that explicit policy means human merge.

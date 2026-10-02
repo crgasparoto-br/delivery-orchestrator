@@ -146,6 +146,13 @@ jobs:
           DELIVERY_V2_RECOVER_WORKER_RUN_ID: ${{ steps.reentry.outputs.recover_worker_run_id }}
         run: node scripts/run-delivery-v2-controller.mjs
 
+      - name: Schedule resilient continuation
+        id: continuation
+        if: always() && steps.reentry.outputs.run_controller == 'true' && steps.controller.outcome == 'failure'
+        env:
+          DELIVERY_V2_CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
+        run: node scripts/continue-delivery-v2-after-interruption.mjs
+
       - name: Persist exhausted initial attempt
         if: failure() && steps.reentry.outputs.run_controller == 'true' && steps.reentry.outputs.resume_pr == ''
         run: node scripts/guard-delivery-v2-reentry.mjs
@@ -153,6 +160,13 @@ jobs:
       - name: Finalize terminal release status
         if: always() && steps.reentry.outputs.run_controller == 'true'
         run: node scripts/finalize-delivery-v2-controller-status.mjs
+
+      - name: Update origin issue delivery status
+        if: always() && steps.reentry.outputs.run_controller == 'true'
+        env:
+          DELIVERY_V2_CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
+          DELIVERY_V2_CONTINUATION_SCHEDULED: ${{ steps.continuation.outputs.scheduled || 'false' }}
+        run: node scripts/publish-delivery-v2-issue-status.mjs
 
       # The controller wrote the completed delivery into the operational metrics store during the
       # run. Publishing it back to the default branch is what makes the cross-delivery history
