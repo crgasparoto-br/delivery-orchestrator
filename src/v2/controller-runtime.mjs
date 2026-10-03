@@ -452,9 +452,22 @@ export function releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, b
   });
 }
 
+function mergePreviewShaFromCheckoutLog(log, pullRequestNumber) {
+  const prNumber = requiredPositiveInteger(pullRequestNumber, 'pullRequestNumber');
+  const patterns = [
+    new RegExp(`\\+([0-9a-f]{40}):refs/remotes/pull/${prNumber}/merge\\b`, 'i'),
+    new RegExp(`\\b([0-9a-f]{40})\\s+->\\s+(?:refs/remotes/)?pull/${prNumber}/merge\\b`, 'i'),
+    new RegExp(`refs/pull/${prNumber}/merge\\s+([0-9a-f]{40})\\b`, 'i')
+  ];
+  for (const pattern of patterns) {
+    const match = String(log ?? '').match(pattern);
+    if (match?.[1]) return match[1].toLowerCase();
+  }
+  return null;
+}
+
 export function mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs = [], requiredJobName, jobLogById = {} } = {}) {
   const identity = releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, baseSha });
-  if (!identity.mergePreview.previewSha) return identity.mergePreview;
   if (!workflowRun || typeof workflowRun !== 'object' || Array.isArray(workflowRun)) throw new Error('merge-preview source workflow run is required');
   const expectedHead = requiredSha(materialHeadSha, 'materialHeadSha');
   const expectedBase = requiredSha(baseSha, 'baseSha');
@@ -473,13 +486,17 @@ export function mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha,
   if (!job) return identity.mergePreview;
   const jobId = requiredPositiveInteger(job.id, 'merge-preview job.id');
   const log = String(jobLogById?.[jobId] ?? '');
-  const previewSha = identity.mergePreview.previewSha;
-  const prMergeRef = `refs/pull/${prNumber}/merge`;
-  if (!log.includes(previewSha) || (!log.includes(prMergeRef) && !log.includes(`pull/${prNumber}/merge`))) {
-    return identity.mergePreview;
-  }
+  const previewSha = mergePreviewShaFromCheckoutLog(log, prNumber);
+  if (!previewSha) return identity.mergePreview;
+
+  // GitHub may regenerate refs/pull/<n>/merge and therefore change the current
+  // pull_request.merge_commit_sha without any material head/base drift. The
+  // completed source workflow checkout log is the authoritative preview
+  // identity for that run because the workflow itself is already bound above
+  // to the exact PR, material head and base SHA.
   return Object.freeze({
     ...identity.mergePreview,
+    previewSha,
     status: String(job.status ?? '').toLowerCase() || 'pending',
     conclusion: job.conclusion == null ? null : String(job.conclusion).toLowerCase(),
     evidenceRef: requiredString(job.html_url ?? workflowRun.html_url, 'merge-preview job evidence URL')
