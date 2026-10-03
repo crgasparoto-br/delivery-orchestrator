@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ciFailureClassForEvidence, expectedDispatchTitle, markPullRequestReadyForReview, mergePreviewEvidenceFromWorkflow, releaseIdentityFromPullRequest, selectCorrelatedWorkflowRun, validateAuditArtifactPayload, validateTerminalAuditProviderFailurePayload } from '../src/v2/controller-runtime.mjs';
+import { ciFailureClassForEvidence, expectedDispatchTitle, markPullRequestReadyForReview, mergePreviewEvidenceFromWorkflow, releaseIdentityFromPullRequest, retainMergePreviewLogEdges, selectCorrelatedWorkflowRun, validateAuditArtifactPayload, validateTerminalAuditProviderFailurePayload } from '../src/v2/controller-runtime.mjs';
 
 const SHA = 'a'.repeat(40);
 
@@ -364,6 +364,19 @@ test('merge-preview release evidence requires a successful named job from the ex
   const unbound = mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: run, jobs: [{ id: 2, name: 'Merge preview compatibility', status: 'completed', conclusion: 'success', html_url: 'job:2' }], requiredJobName: 'Merge preview compatibility', jobLogById: { 2: 'checkout unrelated-ref' } });
   assert.equal(unbound.status, 'pending');
   assert.throws(() => mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: { ...run, head_sha: 'e'.repeat(40) }, jobs: [], requiredJobName: 'Merge preview compatibility' }), /head mismatch/);
+});
+
+test('merge-preview log retention preserves checkout provenance from the beginning and terminal evidence from the end', () => {
+  const previewSha = 'd'.repeat(40);
+  const checkout = `[command]/usr/bin/git fetch origin +${previewSha}:refs/remotes/pull/64/merge`;
+  const terminal = 'Process completed with exit code 0.';
+  const hugeMiddle = 'x'.repeat(500_000);
+  const retained = retainMergePreviewLogEdges([checkout, hugeMiddle, terminal].join('\n'), 300_000);
+  assert.match(retained, new RegExp(previewSha));
+  assert.match(retained, /refs\/remotes\/pull\/64\/merge/);
+  assert.match(retained, /Process completed with exit code 0/);
+  assert.match(retained, /middle truncated/);
+  assert.ok(retained.length < 301_000);
 });
 
 test('merge-preview evidence remains valid when GitHub regenerates the synthetic merge SHA after CI', () => {

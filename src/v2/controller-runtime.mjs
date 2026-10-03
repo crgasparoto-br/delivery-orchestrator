@@ -452,6 +452,16 @@ export function releaseIdentityFromPullRequest(pullRequest, { materialHeadSha, b
   });
 }
 
+export function retainMergePreviewLogEdges(log, maxChars = 300_000) {
+  const text = String(log ?? '');
+  const limit = Number(maxChars);
+  if (!Number.isInteger(limit) || limit < 1) throw new Error('maxChars must be a positive integer');
+  if (text.length <= limit) return text;
+  const headChars = Math.floor(limit / 2);
+  const tailChars = limit - headChars;
+  return `${text.slice(0, headChars)}\n...[merge-preview log middle truncated]...\n${text.slice(-tailChars)}`;
+}
+
 function mergePreviewShaFromCheckoutLog(log, pullRequestNumber) {
   const prNumber = requiredPositiveInteger(pullRequestNumber, 'pullRequestNumber');
   const patterns = [
@@ -515,7 +525,7 @@ export async function collectMergePreviewEvidence({ repository, pullRequest, mat
   if (matchingJobs[0]) {
     const jobId = requiredPositiveInteger(matchingJobs[0].id, 'merge-preview job.id');
     const response = await fetch(`https://api.github.com/repos/${repo}/actions/jobs/${jobId}/logs`, { headers: githubHeaders(token) });
-    if (response.ok) jobLogById[jobId] = (await response.text()).slice(-300000);
+    if (response.ok) jobLogById[jobId] = retainMergePreviewLogEdges(await response.text());
   }
   return mergePreviewEvidenceFromWorkflow({ pullRequest, materialHeadSha, baseSha, workflowRun, jobs, requiredJobName, jobLogById });
 }
