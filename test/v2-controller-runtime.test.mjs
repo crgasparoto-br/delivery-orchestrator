@@ -366,6 +366,42 @@ test('merge-preview release evidence requires a successful named job from the ex
   assert.throws(() => mergePreviewEvidenceFromWorkflow({ pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: { ...run, head_sha: 'e'.repeat(40) }, jobs: [], requiredJobName: 'Merge preview compatibility' }), /head mismatch/);
 });
 
+test('merge-preview evidence remains valid when GitHub regenerates the synthetic merge SHA after CI', () => {
+  const baseSha = 'c'.repeat(40);
+  const ciPreviewSha = 'd'.repeat(40);
+  const currentPreviewSha = 'e'.repeat(40);
+  const pr = { number: 64, html_url: 'https://github.com/owner/target/pull/64', head: { sha: SHA }, base: { sha: baseSha }, merge_commit_sha: currentPreviewSha };
+  const run = { id: 10, event: 'pull_request', head_sha: SHA, html_url: 'run:10', pull_requests: [{ number: 64, head: { sha: SHA }, base: { sha: baseSha } }] };
+  const log = [
+    `[command]/usr/bin/git fetch origin +${ciPreviewSha}:refs/remotes/pull/64/merge`,
+    ` * [new ref]         ${ciPreviewSha} -> pull/64/merge`
+  ].join('\n');
+  const evidence = mergePreviewEvidenceFromWorkflow({
+    pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: run,
+    jobs: [{ id: 1, name: 'Merge preview compatibility', status: 'completed', conclusion: 'success', html_url: 'job:1' }],
+    requiredJobName: 'Merge preview compatibility', jobLogById: { 1: log }
+  });
+  assert.equal(evidence.previewSha, ciPreviewSha);
+  assert.equal(evidence.status, 'completed');
+  assert.equal(evidence.conclusion, 'success');
+  assert.equal(evidence.evidenceRef, 'job:1');
+});
+
+test('merge-preview evidence can bind completed CI while the current API preview SHA is temporarily absent', () => {
+  const baseSha = 'c'.repeat(40);
+  const ciPreviewSha = 'd'.repeat(40);
+  const pr = { number: 64, html_url: 'https://github.com/owner/target/pull/64', head: { sha: SHA }, base: { sha: baseSha }, merge_commit_sha: null };
+  const run = { id: 10, event: 'pull_request', head_sha: SHA, html_url: 'run:10', pull_requests: [{ number: 64, head: { sha: SHA }, base: { sha: baseSha } }] };
+  const evidence = mergePreviewEvidenceFromWorkflow({
+    pullRequest: pr, materialHeadSha: SHA, baseSha, workflowRun: run,
+    jobs: [{ id: 1, name: 'Merge preview compatibility', status: 'completed', conclusion: 'success', html_url: 'job:1' }],
+    requiredJobName: 'Merge preview compatibility', jobLogById: { 1: `checkout refs/pull/64/merge ${ciPreviewSha}` }
+  });
+  assert.equal(evidence.previewSha, ciPreviewSha);
+  assert.equal(evidence.status, 'completed');
+  assert.equal(evidence.conclusion, 'success');
+});
+
 test('CI remediation treats billing in repository path as incidental when TypeScript failure is strong', () => {
   assert.equal(
     ciFailureClassForEvidence({
