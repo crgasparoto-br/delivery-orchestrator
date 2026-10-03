@@ -3,6 +3,21 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+export function changedPathsFromGitPatch(patchPath, {
+  inspectPatch = (file) => execFileSync('git', ['apply', '--numstat', '-z', file])
+} = {}) {
+  const output = inspectPatch(patchPath);
+  const fields = Buffer.isBuffer(output) ? output.toString('utf8').split('\0') : String(output).split('\0');
+  const paths = [];
+  for (const field of fields) {
+    if (!field) continue;
+    const columns = field.split('\t');
+    if (columns.length !== 3 || !columns[2]) throw new Error('candidate patch numstat is malformed');
+    paths.push(columns[2]);
+  }
+  return [...new Set(paths)].sort();
+}
+
 function headers(token) {
   return {
     Accept: 'application/vnd.github+json',
@@ -83,6 +98,9 @@ export async function downloadGhAwAgentOutputArtifact({
 
       return {
         hasPatch: artifact.name === 'agent' ? patchPaths.length > 0 : null,
+        changedPaths: artifact.name === 'agent'
+          ? [...new Set(patchPaths.flatMap((patchPath) => changedPathsFromGitPatch(patchPath)))].sort()
+          : null,
         agentOutput: JSON.parse(await readFile(agentOutputPath, 'utf8')),
         evidenceRef: artifact.archive_download_url,
         artifactId: artifact.id

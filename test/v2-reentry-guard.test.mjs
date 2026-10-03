@@ -4,13 +4,17 @@ import test from 'node:test';
 import { createPersistentDeliveryState } from '../src/v2/persistent-state.mjs';
 import {
   detectLegacyBootstrapControllerRunMismatch,
+  detectMaterialScopeGuardFailure,
   ensureLegacyAdoptionPullRequestTitle,
   evaluateReentry,
   parseBootstrapLease,
   parsePersistentStateEnvelope,
   rearmLegacyNonrecoverableBootstrapLease,
+  recoveryContextForScopeCorrection,
   selectManagedPullRequest
 } from '../scripts/guard-delivery-v2-reentry.mjs';
+import { changedPathsFromGitPatch } from '../src/v2/gh-aw-agent-output-artifact.mjs';
+import { createWorkerScopeBinding } from '../.github/scripts/delivery-v2-worker-scope-contract.mjs';
 import { bootstrapLeaseForDecision } from '../scripts/reserve-delivery-v2-initial-attempt.mjs';
 import {
   controllerMetadataForNewMaterial,
@@ -512,6 +516,86 @@ test('legacy nonrecoverable bootstrap remains fail-closed without exact authoriz
   });
   assert.equal(sameEpoch.runController, false);
   assert.equal(sameEpoch.nextAction, 'human-escalation');
+});
+
+test('scope correction reuses the same terminal attempt only when the new explicit envelope covers the authoritative patch', () => {
+  const oldBinding = createWorkerScopeBinding({
+    repository: 'owner/repo',
+    issue: { number: 63, title: 'old', body: '' },
+    authorizedPaths: ['scripts/guard-delivery-v2-reentry.mjs']
+  });
+  const correctedBinding = createWorkerScopeBinding({
+    repository: 'owner/repo',
+    issue: { number: 63, title: 'corrected', body: '' },
+    authorizedPaths: ['scripts/guard-delivery-v2-reentry.mjs', 'src/v2/gh-aw-agent-output-artifact.mjs']
+  });
+  const bootstrapLease = {
+    repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex',
+    implementationAttempts: 1, status: 'escalated-initial-nonrecoverable',
+    controllerRunId: 41, controllerHeadSha: CONTROLLER_OLD, scopeBinding: oldBinding,
+    lastFailure: { workerRunId: 388, hasPatch: true }
+  };
+  const observedPatch = {
+    hasPatch: true,
+    materialPublished: false,
+    changedPaths: ['scripts/guard-delivery-v2-reentry.mjs', 'src/v2/gh-aw-agent-output-artifact.mjs'],
+    evidenceRef: 'artifact:388'
+  };
+  const scopeGuardFailure = {
+    classification: 'material-scope-guard-rejected-local-patch',
+    workerRunId: 388,
+    evidenceRef: 'github:job/388'
+  };
+
+  const recovery = recoveryContextForScopeCorrection({ bootstrapLease, scopeGuardFailure, observedPatch, correctedScopeBinding: correctedBinding });
+  assert.equal(recovery.retryMode, 'reuse-current-attempt');
+  assert.equal(recovery.grantedImplementationAttempts, 0);
+  assert.deepEqual(recovery.changedPaths, observedPatch.changedPaths);
+
+  const decision = evaluateReentry({
+    bootstrapLease, targetRepository: 'owner/repo', issueNumber: 63, baseBranch: 'main',
+    provider: 'codex', scopeGuardFailure, observedPatch, correctedScopeBinding: correctedBinding,
+    rearmDispatchNonce: 'scope-corrected-nonce'
+  });
+  assert.equal(decision.nextAction, 'dispatch-reserved-initial-attempt');
+  assert.equal(decision.priorInitialAttempts, 1);
+  const rearmed = rearmLegacyNonrecoverableBootstrapLease(bootstrapLease, decision, {
+    currentControllerRunId: 42,
+    currentControllerHeadSha: CONTROLLER_NEW
+  });
+  assert.equal(rearmed.implementationAttempts, 1);
+  assert.equal(rearmed.dispatchNonce, 'scope-corrected-nonce');
+  assert.deepEqual(rearmed.scopeBinding, correctedBinding);
+  assert.deepEqual(rearmed.recovery.previousScopeBinding, oldBinding);
+
+  const incomplete = createWorkerScopeBinding({
+    repository: 'owner/repo', issue: { number: 63, title: 'still incomplete', body: '' },
+    authorizedPaths: ['src/v2/gh-aw-agent-output-artifact.mjs']
+  });
+  assert.equal(recoveryContextForScopeCorrection({ bootstrapLease, scopeGuardFailure, observedPatch, correctedScopeBinding: incomplete }), null);
+  assert.equal(recoveryContextForScopeCorrection({ bootstrapLease, scopeGuardFailure, observedPatch: { ...observedPatch, materialPublished: true }, correctedScopeBinding: correctedBinding }), null);
+  assert.equal(recoveryContextForScopeCorrection({ bootstrapLease: { ...bootstrapLease, status: 'escalated-initial-budget-exhausted' }, scopeGuardFailure, observedPatch, correctedScopeBinding: correctedBinding }), null);
+});
+
+test('scope correction requires one GitHub-owned failed material scope guard job', async () => {
+  const lease = { status: 'escalated-initial-nonrecoverable', lastFailure: { workerRunId: 388, hasPatch: true } };
+  const worker = { id: 388, status: 'completed', conclusion: 'failure', html_url: 'github:run/388' };
+  const detected = await detectMaterialScopeGuardFailure({
+    bootstrapLease: lease, recoveredWorkerRun: worker, orchestratorRepository: 'owner/orchestrator', actionsToken: 'token',
+    listJobs: async () => [{ id: 9, html_url: 'github:job/9', steps: [{ name: 'Validate controller-authorized material scope', conclusion: 'failure' }] }]
+  });
+  assert.equal(detected.evidenceRef, 'github:job/9');
+  assert.equal(await detectMaterialScopeGuardFailure({
+    bootstrapLease: lease, recoveredWorkerRun: worker, orchestratorRepository: 'owner/orchestrator', actionsToken: 'token',
+    listJobs: async () => [{ steps: [{ name: 'Validate controller-authorized material scope', conclusion: 'success' }] }]
+  }), null);
+});
+
+test('agent artifact patch inspection returns exact deterministic changed paths', () => {
+  const changed = changedPathsFromGitPatch('/unused.patch', {
+    inspectPatch: () => Buffer.from('1\t0\tscripts/guard-delivery-v2-reentry.mjs\0-\t-\tsrc/v2/gh-aw-agent-output-artifact.mjs\0')
+  });
+  assert.deepEqual(changed, ['scripts/guard-delivery-v2-reentry.mjs', 'src/v2/gh-aw-agent-output-artifact.mjs']);
 });
 
 test('legacy authorization recovery proves provider-specific agent execution was skipped', async () => {
