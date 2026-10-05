@@ -526,7 +526,7 @@ test('scope correction reuses the same terminal attempt only when the new explic
   });
   const correctedBinding = createWorkerScopeBinding({
     repository: 'owner/repo',
-    issue: { number: 63, title: 'corrected', body: '' },
+    issue: { number: 63, title: 'old', body: '' },
     authorizedPaths: ['scripts/guard-delivery-v2-reentry.mjs', 'src/v2/gh-aw-agent-output-artifact.mjs']
   });
   const bootstrapLease = {
@@ -567,6 +567,31 @@ test('scope correction reuses the same terminal attempt only when the new explic
   assert.equal(rearmed.dispatchNonce, 'scope-corrected-nonce');
   assert.deepEqual(rearmed.scopeBinding, correctedBinding);
   assert.deepEqual(rearmed.recovery.previousScopeBinding, oldBinding);
+
+  const changedContract = createWorkerScopeBinding({
+    repository: 'owner/repo',
+    issue: { number: 63, title: 'corrected', body: '' },
+    authorizedPaths: ['scripts/guard-delivery-v2-reentry.mjs', 'src/v2/gh-aw-agent-output-artifact.mjs']
+  });
+  assert.equal(recoveryContextForScopeCorrection({
+    bootstrapLease, scopeGuardFailure, observedPatch, correctedScopeBinding: changedContract
+  }), null);
+  const changedContractDecision = evaluateReentry({
+    bootstrapLease, targetRepository: 'owner/repo', issueNumber: 63, baseBranch: 'main',
+    provider: 'codex', scopeGuardFailure, observedPatch, correctedScopeBinding: changedContract,
+    rearmDispatchNonce: 'changed-contract-nonce'
+  });
+  assert.equal(changedContractDecision.runController, false);
+  assert.equal(changedContractDecision.nextAction, 'human-escalation');
+
+  const wrongIssueBinding = createWorkerScopeBinding({
+    repository: 'owner/repo',
+    issue: { number: 64, title: 'old', body: '' },
+    authorizedPaths: ['scripts/guard-delivery-v2-reentry.mjs', 'src/v2/gh-aw-agent-output-artifact.mjs']
+  });
+  assert.equal(recoveryContextForScopeCorrection({
+    bootstrapLease, scopeGuardFailure, observedPatch, correctedScopeBinding: wrongIssueBinding
+  }), null);
 
   const incomplete = createWorkerScopeBinding({
     repository: 'owner/repo', issue: { number: 63, title: 'still incomplete', body: '' },

@@ -146,8 +146,16 @@ export function recoveryContextForScopeCorrection({
     || bootstrapLease?.lastFailure?.hasPatch !== true
   ) return null;
 
+  const previousScopeBinding = bootstrapLease?.scopeBinding;
+  if (
+    !previousScopeBinding
+    || String(correctedScopeBinding?.repository ?? '') !== String(previousScopeBinding.repository ?? '')
+    || Number(correctedScopeBinding?.issueNumber) !== Number(previousScopeBinding.issueNumber)
+    || String(correctedScopeBinding?.issueContractSha256 ?? '') !== String(previousScopeBinding.issueContractSha256 ?? '')
+  ) return null;
+
   try {
-    assertChangedPathsAuthorized(observedPatch.changedPaths, bootstrapLease.scopeBinding);
+    assertChangedPathsAuthorized(observedPatch.changedPaths, previousScopeBinding);
     return null;
   } catch {
     // The persisted envelope must reject the exact local patch; otherwise this
