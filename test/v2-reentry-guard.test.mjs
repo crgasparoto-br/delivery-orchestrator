@@ -533,7 +533,7 @@ test('scope correction reuses the same terminal attempt only when the new explic
     repository: 'owner/repo', issueNumber: 63, baseBranch: 'main', provider: 'codex',
     implementationAttempts: 1, status: 'escalated-initial-nonrecoverable',
     controllerRunId: 41, controllerHeadSha: CONTROLLER_OLD, scopeBinding: oldBinding,
-    lastFailure: { workerRunId: 388, hasPatch: true }
+    lastFailure: { workerRunId: 388, hasPatch: true, failureStage: 'pre-material' }
   };
   const observedPatch = {
     hasPatch: true,
@@ -603,7 +603,7 @@ test('scope correction reuses the same terminal attempt only when the new explic
 });
 
 test('scope correction requires one GitHub-owned failed material scope guard job', async () => {
-  const lease = { status: 'escalated-initial-nonrecoverable', lastFailure: { workerRunId: 388, hasPatch: true } };
+  const lease = { status: 'escalated-initial-nonrecoverable', lastFailure: { workerRunId: 388, hasPatch: true, failureStage: 'pre-material' } };
   const worker = { id: 388, status: 'completed', conclusion: 'failure', html_url: 'github:run/388' };
   const detected = await detectMaterialScopeGuardFailure({
     bootstrapLease: lease, recoveredWorkerRun: worker, orchestratorRepository: 'owner/orchestrator', actionsToken: 'token',
