@@ -8,11 +8,12 @@ import { reconcilePersistentState } from '../src/v2/persistent-state.mjs';
 import { executionPolicyFor } from '../src/v2/execution-policy.mjs';
 import { resolveProviderSelectionForRisk } from '../src/v2/provider-policy.mjs';
 import { createDispatchNonce, expectedDispatchTitle, selectCorrelatedWorkflowRun } from '../src/v2/controller-runtime.mjs';
-import { parseTrustedJsonEnvelope, selectExistingPullRequest, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
+import { hasPublishedPullRequestForIssue, parseTrustedJsonEnvelope, selectExistingPullRequest, trustedCommentAuthorForRepository, validateControllerRunProvenance } from '../src/v2/controller-provenance.mjs';
 import { classifyLegacyAdoptionBootstrap, createLegacyAdoption, legacyAdoptionComment, parseLegacyAdoptionEnvelope, reconcileLegacyAdoption, validateLegacyAdoptionControllerRun } from '../src/v2/legacy-adoption.mjs';
 import { withTransientFetchRetry } from '../src/v2/github-api-retry.mjs';
 import { recordControllerTechnicalError } from '../src/v2/controller-summary.mjs';
-import { issueContractFingerprint } from '../.github/scripts/delivery-v2-worker-scope-contract.mjs';
+import { assertChangedPathsAuthorized, createWorkerScopeBinding, issueContractFingerprint, pathWithinAuthorizedScope } from '../.github/scripts/delivery-v2-worker-scope-contract.mjs';
+import { downloadGhAwAgentOutputArtifact } from '../src/v2/gh-aw-agent-output-artifact.mjs';
 
 const STATE_MARKER = '<!-- delivery-v2-state -->';
 const BOOTSTRAP_MARKER = '<!-- delivery-v2-bootstrap-state -->';
@@ -126,6 +127,68 @@ export function recoveryContextForLegacyNonrecoverableBootstrap({
     previousWorkerRunId: Number(lastFailure.workerRunId),
     persistedClassification: String(lastFailure.classification ?? '')
   });
+}
+
+export function recoveryContextForScopeCorrection({
+  bootstrapLease,
+  scopeGuardFailure = null,
+  observedPatch = null,
+  correctedScopeBinding = null
+} = {}) {
+  const lastFailure = bootstrapLease?.lastFailure;
+  if (
+    bootstrapLease?.status !== 'escalated-initial-nonrecoverable'
+    || lastFailure?.failureStage !== 'pre-material'
+    || scopeGuardFailure?.classification !== 'material-scope-guard-rejected-local-patch'
+    || !Number.isSafeInteger(Number(lastFailure?.workerRunId))
+    || Number(lastFailure.workerRunId) < 1
+    || Number(scopeGuardFailure.workerRunId) !== Number(lastFailure.workerRunId)
+    || !Number.isSafeInteger(Number(bootstrapLease.implementationAttempts))
+    || Number(bootstrapLease.implementationAttempts) < 1
+    || observedPatch?.hasPatch !== true
+    || observedPatch?.materialPublished !== false
+    || lastFailure?.materialPublished === true
+    || !Array.isArray(observedPatch.changedPaths)
+    || observedPatch.changedPaths.length === 0
+    || lastFailure?.hasPatch !== true
+  ) return null;
+
+  const previousScopeBinding = bootstrapLease?.scopeBinding;
+  if (
+    !previousScopeBinding
+    || previousScopeBinding.schemaVersion !== 1
+    || correctedScopeBinding?.schemaVersion !== 1
+    || previousScopeBinding.enforcement !== 'explicit-exclusive'
+    || correctedScopeBinding?.enforcement !== 'explicit-exclusive'
+    || !Array.isArray(previousScopeBinding.authorizedPaths)
+    || String(previousScopeBinding.repository ?? '') !== String(bootstrapLease.repository ?? '')
+    || Number(previousScopeBinding.issueNumber) !== Number(bootstrapLease.issueNumber)
+    || !normalizedFingerprint(previousScopeBinding.issueContractSha256)
+    || String(correctedScopeBinding?.repository ?? '') !== String(previousScopeBinding.repository ?? '')
+    || Number(correctedScopeBinding?.issueNumber) !== Number(previousScopeBinding.issueNumber)
+    || String(correctedScopeBinding?.issueContractSha256 ?? '') !== String(previousScopeBinding.issueContractSha256 ?? '')
+  ) return null;
+
+  try {
+    // Validate the old envelope independently. A malformed binding is not
+    // evidence that a valid authorization excluded the material patch.
+    const previous = assertChangedPathsAuthorized(previousScopeBinding.authorizedPaths, previousScopeBinding);
+    const accepted = assertChangedPathsAuthorized(observedPatch.changedPaths, correctedScopeBinding);
+    if (accepted.changedPaths.every((path) => pathWithinAuthorizedScope(path, previous.authorizedPaths))) return null;
+    return Object.freeze({
+      reason: 'material-scope-corrected-after-local-patch-rejection',
+      previousImplementationAttempts: Number(bootstrapLease.implementationAttempts),
+      grantedImplementationAttempts: 0,
+      retryMode: 'reuse-current-attempt',
+      previousWorkerRunId: Number(lastFailure.workerRunId),
+      changedPaths: accepted.changedPaths,
+      previousScopeBinding,
+      correctedScopeBinding,
+      evidenceRef: scopeGuardFailure.evidenceRef ?? observedPatch.evidenceRef ?? null
+    });
+  } catch {
+    return null;
+  }
 }
 
 export function recoveryContextForSuccessfulBootstrapWithoutPr({
@@ -451,7 +514,7 @@ function bootstrapRecoveryDecision({ pullRequest, remoteHeadSha, bootstrapLease,
   });
 }
 
-export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope = null, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null, bootstrapControllerHeadSha = null, currentControllerHeadSha = null, currentIssueContractSha256 = null, legacyAuthorizationFailure = null, rearmDispatchNonce = null } = {}) {
+export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope = null, bootstrapLease, targetRepository, issueNumber, baseBranch, provider, model = null, recoveredWorkerRun = null, bootstrapControllerHeadSha = null, currentControllerHeadSha = null, currentIssueContractSha256 = null, legacyAuthorizationFailure = null, scopeGuardFailure = null, observedPatch = null, correctedScopeBinding = null, rearmDispatchNonce = null } = {}) {
   const resolvedIssue = positiveInteger(issueNumber, 'issueNumber');
   const resolvedProvider = String(provider ?? '').toLowerCase();
 
@@ -566,7 +629,12 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
       });
     }
     if (bootstrapLease.status === 'escalated-initial-nonrecoverable') {
-      const recovery = recoveryContextForLegacyNonrecoverableBootstrap({
+      const recovery = recoveryContextForScopeCorrection({
+        bootstrapLease,
+        scopeGuardFailure,
+        observedPatch,
+        correctedScopeBinding
+      }) ?? recoveryContextForLegacyNonrecoverableBootstrap({
         bootstrapLease,
         currentControllerHeadSha,
         bootstrapControllerHeadSha,
@@ -767,14 +835,22 @@ export function evaluateReentry({ pullRequest, stateEnvelope, adoptionEnvelope =
   });
 }
 
-async function listOpenPullRequests(repository, token) {
+async function listPullRequests(repository, token, { state = 'open', read = api } = {}) {
   const pulls = [];
   for (let page = 1; ; page += 1) {
-    const batch = await api(`https://api.github.com/repos/${repository}/pulls?state=open&per_page=100&page=${page}`, token);
+    const batch = await read(`https://api.github.com/repos/${repository}/pulls?state=${state}&per_page=100&page=${page}`, token);
+    if (!Array.isArray(batch)) throw new Error('GitHub pull request page must be an array');
     pulls.push(...batch);
     if (batch.length < 100) break;
   }
   return pulls;
+}
+
+export async function observeScopeCorrectionPublication({ repository, issueNumber, token, read = api } = {}) {
+  // Publication is historical, not a property of the current open-PR list.
+  // Keep this observation separate from active PR selection/adoption.
+  const pulls = await listPullRequests(repository, token, { state: 'all', read });
+  return hasPublishedPullRequestForIssue(pulls, { repository, issueNumber });
 }
 
 async function listIssueComments(repository, issueNumber, token) {
@@ -890,7 +966,10 @@ export function rearmLegacyNonrecoverableBootstrapLease(
   decision,
   { currentControllerRunId, currentControllerHeadSha } = {}
 ) {
-  if (decision?.recovery?.reason !== 'control-plane-changed-after-legacy-authorization-failure') return null;
+  if (![
+    'control-plane-changed-after-legacy-authorization-failure',
+    'material-scope-corrected-after-local-patch-rejection'
+  ].includes(decision?.recovery?.reason)) return null;
   if (lease?.status !== 'escalated-initial-nonrecoverable') {
     throw new Error('legacy nonrecoverable recovery requires escalated-initial-nonrecoverable state');
   }
@@ -932,10 +1011,44 @@ export function rearmLegacyNonrecoverableBootstrapLease(
     controllerHeadSha: currentHeadSha,
     workerRunId: null,
     dispatchNonce,
+    ...(decision.recovery.correctedScopeBinding
+      ? { scopeBinding: Object.freeze({ ...decision.recovery.correctedScopeBinding }) }
+      : {}),
     recovery: Object.freeze({
       ...decision.recovery,
       previousFailure: lastFailure ?? null
     })
+  });
+}
+
+export async function detectMaterialScopeGuardFailure({
+  bootstrapLease,
+  recoveredWorkerRun,
+  orchestratorRepository,
+  actionsToken,
+  listJobs = async ({ repository, runId, token }) => {
+    const payload = await api(`https://api.github.com/repos/${repository}/actions/runs/${runId}/jobs?per_page=100`, token);
+    return payload.jobs ?? [];
+  }
+} = {}) {
+  if (
+    bootstrapLease?.status !== 'escalated-initial-nonrecoverable'
+    || bootstrapLease?.lastFailure?.failureStage !== 'pre-material'
+    || bootstrapLease?.lastFailure?.hasPatch !== true
+    || recoveredWorkerRun?.status !== 'completed'
+    || recoveredWorkerRun?.conclusion !== 'failure'
+    || Number(recoveredWorkerRun.id) !== Number(bootstrapLease?.lastFailure?.workerRunId)
+  ) return null;
+  const jobs = await listJobs({ repository: orchestratorRepository, runId: recoveredWorkerRun.id, token: actionsToken });
+  const matching = jobs.filter((job) => (job.steps ?? []).some((step) =>
+    String(step?.name ?? '') === 'Validate controller-authorized material scope'
+    && String(step?.conclusion ?? '') === 'failure'
+  ));
+  if (matching.length !== 1) return null;
+  return Object.freeze({
+    classification: 'material-scope-guard-rejected-local-patch',
+    workerRunId: Number(recoveredWorkerRun.id),
+    evidenceRef: matching[0].html_url ?? recoveredWorkerRun.html_url ?? null
   });
 }
 
@@ -946,7 +1059,7 @@ export function rearmSuccessfulBootstrapAfterIssueContractChange(
 ) {
   if (decision?.recovery?.reason !== 'issue-contract-changed-after-successful-pre-material-worker-without-pr') return null;
   if (lease?.status !== 'reserved-initial-attempt') {
-    throw new Error('issue-contract recovery requires reserved-initial-attempt state');
+    throw new Error('issue-contract bootstrap recovery requires reserved-initial-attempt state');
   }
 
   const activeControllerRunId = positiveInteger(currentControllerRunId, 'currentControllerRunId');
@@ -1209,7 +1322,7 @@ async function main() {
   const currentControllerRunId = positiveInteger(requiredEnv('GITHUB_RUN_ID'), 'GITHUB_RUN_ID');
 
   const trustedLogin = trustedCommentAuthorForRepository(targetRepository);
-  const pulls = await listOpenPullRequests(targetRepository, readToken);
+  const pulls = await listPullRequests(targetRepository, readToken);
   const pullRequest = selectManagedPullRequest(pulls, { issueNumber, baseBranch, trustedLogin, repository: targetRepository });
   let stateEnvelope = null;
   let adoptionEnvelope = null;
@@ -1253,6 +1366,38 @@ async function main() {
       })
     : null;
   const recoveredWorkerRun = bootstrapLease ? await recoverBootstrapWorkerRun(bootstrapLease, orchestratorRepository, orchestratorRef, actionsToken) : null;
+  const scopeGuardFailure = bootstrapLease
+    ? await detectMaterialScopeGuardFailure({
+        bootstrapLease,
+        recoveredWorkerRun,
+        orchestratorRepository,
+        actionsToken
+      })
+    : null;
+  const patchArtifact = scopeGuardFailure
+    ? await downloadGhAwAgentOutputArtifact({
+        repository: orchestratorRepository,
+        runId: recoveredWorkerRun.id,
+        token: actionsToken
+      })
+    : null;
+  const observedPatch = patchArtifact
+    ? Object.freeze({
+        hasPatch: patchArtifact.hasPatch,
+        changedPaths: patchArtifact.changedPaths,
+        materialPublished: pullRequest !== null || await observeScopeCorrectionPublication({
+          repository: targetRepository, issueNumber, token: readToken
+        }),
+        evidenceRef: patchArtifact.evidenceRef
+      })
+    : null;
+  const correctedScopeBinding = scopeGuardFailure && currentIssue
+    ? createWorkerScopeBinding({
+        repository: targetRepository,
+        issue: currentIssue,
+        authorizedPaths: loadV2Config({}, process.env).changedPaths
+      })
+    : null;
   const legacyAuthorizationFailure = bootstrapLease
     ? await detectLegacyBootstrapControllerRunMismatch({
         bootstrapLease,
@@ -1281,7 +1426,10 @@ async function main() {
       currentControllerHeadSha,
       currentIssueContractSha256,
       legacyAuthorizationFailure,
-      rearmDispatchNonce: (legacyAuthorizationFailure || (bootstrapLease && recoveredWorkerRun?.status === 'completed' && recoveredWorkerRun?.conclusion === 'success')) ? createDispatchNonce() : null
+      scopeGuardFailure,
+      observedPatch,
+      correctedScopeBinding,
+      rearmDispatchNonce: (legacyAuthorizationFailure || scopeGuardFailure || (bootstrapLease && recoveredWorkerRun?.status === 'completed' && recoveredWorkerRun?.conclusion === 'success')) ? createDispatchNonce() : null
     });
   } catch (error) {
     error.reentryGuardContext = {

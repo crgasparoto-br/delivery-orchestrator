@@ -7,7 +7,7 @@ import { parseTrustedMarkerEnvelope } from './validate-delivery-v2-worker-author
 import {
   assertChangedPathsAuthorized,
   createWorkerScopeBinding,
-  normalizeScopePath,
+  materialPathsFromGitPatch,
   validateWorkerScopeBinding
 } from './delivery-v2-worker-scope-contract.mjs';
 
@@ -129,16 +129,6 @@ async function legacyRemediationBinding({ repository, issue, pullRequestNumber, 
   return createWorkerScopeBinding({ repository, issue, authorizedPaths: paths });
 }
 
-function pathsFromNumstatBuffer(buffer) {
-  const result = [];
-  for (const record of buffer.toString('utf8').split('\0').filter(Boolean)) {
-    const fields = record.split('\t');
-    if (fields.length < 3) throw new Error(`unexpected git apply --numstat record: ${record}`);
-    result.push(normalizeScopePath(fields.slice(2).join('\t')));
-  }
-  return result;
-}
-
 export async function changedPathsFromPatchFile(patchPath) {
   let patch;
   try {
@@ -154,13 +144,7 @@ export async function changedPathsFromPatchFile(patchPath) {
   } catch (error) {
     throw new Error(`candidate patch cannot be parsed safely: ${error.stderr?.toString('utf8') || error.message}`);
   }
-  const result = new Set(pathsFromNumstatBuffer(numstat));
-  for (const line of patch.split(/\r?\n/)) {
-    const match = line.match(/^(?:rename|copy) from (.+)$/);
-    if (match) result.add(normalizeScopePath(match[1]));
-  }
-  if (!result.size) throw new Error('candidate patch has no material paths');
-  return [...result].sort();
+  return materialPathsFromGitPatch(patch, numstat);
 }
 
 export async function main() {

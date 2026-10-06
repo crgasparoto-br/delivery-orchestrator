@@ -83,3 +83,46 @@ export function assertChangedPathsAuthorized(changedPaths, binding) {
   if (unauthorized.length) throw new Error(`candidate patch escapes controller-authorized scope: ${unauthorized.join(', ')}; authorized: ${authorizedPaths.join(', ')}`);
   return Object.freeze({ changedPaths: normalizedChanged, authorizedPaths });
 }
+
+// Git quotes rename/copy header paths with C escapes (including octal UTF-8).
+// Numstat -z paths are already literal and must not be decoded a second time.
+function decodeGitHeaderPath(value) {
+  if (!value.startsWith('"')) return value;
+  if (!value.endsWith('"')) throw new Error('unterminated Git patch path');
+  const parts = [];
+  const escapes = { a: '\x07', b: '\b', t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', '\\': '\\', '"': '"' };
+  const inner = value.slice(1, -1);
+  const tokens = inner.match(/[^\\]+|\\(?:[0-3][0-7]{2}|[\s\S])/g) ?? [];
+  if (tokens.join('') !== inner) throw new Error('invalid Git patch path escape');
+  for (const token of tokens) {
+    if (!token.startsWith('\\')) parts.push(Buffer.from(token, 'utf8'));
+    else if (/^\\[0-3][0-7]{2}$/.test(token)) parts.push(Buffer.from([parseInt(token.slice(1), 8)]));
+    else if (Object.hasOwn(escapes, token.slice(1))) parts.push(Buffer.from(escapes[token.slice(1)], 'utf8'));
+    else throw new Error('unsupported Git patch path escape');
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts));
+}
+
+// One material-path contract for the worker guard and artifact/re-entry reader.
+// In particular, a rename/copy authorizes both the source and destination.
+export function materialPathsFromGitPatch(patch, numstat) {
+  const paths = new Set();
+  const add = (value) => {
+    // Scope normalization must never silently rename a material file.
+    if (value !== value.trim()) throw new Error('material patch path has boundary whitespace');
+    paths.add(normalizeScopePath(value));
+  };
+  for (const record of numstat.toString('utf8').split('\0').filter(Boolean)) {
+    const fields = record.split('\t');
+    if (fields.length < 3 || !/^(?:\d+|-)$/.test(fields[0]) || !/^(?:\d+|-)$/.test(fields[1])) {
+      throw new Error('candidate patch numstat is malformed');
+    }
+    add(fields.slice(2).join('\t'));
+  }
+  if (!paths.size) throw new Error('candidate patch has no material paths');
+  for (const line of String(patch).split(/\r?\n/)) {
+    const match = line.match(/^(?:rename|copy) from (.+)$/);
+    if (match) add(decodeGitHeaderPath(match[1]));
+  }
+  return [...paths].sort();
+}

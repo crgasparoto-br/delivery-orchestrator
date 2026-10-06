@@ -35,6 +35,22 @@ function closingTargets(body, repository) {
   return [...text.matchAll(references)].map((match) => `${(match[1] ?? match[2] ?? repository).toLowerCase()}#${match[3]}`);
 }
 
+// This is a denial predicate, not an adoption selector: closing, merging,
+// retargeting or deleting a head branch does not erase a linked publication.
+export function hasPublishedPullRequestForIssue(pulls, { repository, issueNumber } = {}) {
+  if (!Array.isArray(pulls)) throw new Error('pulls must be an array');
+  const expectedRepository = requiredString(repository, 'repository').toLowerCase();
+  const issue = requiredPositiveInteger(issueNumber, 'issueNumber');
+  const target = `${expectedRepository}#${issue}`;
+  return pulls.some((pr) => {
+    if (!pr || typeof pr !== 'object' || Array.isArray(pr)
+        || (pr.body !== null && typeof pr.body !== 'string')) {
+      throw new Error('publication evidence requires a complete PR body');
+    }
+    return closingTargets(pr.body, expectedRepository).includes(target);
+  });
+}
+
 export function selectExistingPullRequest(pulls, { repository, issueNumber, baseBranch, trustedLogin } = {}) {
   if (!Array.isArray(pulls)) throw new Error('pulls must be an array');
   const expectedRepository = requiredString(repository, 'repository').toLowerCase();

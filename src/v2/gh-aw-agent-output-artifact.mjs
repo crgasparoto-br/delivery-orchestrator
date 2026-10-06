@@ -1,7 +1,23 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { materialPathsFromGitPatch } from '../../.github/scripts/delivery-v2-worker-scope-contract.mjs';
+
+function inspectGitPatch(file) {
+  const patch = readFileSync(file, 'utf8');
+  if (!patch.trim()) throw new Error('candidate patch is empty');
+  const numstat = execFileSync('git', ['apply', '--numstat', '-z', file], { maxBuffer: 16 * 1024 * 1024 });
+  return { patch, numstat };
+}
+
+export function changedPathsFromGitPatch(patchPath, { inspectPatch = inspectGitPatch } = {}) {
+  const inspection = inspectPatch(patchPath);
+  // Preserve buffer-only injected inspectors; the real inspector always reads
+  // both the patch headers and Git's NUL-delimited numstat from the same file.
+  return materialPathsFromGitPatch(inspection.patch ?? '', inspection.numstat ?? inspection);
+}
 
 function headers(token) {
   return {
@@ -30,9 +46,15 @@ export async function downloadGhAwAgentOutputArtifact({
       `https://api.github.com/repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`,
       token
     );
-    const artifacts = payload.artifacts ?? [];
-    const artifact = artifacts.find((item) => item.name === 'agent')
-      ?? artifacts.find((item) => item.name === 'agent-output-fallback');
+    const artifacts = payload.artifacts;
+    if (!Array.isArray(artifacts) || Number(payload.total_count ?? artifacts.length) > artifacts.length) {
+      throw new Error('complete agent artifact inventory is unavailable');
+    }
+    const primary = artifacts.filter((item) => item.name === 'agent');
+    const candidates = primary.length ? primary : artifacts.filter((item) => item.name === 'agent-output-fallback');
+    if (candidates.length > 1) throw new Error('agent output artifact is ambiguous');
+    const artifact = candidates[0];
+    if (artifact?.expired === true) throw new Error('agent output artifact is expired');
 
     if (!artifact) {
       return {
@@ -58,7 +80,7 @@ export async function downloadGhAwAgentOutputArtifact({
       execFileSync('unzip', ['-q', zip, '-d', root]);
 
       const stack = [root];
-      let agentOutputPath = null;
+      const agentOutputPaths = [];
       const patchPaths = [];
 
       while (stack.length) {
@@ -66,11 +88,20 @@ export async function downloadGhAwAgentOutputArtifact({
         for (const entry of await readdir(current, { withFileTypes: true })) {
           const full = path.join(current, entry.name);
           if (entry.isDirectory()) stack.push(full);
-          else if (entry.name === 'agent_output.json') agentOutputPath = full;
-          else if (/^aw-.*\.patch$/.test(entry.name)) patchPaths.push(full);
+          else if (!entry.isFile()) throw new Error('agent artifact contains a non-regular file');
+          else if (entry.name === 'agent_output.json') agentOutputPaths.push(full);
+          else if (entry.name.endsWith('.patch')) patchPaths.push(full);
         }
       }
 
+      if (agentOutputPaths.length > 1) throw new Error('agent_output.json is ambiguous');
+      if (artifact.name === 'agent' && patchPaths.length > 1) {
+        throw new Error(`expected at most one candidate patch, found ${patchPaths.length}`);
+      }
+      if (artifact.name === 'agent' && patchPaths.length === 1 && !/^aw-.*\.patch$/.test(path.basename(patchPaths[0]))) {
+        throw new Error('authoritative aw candidate patch is unavailable');
+      }
+      const agentOutputPath = agentOutputPaths[0];
       if (!agentOutputPath) {
         return {
           hasPatch: null,
@@ -83,6 +114,9 @@ export async function downloadGhAwAgentOutputArtifact({
 
       return {
         hasPatch: artifact.name === 'agent' ? patchPaths.length > 0 : null,
+        changedPaths: artifact.name === 'agent'
+          ? (patchPaths.length ? changedPathsFromGitPatch(patchPaths[0]) : [])
+          : null,
         agentOutput: JSON.parse(await readFile(agentOutputPath, 'utf8')),
         evidenceRef: artifact.archive_download_url,
         artifactId: artifact.id
